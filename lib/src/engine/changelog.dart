@@ -20,10 +20,11 @@ class Changelog {
     return false;
   }
 
-  /// Checks the changelog beside [manifestDirectory], recording a problem when
-  /// the file or the entry is missing.
+  /// Checks [changelog], the changelog beside [manifestDirectory] as it was
+  /// read, recording a problem when the file is missing or cannot be read,
+  /// or has no entry.
   static void check({
-    required SourceTree tree,
+    required SourceText? changelog,
     required String manifestDirectory,
     required String packageName,
     required Version version,
@@ -33,8 +34,20 @@ class Changelog {
         ? 'CHANGELOG.md'
         : '$manifestDirectory/CHANGELOG.md';
 
-    final source = tree.read(path);
-    if (source == null) {
+    if (changelog?.unreadable case final reason?) {
+      diagnostics.add(
+        'RK-CHG-001',
+        '"$packageName" has a changelog rk cannot read',
+        source: SourceLocation(path),
+        remedy:
+            '$path: $reason\n'
+            'make it a readable UTF-8 file in the repository, with an entry '
+            'for $version',
+      );
+      return;
+    }
+    final text = changelog?.text;
+    if (text == null) {
       diagnostics.add(
         'RK-CHG-001',
         '"$packageName" has no changelog',
@@ -46,9 +59,9 @@ class Changelog {
       return;
     }
 
-    if (!mentions(source, version)) {
+    if (!mentions(text, version)) {
       diagnostics.add(
-        'RK-CHG-002',
+        'RK-CHG-001',
         'the changelog has no entry for $version',
         source: SourceLocation(path, 1),
         remedy: 'add a heading beginning with $version, as in "## $version"',

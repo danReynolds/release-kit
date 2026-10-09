@@ -230,7 +230,7 @@ class GitState {
     if (uncommittedProblem() case final problem?) return problem;
     if (hasCommit) return null;
     return const Diagnostic(
-      code: 'RK-SRC-004',
+      code: 'RK-GIT-001',
       message: 'there is no commit to stage or release',
       remedy:
           'rk stage and rk release build from a commit: put this directory '

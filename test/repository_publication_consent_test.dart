@@ -1,27 +1,23 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/commands/release_preparation.dart';
-import 'package:rk/src/commands/release_publication_coordinator.dart';
+import 'package:rk/src/commands/release_publish.dart';
 import 'package:rk/src/engine/assets.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/publish_target.dart';
-import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/engine/unit_release.dart';
+import 'package:rk/src/engine/unit_snapshot.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
+import 'support/memory_source_tree.dart';
 
 void main() {
   late _Fixture f;
@@ -32,13 +28,13 @@ void main() {
       f.calls.where((call) => call.startsWith('confirm:')).toList();
 
   test('one question covers every unit, asked before any session', () async {
-    expect(await f.coordinator.authorize(f.plans), isTrue);
+    expect(await f.publication.authorize(f.runs), isTrue);
     expect(confirms(), ['confirm:Release alpha 0.1.0 and beta 0.1.0? [y/N] ']);
     expect(f.sessionCalls, isEmpty);
     expect(f.output.report.acted, isFalse);
-    for (final plan in f.plans) {
+    for (final run in f.runs) {
       expect(
-        await f.coordinator.publish(plan),
+        await f.publication.publish(run),
         ExitCodes.ok,
         reason: f.text.toString(),
       );
@@ -59,11 +55,13 @@ void main() {
   test('a target the question left out is never published', () async {
     // The snapshot found alpha published; if it disappears before the
     // release reaches it, the yes still did not cover publishing it.
-    final plans = [f.published(f.plans.first), f.plans.last];
-    expect(await f.coordinator.authorize(plans), isTrue);
+    f.makePublic('alpha');
+    final runs = [await f.read('alpha'), f.runs.last];
+    f.unpublish('alpha');
+    expect(await f.publication.authorize(runs), isTrue);
     expect(confirms(), ['confirm:Release beta 0.1.0? [y/N] ']);
-    for (final plan in plans) {
-      expect(await f.coordinator.publish(plan), ExitCodes.ok);
+    for (final run in runs) {
+      expect(await f.publication.publish(run), ExitCodes.ok);
     }
     expect(f.calls.where((call) => call.startsWith('publish:')), [
       'publish:beta',
@@ -73,17 +71,17 @@ void main() {
   test(
     'a target published since the snapshot is not published again',
     () async {
-      expect(await f.coordinator.authorize(f.plans), isTrue);
+      expect(await f.publication.authorize(f.runs), isTrue);
       f.makePublic('beta');
-      for (final plan in f.plans) {
-        expect(await f.coordinator.publish(plan), ExitCodes.ok);
+      for (final run in f.runs) {
+        expect(await f.publication.publish(run), ExitCodes.ok);
       }
       expect(f.calls.where((call) => call.startsWith('publish:')), [
         'publish:alpha',
       ]);
-      final beta = f.plans.last;
+      final beta = f.runs.last;
       expect(
-        beta.actions[beta.publicSteps.single.id],
+        beta.actions[beta.read.targets.single],
         ReleaseAction.alreadyPublished,
       );
     },
@@ -124,7 +122,10 @@ final class _Fixture {
     expect(diagnostics.found, isEmpty);
     final f = _Fixture(root, source, git, resolution);
     for (final unit in resolution.units) {
-      await f.prepare(unit);
+      f.stage(unit);
+    }
+    for (final name in names) {
+      f.runs.add(await f.read(name));
     }
     return f;
   }
@@ -136,25 +137,19 @@ final class _Fixture {
   final registry = FakeRegistry({});
   final text = StringBuffer();
   final calls = <String>[];
-  final plans = <PublicationPlan>[];
+  final runs = <UnitRun>[];
   String? answer = 'yes';
   late final output = Output(sink: text.write, isTerminal: false);
   late final tools = _Tools(this);
-  late final catalog = TargetCatalog.builtIn();
-  late final stages = ReleaseStages(
-    source: source,
-    git: git,
-    stageContracts: catalog.stageContractResolver(resolution),
-  );
+  late final stages = Stages(git.root);
   late final inspector = Inspector(
     registry: registry,
     pubDev: registry,
     git: git,
     tools: tools,
     repository: git.originUrl,
-    stageFor: stages.call,
   );
-  late final coordinator = ReleasePublicationCoordinator(
+  late final publication = Publication(
     inspector: inspector,
     initialGit: git,
     tools: tools,
@@ -172,90 +167,63 @@ final class _Fixture {
   List<String> get sessionCalls =>
       calls.where((call) => call == 'session').toList();
 
-  Future<void> prepare(ResolvedUnit unit) async {
-    final stage = stages(unit);
-    final steps = <StageStep>[];
-    stage.writeProgress(steps);
-    for (final project in unit.projects.where(
-      (project) => project.publish.contains(PublishTarget.pubDev),
-    )) {
-      final path = ReleaseAssets.pubArchivePath(project);
-      final bytes = ArchiveBuilder.gzip(
-        ArchiveBuilder.tar([
-          ArchiveEntry(
-            name: 'pubspec.yaml',
-            bytes: utf8.encode(source.read('${project.name}/pubspec.yaml')!),
-          ),
-        ]),
-      );
-      stage.directory.writeBytesAtomically(path, bytes);
-      final name = 'pub-archive:${project.name}';
-      steps.add(
-        StageStep(
-          name: name,
-          outputs: [
-            StageArtifact.capture(
-              stage: stage.directory,
-              path: path,
-              type: 'pub-archive',
+  /// Stages [unit]: its package archive, recorded, and the stage complete.
+  void stage(ResolvedUnit unit) {
+    final stage = stages.of(unit, git, source)..begin();
+    final release = UnitRelease.derive(
+      unit,
+      resolution,
+      repository: git.originUrl,
+      problems: Diagnostics(),
+    );
+    for (final work in release.work) {
+      if (work == release.barrier) continue;
+      final project = work.project!;
+      stage.write(
+        ReleaseAssets.pubArchivePath(project),
+        ArchiveBuilder.gzip(
+          ArchiveBuilder.tar([
+            ArchiveEntry(
+              name: 'pubspec.yaml',
+              bytes: utf8.encode(source.read('${project.name}/pubspec.yaml')!),
             ),
-          ],
-          evidence: const {'package_archive': 'staged'},
+          ]),
         ),
       );
-      stage.writeProgress(steps);
+      stage.record(work, evidence: const {'package_archive': 'staged'});
     }
-    stage.finalize(releaseAssets: const []);
-    expect(stage.inspect().issues, isEmpty);
-    final checklist = Checklist.derive(unit, resolution, Diagnostics());
-    final targets = catalog.derive(unit, checklist, repository: git.originUrl);
-    plans.add(
-      PublicationPlan(
-        unit: unit,
-        steps: checklist.steps,
-        publicSteps: checklist.steps.where((step) => step.isPublic),
-        targets: targets,
-        states: {
-          for (final step in checklist.steps)
-            step.id: const Inspection.absent(),
-        },
-        actions: {
-          for (final target in targets)
-            target.step.id: ReleaseAction.notAttempted,
-        },
-        prepared: PreparedRelease(claims: const [], signing: null),
-        stage: stage,
-        recoversWithoutStage: false,
-      ),
-    );
+    stage.complete(release);
+    expect(stage.check(release).problems, isEmpty);
   }
 
-  /// [plan] as a snapshot that found every target already published.
-  PublicationPlan published(PublicationPlan plan) => PublicationPlan(
-    unit: plan.unit,
-    steps: plan.steps,
-    publicSteps: plan.publicSteps,
-    targets: plan.targets,
-    states: {
-      for (final step in plan.steps)
-        step.id: const Inspection.exact(detail: 'live'),
-    },
-    actions: {
-      for (final target in plan.targets)
-        target.step.id: ReleaseAction.alreadyPublished,
-    },
-    prepared: plan.prepared,
-    stage: plan.stage,
-    recoversWithoutStage: true,
-  );
+  /// The unit [name]'s run, read as a release reads it.
+  Future<UnitRun> read(String name) async {
+    final run = UnitRun(
+      UnitSnapshot.start(
+        resolution.unit(name)!,
+        resolution: resolution,
+        inspector: inspector,
+        repository: git.originUrl,
+        hasCommit: true,
+        stageFor: (unit) => stages.of(unit, git, source),
+      ),
+    );
+    await run.read.settle();
+    return run;
+  }
 
   void makePublic(String name) {
-    final plan = plans.singleWhere((plan) => plan.unit.name == name);
-    final project = plan.unit.projects.single;
+    final unit = resolution.unit(name)!;
     registry.published[name] = ['0.1.0'];
-    registry.archives['$name@0.1.0'] = File(
-      plan.stage.directory.resolve(ReleaseAssets.pubArchivePath(project)),
-    ).readAsBytesSync();
+    registry.archives['$name@0.1.0'] = stages
+        .of(unit, git, source)
+        .readBytes(ReleaseAssets.pubArchivePath(unit.projects.single))!;
+    registry.forget(name);
+  }
+
+  void unpublish(String name) {
+    registry.published.remove(name);
+    registry.archives.remove('$name@0.1.0');
     registry.forget(name);
   }
 }
@@ -270,6 +238,7 @@ final class _Tools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.firstOrNull == 'ls-remote') {
       return ToolResult(exitCode: 0, stdout: '', stderr: '');

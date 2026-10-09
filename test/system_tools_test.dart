@@ -250,6 +250,49 @@ and the repository exists.
     }
   });
 
+  test(
+    'a tool reads what it is given, and its output comes back as written',
+    () async {
+      if (Platform.isWindows) return;
+
+      // `git cat-file --batch` reads its requests and frames each answer by a
+      // byte count, so neither direction may pass through text.
+      for (final tools in const [
+        SystemTools(),
+        SystemTools(timeout: Duration(seconds: 10)),
+      ]) {
+        final result = await tools.run(
+          'cat',
+          const [],
+          stdin: const [0xff, 0x00, 0x0a],
+        );
+
+        expect(result.exitCode, 0);
+        expect(result.bytes, [0xff, 0x00, 0x0a]);
+      }
+    },
+  );
+
+  test(
+    'a tool that answers as it reads is read while it is written to',
+    () async {
+      if (Platform.isWindows) return;
+
+      // Far more than a pipe holds: written before its output is read, cat
+      // would fill its output pipe and stop reading, and so would rk.
+      final input = List<int>.generate(4 << 20, (index) => index % 251);
+      final result = await const SystemTools().run(
+        'cat',
+        const [],
+        stdin: input,
+      );
+
+      expect(result.bytes.length, input.length);
+      expect(result.bytes, orderedEquals(input));
+    },
+    timeout: const Timeout(Duration(seconds: 20)),
+  );
+
   test('a bounded run tells git not to ask what it cannot relay', () async {
     if (Platform.isWindows) return;
 

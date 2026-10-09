@@ -1,10 +1,9 @@
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
-import '../engine/release_plan.dart';
 import '../engine/resolve.dart';
+import '../engine/unit_release.dart';
 import '../output/output.dart';
 import '../output/release_plan.dart';
-import '../targets/catalog.dart';
 
 /// Reports the complete configured release topology without inspecting state.
 final class PlanCommand {
@@ -12,13 +11,11 @@ final class PlanCommand {
     required this.resolution,
     required this.git,
     required this.output,
-    required this.targets,
   });
 
   final Resolution resolution;
   final GitState git;
   final Output output;
-  final TargetCatalog targets;
 
   int run({String? only}) {
     final repositoryName = git.root.split('/').last;
@@ -41,41 +38,58 @@ final class PlanCommand {
     }
 
     final diagnostics = Diagnostics();
-    final derived = RepositoryReleasePlan.derive(
-      resolution: resolution,
+    final derived = UnitRelease.all(
+      resolution,
       repository: git.originUrl,
-      targets: targets,
-      diagnostics: diagnostics,
+      problems: diagnostics,
     );
     if (derived == null || diagnostics.isNotEmpty) {
-      output.repository(
-        name: repositoryName,
-        branch: git.branch,
-        commit: git.hasCommit ? git.shortHead : null,
-        uncommitted: uncommitted,
-        head: git.hasCommit ? git.head : null,
-        remote: git.originUrl,
-      );
+      output.repository(repositoryName, git: git, uncommitted: uncommitted);
       output.blank();
       output.problems(diagnostics.found);
       return ExitCodes.refused;
     }
-    final plan = only == null ? derived : derived.select(only);
-    output.report.repository(
-      name: repositoryName,
-      branch: git.branch,
+    final plan = [
+      for (final release in derived)
+        if (only == null || release.unit.name == only) release,
+    ];
+    output.repository(
+      repositoryName,
+      git: git,
       uncommitted: uncommitted,
-      head: git.hasCommit ? git.head : null,
-      remote: git.originUrl,
+      show: false,
     );
-    output.report.releasePlan(plan.toJson());
-    ReleasePlanRenderer(output).render(
+    output.report.section(ReportSection.plan, planJson(plan));
+    renderPlan(
+      output,
       plan,
       repository: repositoryName,
-      branch: git.branch,
-      commit: git.hasCommit ? git.shortHead : null,
-      uncommitted: uncommitted,
+      source: sourceIdentity(
+        git.branch,
+        git.hasCommit ? git.shortHead : null,
+        uncommitted,
+      ),
     );
     return ExitCodes.ok;
   }
 }
+
+/// What `rk plan --json` reports: each unit, the units it needs first, and
+/// its rows in release order.
+Map<String, Object?> planJson(Iterable<UnitRelease> releases) => {
+  'units': [
+    for (final release in releases)
+      {
+        'name': release.unit.name,
+        'version': release.unit.version.canonical,
+        'tag': release.unit.tag,
+        'requires_units': [
+          ...{
+            for (final requirement in release.requirements)
+              requirement.provider.unitName,
+          },
+        ],
+        'nodes': [for (final node in release.planNodes) node.toJson()],
+      },
+  ],
+};

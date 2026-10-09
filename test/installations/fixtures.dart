@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/transforms/archive.dart';
-import 'package:rk/src/installations/metadata.dart';
 import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'dart:typed_data';
@@ -11,7 +10,7 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/installations/discovery.dart';
+import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/provider.dart';
 import 'package:test/test.dart';
@@ -45,7 +44,7 @@ publish = ["pub.dev"${binary ? ', "github-release", "git-tag", "homebrew"' : ''}
 ${binary ? 'binary_platforms = ["linux-x64", "macos-arm64"]' : ''}
 ''');
   final diagnostics = Diagnostics();
-  final tree = FileSystemSourceTree(root.path);
+  final tree = WorkingTree(root.path, git: false);
   final config = ReleaseConfig.parse(
     tree.read('release.toml')!,
     'release.toml',
@@ -60,6 +59,9 @@ ${binary ? 'binary_platforms = ["linux-x64", "macos-arm64"]' : ''}
   ).single;
 }
 
+/// A source whose installations are records, whose launchers echo: what
+/// they run without a release (`<source> <command>`), or the version of the
+/// release they installed. Its latest version is 1.3.0.
 class StubProvider implements InstallationProvider {
   StubProvider(this.source);
   @override
@@ -72,8 +74,14 @@ class StubProvider implements InstallationProvider {
   Future<SourceInspection> inspect(ExecutableProject project) async =>
       SourceInspection(installation: installed);
   @override
+  Future<AvailableInstallation> latest(
+    ExecutableProject project, {
+    InstallationCancellation? check,
+  }) async => const AvailableInstallation('1.3.0');
+  @override
   Future<Installation> install(
     ExecutableProject project,
+    AvailableInstallation? release,
     void Function(String) progress,
   ) async {
     installs++;
@@ -81,27 +89,71 @@ class StubProvider implements InstallationProvider {
     if (fail) throw const InstallationFailure('Preparation failed.');
     return installed = Installation(
       source: source,
-      version: '1.2.0',
+      version: release?.version ?? '1.2.0',
       location: '/fixture',
       commands: {
         for (final command in project.commands)
           command: LaunchCommand(
             '/bin/echo',
-            arguments: [source.name, command],
+            arguments: release == null
+                ? [source.name, command]
+                : [release.version],
           ),
       },
     );
   }
 
   @override
-  Future<void> uninstall(
-    ExecutableProject project,
-    Installation installation,
-  ) async {
+  Future<void> uninstall(ExecutableProject project) async {
     removals++;
     installed = null;
   }
 }
+
+/// The picker's one callback, dispatching each operation to a closure shaped
+/// as the picker's callbacks were. An action without one fails.
+Future<String> Function(Operation, void Function(String)) perform({
+  Future<String> Function(
+    ExecutableProject,
+    InstallationSource,
+    void Function(String),
+    InstallationCancellation,
+  )?
+  use,
+  Future<String> Function(
+    ExecutableProject,
+    InstallationSource,
+    AvailableInstallation,
+    void Function(String),
+    InstallationCancellation,
+  )?
+  install,
+  Future<String> Function(
+    ExecutableProject,
+    InstallationSource,
+    void Function(String),
+    InstallationCancellation,
+  )?
+  uninstall,
+}) => (operation, progress) {
+  final Operation(:project, :source, :release, :cancellation) = operation;
+  return switch (operation.action) {
+    InstallationAction.use => use!(project, source, progress, cancellation),
+    InstallationAction.install => install!(
+      project,
+      source,
+      release!,
+      progress,
+      cancellation,
+    ),
+    InstallationAction.uninstall => uninstall!(
+      project,
+      source,
+      progress,
+      cancellation,
+    ),
+  };
+};
 
 class TestTools implements Tools {
   TestTools(this.runTool);
@@ -119,6 +171,7 @@ class TestTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) => runTool(executable, arguments, workingDirectory, environment);
   @override
   Future<int> runInteractive(
@@ -130,15 +183,6 @@ class TestTools implements Tools {
 
 ToolResult ok([String output = '']) =>
     ToolResult(exitCode: 0, stdout: output, stderr: '');
-
-/// A newer release a check found: Pub's 1.3.0 unless said otherwise.
-class Release extends AvailableInstallation {
-  Release(
-    super.project, [
-    super.source = InstallationSource.pub,
-    super.version = '1.3.0',
-  ]);
-}
 
 /// A Homebrew prefix on disk, answering the brew commands rk runs. Kegs live
 /// in `Cellar/<name>/<version>`, each with a receipt naming its tap, and
@@ -289,7 +333,7 @@ class FakeReleases {
   Future<Uint8List> fetch(
     Uri uri,
     int limit, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async {
     if (uri.host == 'api.github.com') {
       return Uint8List.fromList(
@@ -321,7 +365,7 @@ class FakeReleases {
             tag: tag,
             commit: 'a' * 40,
             artifacts: [
-              ReleaseManifestArtifact(
+              (
                 name: _archive(version),
                 type: 'archive',
                 size: archive.length,

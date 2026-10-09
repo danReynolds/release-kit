@@ -2,9 +2,9 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/toml.dart';
 import 'package:test/test.dart';
 
-TomlDocument? parse(String source, [Diagnostics? into]) {
+TomlTable? parse(String source, [Diagnostics? into]) {
   final diagnostics = into ?? Diagnostics();
-  return TomlDocument.parse(source, 'release.toml', diagnostics);
+  return parseToml(source, 'release.toml', diagnostics);
 }
 
 /// Parses input the schema must reject, returning the problems found.
@@ -31,9 +31,9 @@ publish = ["pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''')!;
 
-    expect(document.root['schema'], 2);
+    expect(document['schema'], 2);
 
-    final release = document.root['release'] as TomlTable;
+    final release = document['release'] as TomlTable;
     final core = release['core'] as TomlTable;
     expect(core['path'], 'packages/keybay');
     expect(core['publish'], ['pub.dev']);
@@ -67,7 +67,7 @@ path = "packages/fleury_mcp"
 publish = ["pub.dev"]
 ''')!;
 
-    final release = document.root['release'] as TomlTable;
+    final release = document['release'] as TomlTable;
     final framework = release['framework'] as TomlTable;
     expect(framework['tag'], 'fleury-v{version}');
 
@@ -89,12 +89,8 @@ binary_platforms = [
 ]
 schema = 2
 ''')!;
-    expect(document.root['binary_platforms'], hasLength(3));
-    expect(
-      document.root['schema'],
-      2,
-      reason: 'parsing resumes after the list',
-    );
+    expect(document['binary_platforms'], hasLength(3));
+    expect(document['schema'], 2, reason: 'parsing resumes after the list');
   });
 
   test('remembers where each key was written', () {
@@ -104,25 +100,25 @@ schema = 2
 [release.core]
 path = "packages/keybay"
 ''')!;
-    final core = (document.root['release'] as TomlTable)['core'] as TomlTable;
+    final core = (document['release'] as TomlTable)['core'] as TomlTable;
     expect(core.locationOf('path').line, 4);
   });
 
   test('a comment inside a string is not a comment', () {
     final document = parse('tag = "v{version}#1"')!;
-    expect(document.root['tag'], 'v{version}#1');
+    expect(document['tag'], 'v{version}#1');
   });
 
   test('a comma inside a string does not split the list', () {
     final document = parse(
       'build = ["tool/build.sh", "--targets=a,b", "{out}"]',
     )!;
-    expect(document.root['build'], ['tool/build.sh', '--targets=a,b', '{out}']);
+    expect(document['build'], ['tool/build.sh', '--targets=a,b', '{out}']);
   });
 
   test('an empty list is allowed by the parser', () {
     // Emptiness is a schema question, refused later with a better message.
-    expect(parse('publish = []')!.root['publish'], isEmpty);
+    expect(parse('publish = []')!['publish'], isEmpty);
   });
 
   group('refuses what the schema has no representation for', () {
@@ -191,6 +187,21 @@ path = "packages/keybay"
 
     test('a key that is not bare', () {
       expect(rejected('my.key = 1'), isNotEmpty);
+    });
+
+    test('an unterminated array-of-tables header', () {
+      expect(
+        rejected('[[release.core.project]').single.message,
+        'unterminated array-of-tables header',
+      );
+    });
+
+    test('a table inside an array of tables', () {
+      final found = rejected(
+        '[[release.core.project]]\npath = "a"\n[release.core.project.x]',
+      );
+      expect(found.single.code, 'RK-TOML-001');
+      expect(found.single.source?.line, 3);
     });
   });
 

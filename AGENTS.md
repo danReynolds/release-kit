@@ -88,9 +88,10 @@ The principles behind the loop:
   conflicts found in the snapshot stop the run before any public act, with a
   code and a remedy. Once publishing, a failure starts no new work, and every
   act already started is confirmed before rk stops.
-- **New work fits the loop.** A target contributes an inspection, an act and
-  a confirmation. A check belongs where rk reads reality: in the snapshot, or in
-  the read before an act.
+- **New work fits the loop.** A target reads its destination, prepares what
+  it needs staged, publishes and confirms; core decides when, and what a
+  failure means. A check belongs where rk reads reality: in the snapshot, or
+  in the read before an act.
 
 ## Changing rk
 

@@ -1,13 +1,40 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/output/diagnosis.dart';
+import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/unit_release.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/report.dart';
 import 'package:test/test.dart';
 
+import 'support/memory_source_tree.dart';
+
 Map<String, Object?> decode(Report report, {int exit = 0}) =>
     jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
+
+/// A release to record steps from: one package, published to pub.dev once
+/// its stage is complete.
+final release = () {
+  final diagnostics = Diagnostics();
+  final resolution = Resolution.resolve(
+    ReleaseConfig.parse(
+      'schema = 2\n\n[release.core]\npublish = ["pub.dev"]\n',
+      'release.toml',
+      diagnostics,
+    )!,
+    MemorySourceTree({'pubspec.yaml': 'name: core\nversion: 1.2.3\n'}),
+    diagnostics,
+  )!;
+  return UnitRelease.derive(
+    resolution.unit('core')!,
+    resolution,
+    repository: null,
+    problems: diagnostics,
+  );
+}();
 
 void main() {
   test('a crash after a release staged privately says nothing public '
@@ -16,7 +43,7 @@ void main() {
     // of public targets, and none changed until one is published.
     final release = Report('release')..acted = true;
     expect(release.changedWhatHaltsSpeakOf, isFalse);
-    release.actedPublicly = true;
+    release.publicChanged = true;
     expect(release.changedWhatHaltsSpeakOf, isTrue);
     // init, clean and use write files, and those are what a halt speaks of.
     expect((Report('init')..acted = true).changedWhatHaltsSpeakOf, isTrue);
@@ -37,34 +64,28 @@ void main() {
 
     test('steps are keyed by id and carry their order', () {
       final report = Report('status')
-        ..unit(name: 'cli', version: '0.2.0', tag: 'keybay_cli-v0.2.0')
-        ..step(id: 'cli/build/linux-x64', unit: 'cli', summary: 'build')
-        ..step(
-          id: 'cli/archive/linux-x64',
-          unit: 'cli',
-          summary: 'archive',
-          needs: ['cli/build/linux-x64'],
-        );
+        ..unit(name: 'core', version: '1.2.3', tag: null)
+        ..step(release.barrier)
+        ..step(release.packages.single);
 
       final units = decode(report)['units'] as List;
       final steps = (units.single as Map)['steps'] as List;
-      expect((steps[0] as Map)['id'], 'cli/build/linux-x64');
-      expect((steps[1] as Map)['needs'], ['cli/build/linux-x64']);
+      expect((steps[0] as Map)['id'], release.barrier.id);
+      expect((steps[1] as Map)['needs'], contains(release.barrier.id));
     });
 
     test('a step names its own unit, so order of calls does not matter', () {
       final report = Report('status')
-        ..step(id: 'cli/build/linux-x64', unit: 'cli', summary: 'build')
-        ..unit(name: 'cli', version: '0.2.0', tag: 'keybay_cli-v0.2.0');
+        ..step(release.barrier)
+        ..unit(name: 'core', version: '1.2.3', tag: null);
 
       final unit = (decode(report)['units'] as List).single as Map;
-      expect(unit['version'], '0.2.0');
+      expect(unit['version'], '1.2.3');
       expect((unit['steps'] as List), hasLength(1));
     });
 
     test('every step states a verdict, and unknown is stated', () {
-      final report = Report('status')
-        ..step(id: 'cli/build/linux-x64', unit: 'cli', summary: 'build');
+      final report = Report('status')..step(release.barrier);
       final steps =
           ((decode(report)['units'] as List).single as Map)['steps'] as List;
       expect(
@@ -83,16 +104,15 @@ void main() {
     });
 
     test('a conflict does not help, and the halt says why', () {
-      final report = Report('release')
-        ..halt('unfixableByRerun', 'cannot be fixed', helps: false);
+      final report = Report('release')..halt(HaltKind.unfixableByRerun);
       expect(decode(report)['rerun_helps'], isFalse);
       expect((decode(report)['halt'] as Map)['kind'], 'unfixableByRerun');
     });
 
     test('helps cannot be talked back up', () {
       final report = Report('release')
-        ..halt('x', 'bad', helps: false)
-        ..halt('beforeActing', 'nothing changed', helps: true);
+        ..halt(HaltKind.actedAndUnfixable)
+        ..halt(HaltKind.beforeActing);
       expect(
         decode(report)['rerun_helps'],
         isFalse,
@@ -117,6 +137,41 @@ void main() {
     expect(problem['remedy'], 'align the constraint');
   });
 
+  test('the top-level keys keep their documented order', () {
+    // Recorded out of order: the document's order is its own.
+    final report = Report('release')
+      ..section(ReportSection.releaseChoices, const [])
+      ..section(ReportSection.installations, const {})
+      ..section(ReportSection.plan, const {})
+      ..section(ReportSection.cleanup, const {})
+      ..section(ReportSection.init, const {})
+      ..repository(name: 'tool')
+      ..next('rk release')
+      ..attach('notes', 'text')
+      ..diagnosis = '.rk/diagnosis/now'
+      ..halt(HaltKind.beforeActing);
+    expect(decode(report).keys, [
+      'rk',
+      'command',
+      'observed_at',
+      'exit',
+      'rerun_helps',
+      'repository',
+      'init',
+      'cleanup',
+      'plan',
+      'installations',
+      'release_choices',
+      'units',
+      'problems',
+      'warnings',
+      'next',
+      'attachments',
+      'diagnosis',
+      'halt',
+    ]);
+  });
+
   test('the next command is data a caller can chain on', () {
     final report = Report('status')..next('rk release cli');
     expect(decode(report)['next'], ['rk release cli']);
@@ -125,12 +180,9 @@ void main() {
   group('the diagnosis directory', () {
     group('write policy', () {
       test('plan never leaves repository-local evidence, even on a crash', () {
+        expect(Report('plan').keepsDiagnosis(crashed: true), isFalse);
         expect(
-          Diagnosis.shouldWrite(command: 'plan', acted: false, crashed: true),
-          isFalse,
-        );
-        expect(
-          Diagnosis.shouldWrite(command: 'plan', acted: true, crashed: true),
+          (Report('plan')..acted = true).keepsDiagnosis(crashed: true),
           isFalse,
           reason:
               'the read-only verb stays write-free even under an '
@@ -140,25 +192,17 @@ void main() {
 
       test('other commands retain crashes and acted failures only', () {
         expect(
-          Diagnosis.shouldWrite(command: 'status', acted: false, crashed: true),
+          Report('status').keepsDiagnosis(crashed: true),
           isTrue,
           reason: 'a crash stack is otherwise lost',
         );
         expect(
-          Diagnosis.shouldWrite(
-            command: 'release',
-            acted: true,
-            crashed: false,
-          ),
+          (Report('release')..acted = true).keepsDiagnosis(crashed: false),
           isTrue,
           reason: 'an interrupted effect needs a receipt of what happened',
         );
         expect(
-          Diagnosis.shouldWrite(
-            command: 'release',
-            acted: false,
-            crashed: false,
-          ),
+          Report('release').keepsDiagnosis(crashed: false),
           isFalse,
           reason:
               'an ordinary pre-act refusal already said everything it knows',
@@ -170,31 +214,28 @@ void main() {
       final root = Directory.systemTemp.createTempSync('rk-diag-');
       addTearDown(() => root.deleteSync(recursive: true));
       final report = Report('release')
-        ..unit(name: 'cli', version: '0.2.0', tag: 'keybay_cli-v0.2.0')
-        ..step(
-          id: 'cli/notarize/macos-arm64',
-          unit: 'cli',
-          summary: 'notarize',
-          verdict: 'rejected',
-        );
+        ..unit(name: 'core', version: '1.2.3', tag: null)
+        ..step(release.barrier, verdict: Verdict.conflict)
+        ..attach('notarytool.stderr', 'Invalid credentials');
 
-      final at = Diagnosis.write(
+      final at = report.writeDiagnosis(
         root.path,
         stamp: '2026-07-29T12-00-00',
-        report: report,
         exit: 1,
-        attachments: {'notarytool.stderr': 'Invalid credentials'},
+        crash: 'the stack',
       );
 
       expect(at, contains('2026-07-29T12-00-00'));
+      expect(report.diagnosis, at);
       final run = File('$at/run.json').readAsStringSync();
-      expect(run, contains('"verdict": "rejected"'));
+      expect(run, contains('"verdict": "conflict"'));
       expect(run, contains('"exit": 1'));
       expect(
         File('$at/notarytool.stderr').readAsStringSync(),
         'Invalid credentials',
         reason: 'native tool stderr is the diagnosis, not a summary of it',
       );
+      expect(File('$at/crash.txt').readAsStringSync(), 'the stack');
     });
 
     test('a finding files its own account, and names it', () {
@@ -243,7 +284,7 @@ void main() {
       final report = Report('release')
         ..problem(
           const Diagnostic(
-            code: 'RK-CONF-019',
+            code: 'RK-CONF-009',
             message: 'a project does not say where to publish',
           ),
         );
@@ -258,18 +299,8 @@ void main() {
     test('two runs do not overwrite one another', () {
       final root = Directory.systemTemp.createTempSync('rk-diag-');
       addTearDown(() => root.deleteSync(recursive: true));
-      Diagnosis.write(
-        root.path,
-        stamp: 'a',
-        report: Report('release'),
-        exit: 1,
-      );
-      Diagnosis.write(
-        root.path,
-        stamp: 'b',
-        report: Report('release'),
-        exit: 1,
-      );
+      Report('release').writeDiagnosis(root.path, stamp: 'a', exit: 1);
+      Report('release').writeDiagnosis(root.path, stamp: 'b', exit: 1);
       expect(Directory('${root.path}/.rk/diagnosis').listSync(), hasLength(2));
     });
   });

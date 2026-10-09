@@ -13,17 +13,16 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/version.dart';
-import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/transforms/digest.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
+import 'support/memory_source_tree.dart';
 
 const _config = '''
 schema = 2
@@ -228,6 +227,7 @@ final class _InteractiveTrackingTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     final result = await delegate.run(
       executable,
@@ -235,6 +235,7 @@ final class _InteractiveTrackingTools implements Tools {
       workingDirectory: workingDirectory,
       environment: environment,
       timeout: timeout,
+      stdin: stdin,
     );
     await gate?.call(
       _normalizedPubKey('$executable ${arguments.join(' ')}'),
@@ -302,35 +303,24 @@ Future<Ran> release({
   addTearDown(() {
     if (stageRoot.existsSync()) stageRoot.deleteSync(recursive: true);
   });
-  final stageCache = <String, ReleaseStage>{};
-  ReleaseStage stageFor(ResolvedUnit unit) =>
-      stageCache.putIfAbsent(unit.name, () {
-        final plan = <String, Object?>{
-          'unit': unit.name,
-          'version': unit.version.canonical,
-          'fixture_head': effectiveGit.head,
-        };
-        final identity = StageIdentity.forPlan(
-          headCommit: '1111111111111111111111111111111111111111',
-          headTree: '2222222222222222222222222222222222222222',
-          resolvedPlan: plan,
-        );
-        final directory = StageDirectory(
-          repositoryRoot: stageRoot.path,
-          identity: identity,
-        );
-        return ReleaseStage(
-          unit: unit,
-          source: tree,
-          directory: directory,
-          repository: effectiveGit.originUrl,
-          enforceUnitContract: true,
-          resolvedPlan: plan,
-          targetContributions: TargetCatalog.builtIn().stageContractResolver(
-            resolution,
-          )(unit: unit, repository: effectiveGit.originUrl),
-        );
-      });
+  final stageCache = <String, Stage>{};
+  Stage stageFor(ResolvedUnit unit) => stageCache.putIfAbsent(unit.name, () {
+    final plan = <String, Object?>{
+      'unit': unit.name,
+      'version': unit.version.canonical,
+      'fixture_head': effectiveGit.head,
+    };
+    return Stage(
+      root: stageRoot.path,
+      id: StageId.of(
+        commit: '1111111111111111111111111111111111111111',
+        tree: '2222222222222222222222222222222222222222',
+        plan: plan,
+      ),
+      plan: plan,
+      source: tree,
+    );
+  });
 
   // The answers go through FakeRegistry's memo, as the real client's do, so
   // a release sees its own upload only once it forgets what it read before.
@@ -416,7 +406,7 @@ Future<Ran> release({
               .firstOrNull;
           final manifest = unit == null
               ? null
-              : File(stageFor(unit).directory.resolve(ReleaseAssets.manifest));
+              : File(stageFor(unit).pathOf(ReleaseAssets.manifest));
           final digest = manifest != null && manifest.existsSync()
               ? Sha256.hex(manifest.readAsBytesSync())
               : 'b' * 64;
@@ -496,7 +486,6 @@ Future<Ran> release({
       pubDev: PubDevTarget(registry: effectiveRegistry),
       tools: recorder,
       repository: 'example/keybay',
-      stageFor: stageFor,
     ),
     tools: recorder,
     // Yields to the event queue rather than completing in a microtask, so a
@@ -2101,6 +2090,54 @@ publish = ["pub.dev"]
     expect(ran.text, isNot(contains('Non-dev dependencies are overridden')));
   });
 
+  test('warnings an interrupted stage recorded are shown before the question '
+      'on the run that resumes it', () async {
+    final stages = Directory.systemTemp.createTempSync('rk-release-test-');
+    final staged = await release(
+      dryRun: true,
+      stages: stages,
+      results: {
+        'dart pub publish --to-archive <archive>': ToolResult(
+          exitCode: 65,
+          stdout:
+              'Package validation found the following potential issue:\n'
+              '* Your dependency on ffi is pinned to an exact version.\n'
+              'Package has 1 warning.',
+          stderr: '',
+        ),
+      },
+    );
+    expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+    // Interrupted before it completed: the archive, and the warning Pub
+    // gave with it, are recorded; the manifest is not yet written.
+    final stage = Directory(
+      '${stages.path}/.rk/work/stages',
+    ).listSync().whereType<Directory>().single;
+    final receipt = File('${stage.path}/stage.json');
+    final recorded =
+        jsonDecode(receipt.readAsStringSync()) as Map<String, Object?>;
+    (recorded['producers'] as Map).remove('complete-stage');
+    (recorded['files'] as Map).remove(ReleaseAssets.manifest);
+    receipt.writeAsStringSync(jsonEncode(recorded));
+    File('${stage.path}/${ReleaseAssets.manifest}').deleteSync();
+
+    final ran = await release(stages: stages);
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.calls,
+      isNot(contains('dart pub publish --to-archive <archive>')),
+      reason: 'the archive is resumed, not made again',
+    );
+    expect(
+      [for (final warning in ran.report['warnings'] as List) warning['code']],
+      ['RK-PUB-012'],
+    );
+    final warned = ran.text.indexOf('ffi is pinned to an exact version');
+    expect(warned, isNonNegative, reason: ran.text);
+    expect(warned, lessThan(ran.text.indexOf('\n  Release core 0.2.0\n')));
+  });
+
   test('errors Pub reports without a summary block', () async {
     final ran = await release(
       results: {
@@ -2206,6 +2243,11 @@ publish = ["pub.dev"]
       final pushFailure = ran.problems.singleWhere(
         (p) => p['code'] == 'RK-TAG-002',
       );
+      expect((pushFailure['remedy'] as String).split('\n'), [
+        'fatal: unable to access origin',
+        'the local tag was removed, so re-running starts clean',
+        'not on origin',
+      ]);
       final filed = pushFailure['evidence'] as String?;
       expect(filed, isNotNull, reason: 'the push kept only its first line');
       final account = (ran.report['attachments'] as Map)[filed] as String;

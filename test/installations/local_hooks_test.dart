@@ -81,7 +81,7 @@ Future<void> main(List<String> args) async {
         Platform.resolvedExecutable,
         store,
       );
-      final installed = await provider.install(project, (_) {});
+      final installed = await provider.install(project, null, (_) {});
       expect(installed.commands['orbit']!.workingDirectory, root.path);
       await store.activate(project, installed);
       final caller = Directory('${scratch.path}/caller')..createSync();

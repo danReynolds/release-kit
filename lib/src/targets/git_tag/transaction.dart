@@ -1,12 +1,7 @@
-import 'dart:io';
-
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
-import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
 import '../../engine/verdict.dart';
-import '../../output/progress.dart';
-import '../../transforms/digest.dart';
 import '../target_module.dart';
 import 'client.dart';
 
@@ -21,7 +16,7 @@ Future<TargetActOutcome> publishGitTag(
   ResolvedUnit unit,
 ) async {
   final git = context.git;
-  final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+  final tag = unit.tag!;
   final destination = GitTag(tools: context.tools, root: git.root);
   // As Git itself does, rk signs a tag when tag.gpgSign asks it to. A
   // signing key alone, which may be there for commits, does not sign
@@ -31,7 +26,6 @@ Future<TargetActOutcome> publishGitTag(
   if (signed && !git.signingConfigured) {
     return TargetActOutcome(
       ok: false,
-      coordinate: tag,
       diagnostic: Diagnostic(
         code: 'RK-TAG-005',
         message:
@@ -45,7 +39,10 @@ Future<TargetActOutcome> publishGitTag(
     );
   }
 
-  final manifestSha256 = _manifestDigest(context);
+  // The stage was checked just before this act: its manifest is the one
+  // the receipt records.
+  final manifestSha256 =
+      context.stage!.receipt!.files[ReleaseAssets.manifest]!.sha256;
   final String object;
   // An interrupted run may have created the exact local tag without pushing
   // it. Inspection validated that object, so it is pushed as it is.
@@ -63,7 +60,6 @@ Future<TargetActOutcome> publishGitTag(
     if (!made.ok) {
       return TargetActOutcome(
         ok: false,
-        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-001',
           message: 'the tag $tag could not be created',
@@ -76,7 +72,6 @@ Future<TargetActOutcome> publishGitTag(
     if (resolved.object == null) {
       return TargetActOutcome(
         ok: false,
-        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-001',
           message: 'the new tag $tag could not be identified',
@@ -90,7 +85,6 @@ Future<TargetActOutcome> publishGitTag(
     if (existing == null) {
       return TargetActOutcome(
         ok: false,
-        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-002',
           message: 'the tag $tag could not be pushed',
@@ -103,9 +97,7 @@ Future<TargetActOutcome> publishGitTag(
     object = existing.toLowerCase();
   }
 
-  context.progress.begin(
-    ProgressActivity(running: 'pushing', failed: 'push failed'),
-  );
+  context.progress.begin((running: 'pushing', failed: 'push failed'));
   final pushed = await destination.pushExact(tag, object);
   final exact = Inspection.exact(
     detail: 'origin has the tag rk pushed',
@@ -118,7 +110,6 @@ Future<TargetActOutcome> publishGitTag(
   if (pushed.ok) {
     return TargetActOutcome(
       ok: true,
-      coordinate: tag,
       mayHaveActed: true,
       successNote: created
           ? '${signed ? 'signed' : 'unsigned'}, pushed'
@@ -166,7 +157,6 @@ Future<TargetActOutcome> publishGitTag(
   }
   return TargetActOutcome(
     ok: false,
-    coordinate: tag,
     problem: cleanup,
     // An unread origin may hold the push that lost its answer.
     mayHaveActed: state.verdict == Verdict.unknown,
@@ -179,14 +169,4 @@ Future<TargetActOutcome> publishGitTag(
     reconciledNote: 'push response was lost · origin confirmed exact',
     confirmed: state,
   );
-}
-
-String _manifestDigest(TargetReleaseContext context) {
-  final manifest = File(
-    context.stage.directory.resolve(ReleaseAssets.manifest),
-  );
-  if (!manifest.existsSync()) {
-    throw StateError('the completed stage has no release manifest');
-  }
-  return Sha256.hex(manifest.readAsBytesSync());
 }

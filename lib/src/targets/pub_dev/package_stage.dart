@@ -2,88 +2,36 @@ import 'dart:io';
 
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
-import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
-import '../../engine/stage.dart';
-import '../../engine/stage_contract.dart';
-import '../../engine/stage_receipt.dart';
 import '../../engine/stage_source.dart';
-import '../../engine/targets.dart';
 import '../../engine/tools.dart';
-import '../../output/progress.dart';
+import '../../engine/unit_release.dart';
+import '../../output/output.dart';
 import '../target_module.dart';
 import 'resolution.dart';
 
-/// Pub's native package archive contribution to the reusable release stage.
-///
-/// Packaging, how Pub resolves the package, diagnostics, and the receipt
-/// contract stay together because they describe one private input to the
-/// pub.dev lifecycle.
-TargetStage pubDevPackageStage({
-  required TargetPlan target,
-  required ResolvedUnit unit,
-}) {
-  final archivePath = ReleaseAssets.pubArchivePath(target.project!);
-  final contract = StageStepContract(
-    'pub-archive:${target.project!.name}',
-    outputs: {archivePath: 'pub-archive'},
-  );
-  return TargetStage(
-    target: target,
-    contract: contract,
-    planLabel: 'package archive',
-    progress: [TargetStageProgress.row(id: 'source', label: 'package archive')],
-    prepare: (context) => _prepareStage(context, target.project!),
-  );
-}
-
-/// The one native Pub archive frozen in a completed stage.
-StageArtifact requirePubArchive(ReleaseStage stage, ResolvedProject project) {
-  final path = ReleaseAssets.pubArchivePath(project);
-  final matches = stage
-      .requireReceipt()
-      .artifacts
-      .where((artifact) => artifact.path == path)
-      .toList();
-  if (matches.length != 1 || matches.single.type != 'pub-archive') {
-    throw StateError('the stage does not contain one native Pub archive');
-  }
-  return matches.single;
-}
-
-Future<TargetStageOutcome> _prepareStage(
-  TargetStageContext context,
-  ResolvedProject project,
-) async {
-  final receiptName = context.contract.name;
-  context.progress('source').begin(CommonProgressActivities.validating);
+/// Stages [work]'s package: Pub's native archive, the one private input to
+/// the pub.dev lifecycle. Packaging, how Pub resolves the package, and its
+/// diagnostics stay together here.
+Future<Produced> preparePubArchive(StageRun context, Work work) async {
+  final project = work.project!;
+  context.rows?.begin(Activities.validating);
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
-    return TargetStageFailure(diagnostic, unit: project.unitName);
+    context.output.problem(diagnostic, unit: project.unitName);
+    return const Produced.failed(Stop.refused);
   }
-  return TargetStageSuccess(
-    StageStep(
-      name: receiptName,
-      outputs: [
-        StageArtifact.capture(
-          stage: context.stage.directory,
-          path: ReleaseAssets.pubArchivePath(project),
-          type: 'pub-archive',
-        ),
-      ],
-    ),
-    warnings: validation.warnings,
-  );
+  return Produced(warnings: validation.warnings);
 }
 
 /// Stages [project]'s Pub archive.
 Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
-  TargetStageContext context,
+  StageRun context,
   ResolvedProject project,
 ) async {
   final archivePath = ReleaseAssets.pubArchivePath(project);
   void requireAbsentDestination() {
-    final destination = context.stage.directory.resolve(archivePath);
+    final destination = context.stage.pathOf(archivePath);
     if (FileSystemEntity.typeSync(destination, followLinks: false) !=
         FileSystemEntityType.notFound) {
       throw StateError(
@@ -98,7 +46,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   // cannot leave partial bytes or empty canonical directories behind.
   final scratch = Directory.systemTemp.createTempSync('rk-pub-archive-');
   try {
-    final archive = File(_join(scratch.path, StagePath.segments(archivePath)));
+    final archive = File('${scratch.path}/$archivePath');
     archive.parent.createSync(recursive: true);
     final result = await _packageArchiveTo(context, project, archive: archive);
     if (result.diagnostic == null) {
@@ -107,10 +55,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
           FileSystemEntityType.file) {
         throw StateError('native Pub output is not a regular archive file');
       }
-      context.stage.directory.writeBytesAtomically(
-        archivePath,
-        archive.readAsBytesSync(),
-      );
+      context.stage.write(archivePath, archive.readAsBytesSync());
     }
     return result;
   } finally {
@@ -119,7 +64,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
 }
 
 Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
-  TargetStageContext context,
+  StageRun context,
   ResolvedProject project, {
   required File archive,
 }) async {
@@ -136,14 +81,13 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   late final Set<String> takenFromSource;
   try {
     final sourceRoot = _join(consumer.path, const ['source']);
-    String inSource(String directory) => directory == '.'
-        ? sourceRoot
-        : _join(sourceRoot, StagePath.segments(directory));
+    String inSource(String directory) =>
+        directory == '.' ? sourceRoot : '$sourceRoot/$directory';
     final directory = inSource(project.pubspec.directory);
 
     // The repository packages Pub takes from this source, by name with
     // their directories: those the release plan names (see
-    // [TargetStageContext.fromSource]), and members of the package's
+    // [StageRun.fromSource]), and members of the package's
     // workspace that only its development needs.
     final members =
         resolutionPackages(sourceRoot, directory).packages ?? const {};
@@ -416,7 +360,7 @@ String _relativePath(String from, String to) {
 /// what a Dart build of the package reads (see
 /// [StageSourceSnapshot.dartBuildInputs]), and is deleted after the archive
 /// command finishes.
-Directory _mirrorSource(TargetStageContext context, ResolvedProject project) {
+Directory _mirrorSource(StageRun context, ResolvedProject project) {
   final mirror = Directory.systemTemp.createTempSync('rk-pub-source-');
   try {
     final gitControl = _gitControlAncestor(mirror.path);

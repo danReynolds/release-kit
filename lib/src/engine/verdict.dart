@@ -30,6 +30,7 @@ class Inspection {
     this.authority,
     this.sourceMismatch,
     this.releasedFrom,
+    this.recoversWithoutStage = false,
   });
 
   const Inspection.absent({
@@ -42,6 +43,17 @@ class Inspection {
          evidence: evidence,
          authority: authority,
        );
+
+  /// This observation, which can finish from public inputs alone.
+  Inspection recovering() => Inspection(
+    verdict,
+    detail: detail,
+    evidence: evidence,
+    authority: authority,
+    sourceMismatch: sourceMismatch,
+    releasedFrom: releasedFrom,
+    recoversWithoutStage: true,
+  );
 
   const Inspection.exact({
     String? detail,
@@ -100,6 +112,12 @@ class Inspection {
   /// commit, so nothing this commit stages belongs under that tag. Typed for
   /// the same reason as [sourceMismatch].
   final String? releasedFrom;
+
+  /// Whether the target can be published from authenticated public inputs
+  /// once the local stage is gone, as a moving channel may: a formula
+  /// rendered from the digests of a release already public. Typed for the
+  /// same reason as [sourceMismatch].
+  final bool recoversWithoutStage;
 
   bool get isAbsent => verdict == Verdict.absent;
   bool get isExact => verdict == Verdict.exact;

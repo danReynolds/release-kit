@@ -7,14 +7,14 @@ one question for the whole run. A fresh stage of Fleury's four packages takes
 about 10s (2m 9s with 0.1.14), reusing it under a second (about 30s), and
 releasing them and their two tags takes three trips to origin.
 
-Stages saved by 0.1.14 are not reused: a release 0.1.14 left partly
-published finishes with 0.1.14.
+Stages an earlier rk saved are not reused, and `rk clean` removes them: a
+release an earlier rk left partly published finishes with that rk.
 
 ### Releasing
 
 - A release is of a commit. `rk stage` and `rk release` refuse uncommitted
-  changes for every unit (`RK-GIT-001`, "commit first") and a directory
-  outside Git (`RK-SRC-004`); `RK-SRC-001` and `RK-SRC-002` are gone.
+  changes for every unit and a directory outside Git (`RK-GIT-001`,
+  "commit first"); `RK-SRC-001` and `RK-SRC-002` are gone.
   `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
   does.
 - A release reads public state once and asks one question for every unit's
@@ -60,6 +60,8 @@ published finishes with 0.1.14.
   would name, rather than offering a release that would refuse.
 - With no pub session stored, `dart pub login` runs at once, not after
   twenty silent seconds.
+- A release whose lanes ran at once no longer says nothing public changed
+  after one of them published.
 
 ### Staging
 
@@ -96,6 +98,15 @@ published finishes with 0.1.14.
   build reads is left out, as `git archive` leaves out a submodule.
 - Staging offline reports that Pub could not reach the registry
   (`RK-PUB-019`), not validation errors to fix.
+- The run that resumes an interrupted stage shows the warnings its recorded
+  work found, such as Pub's, before a release asks.
+- A stage that no longer validates (`RK-STAGE-002`) names each file that is
+  wrong, by its path in the stage: missing from the completed stage, or
+  differing from the receipt in size or digest.
+- A `.rk` that is a symbolic link, such as one on another disk, is used
+  where it leads; `rk clean` still removes a stage that is a link without
+  following it. `RK-STAGE-001` no longer reports "the release stage path is
+  unsafe".
 - A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)
   allows any version, as Pub reads it (`RK-DEP-002` is gone). A comma inside
   a quoted list item in `release.toml` no longer breaks the list. Pubspecs
@@ -118,10 +129,10 @@ published finishes with 0.1.14.
   Fleury.
 - `rk stage` and `rk release` of several units say what they stage once: one
   heading, one Warnings section, one summary and one next step, with
-  warnings in release order whichever unit finishes first. Piped output
-  carries no times or counts. A long unit name is shortened rather
-  than stopping the run, and a release says it acted only once something
-  public changed.
+  warnings in release order whichever unit finishes first, or stops.
+  Piped output carries no times or counts. A long unit name is shortened
+  rather than stopping the run, and a release says it acted only once
+  something public changed.
 - `rk help [command]` prints a command's help. A flag a command does not take
   is refused in two lines, and `rk target` without a name lists the targets.
   `rk --version --json` prints `{"version": ...}`. A closed stdout or
@@ -135,6 +146,50 @@ published finishes with 0.1.14.
   order.
 - `rk clean` removes what it showed, and leaves alone an entry that changed
   while you answered.
+- A control character in a tool's or a destination's message shows as a
+  space in a progress row, rather than stopping rk.
+
+### Configuration and diagnostics
+
+- A clean commit's release inputs are read in two `git cat-file --batch`
+  calls: release.toml with the root tree, then each project's directory,
+  pubspec.yaml, Cargo.toml and CHANGELOG.md. `rk plan` on Fleury's four
+  packages reads them in about 0.03s instead of 0.1s.
+- `rk status` and `rk release` check the changelog of the commit they
+  release, not the working tree's, and read one committed as a link the
+  way a stage does: through every link on the way, within the commit. One
+  rk cannot read, such as one that is not UTF-8 or a link out of the
+  commit, is reported on its own unit (`RK-CHG-001`) rather than stopping
+  rk; `rk use` does not read changelogs.
+- A table header inside an array of tables, such as
+  `[release.core.project.x]`, is a TOML error (`RK-TOML-001`).
+- A diagnostic code names the kind of mistake; the message names the
+  setting, and the location its line. Codes that repeat another are merged,
+  and doc/codes.md lists 95 codes, down from 150:
+
+  | was | now |
+  |---|---|
+  | `RK-CONF-001` | `RK-CONF-002` |
+  | `RK-CONF-008`, `RK-CONF-016`, `RK-CONF-038` | `RK-CONF-003` |
+  | `RK-CONF-004`, `006`, `007`, `010`, `013`, `014`, `015`, `017`, `018`, `020`, `022`, `023`, `027`, `028`, `029`, `032`, `033`, `037`, `040`, `042`, `043`; `RK-CONF-041` for a malformed list | `RK-CONF-005` |
+  | `RK-CONF-012`, `019`, `024`, `025`, `036`, `039`, `044`, `045`; `RK-CONF-041` without binary_platforms | `RK-CONF-009` |
+  | `RK-CONF-011` | removed: it only followed another refusal |
+  | `RK-CONF-034` | `RK-SRC-003` |
+  | `RK-RES-012` | `RK-CONF-009`, refused before any manifest is read |
+  | `RK-RES-014` | `RK-RES-003` |
+  | `RK-RES-005`, `RK-RES-015` | `RK-RES-004` |
+  | `RK-RES-007` | `RK-RES-006` |
+  | `RK-RES-017` | `RK-RES-009`, once for a unit whose release several projects build |
+  | `RK-YAML-001` | `RK-PKG-001` |
+  | `RK-PKG-003` | `RK-RES-002` |
+  | `RK-CHG-002` | `RK-CHG-001` |
+  | `RK-CLI-001` | `RK-CLI-005` |
+  | `RK-CLI-008`, `RK-CLI-009` | `RK-CLI-003` |
+  | `RK-CLEAN-001`, `RK-CLEAN-002` | `RK-STAGE-006` |
+  | `RK-CLEAN-004` | `RK-AUTH-001` |
+  | `RK-GIT-002` | `RK-GIT-003` |
+  | `RK-SRC-004` | `RK-GIT-001` |
+  | `RK-INIT-005` | `RK-INIT-004` |
 
 ### rk use
 
@@ -160,6 +215,18 @@ published finishes with 0.1.14.
   deleted.
 - Local is the checkout itself: `rk install local` prepares it, and Local
   shows as installed only while it is selected.
+- Cancelling a switch before its package manager starts installs nothing;
+  it used to install, then refuse to switch.
+- Installation files or metadata rk cannot read are reported as
+  `RK-USE-001`, like every other refused installation; `RK-USE-002` is
+  gone. Bad metadata reads "The installation metadata is invalid.", and a
+  command that cannot start is named instead of "the package manager".
+- A GitHub download keeps the archive's file modes (0755 for executables,
+  0644 otherwise) rather than 0700 and 0600. It follows the redirects GitHub
+  gives it, and is checked against the release manifest's size and SHA-256
+  as before; rk no longer limits which hosts it may be redirected to, caps
+  archive sizes, or verifies macOS code signatures again at install.
+- A `bin/` script that links outside its package can be selected.
 - rk's bin directory on PATH written with a trailing slash, or through a
   link, counts as first: `rk use` no longer says to put it there.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.

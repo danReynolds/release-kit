@@ -3,20 +3,22 @@ import 'dart:io';
 import 'bundle_tools.dart';
 
 import 'package:rk/src/builds/capability.dart';
+import 'package:rk/src/builds/macos_identity.dart';
 import 'package:rk/src/binary_chain.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/workspace.dart';
+import 'package:rk/src/engine/unit_release.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
+import 'support/memory_source_tree.dart';
+import 'support/scratch_stage.dart';
 
 final _certificateSha1 = 'a' * 40;
 
@@ -28,18 +30,18 @@ final _identity = SigningIdentity(
 );
 
 /// The chain, one step at a time — each step gets a FRESH chain instance
-/// over the same workspace, which is the no-state proof: everything a later
+/// over the same stage, which is the no-state proof: everything a later
 /// step needs must have been written by name, because the object that knew
 /// it in memory is gone.
 void main() {
   late Directory scratch;
-  late Workspace workspace;
+  late Stage stage;
   late StringBuffer buffer;
   late Output output;
 
   setUp(() {
     scratch = Directory.systemTemp.createTempSync('rk-steps-');
-    workspace = Workspace('${scratch.path}/work');
+    stage = scratchStage(scratch.path);
     buffer = StringBuffer();
     output = Output(sink: buffer.write, isTerminal: false, useColor: false);
   });
@@ -77,8 +79,13 @@ executables:
 
   final unit = resolution.unit('cli')!;
   final project = unit.projects.single;
-  final steps = Checklist.derive(unit, resolution, Diagnostics()).steps;
-  Step step(StepKind kind) => steps.firstWhere((s) => s.kind == kind);
+  final work = UnitRelease.derive(
+    unit,
+    resolution,
+    repository: null,
+    problems: Diagnostics(),
+  ).work;
+  Work step(StepKind kind) => work.firstWhere((w) => w.kind == kind);
 
   /// A fresh chain per call — deliberately. Sharing one would let state ride
   /// along in memory, which is exactly what must be impossible.
@@ -86,7 +93,7 @@ executables:
     tools: tools,
     compilerExecutable: fixtureDartSdk(scratch),
     output: output,
-    workspace: workspace,
+    stage: stage,
     repositoryRoot: scratch.path,
     capabilities: HostCapabilities(
       hostPlatform: 'macos-arm64',
@@ -143,23 +150,22 @@ executables:
     final built = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: MacSigning(
+      signing: MacIdentity(
         identity: _identity,
+        certificate: _identity.name,
         publishedRequirement: null,
         codeId: 'com.example.tool',
       ),
     );
-    expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-    expect(built.outputs.map((output) => (output.path, output.type)), [
-      for (final entry in ReleaseAssets.binaryOutputs(
-        project,
-        'macos-arm64',
-      ).entries)
-        (entry.key, entry.value),
-    ]);
+    expect(built.ok, isTrue, reason: buffer.toString());
+    for (final file in ReleaseAssets.binaryOutputs(project, 'macos-arm64')) {
+      expect(File(stage.pathOf(file)).existsSync(), isTrue, reason: file);
+    }
     expect(built.evidence['smoke'], {'status': 'passed'});
     expect(
-      workspace.exists(ReleaseAssets.binaryPath(project, 'macos-arm64')),
+      File(
+        stage.pathOf(ReleaseAssets.binaryPath(project, 'macos-arm64')),
+      ).existsSync(),
       isTrue,
       reason: 'the build wrote the binary where the next step will look',
     );
@@ -179,13 +185,11 @@ executables:
     final notarized = await chain(
       tools,
     ).notarizeStep(step(StepKind.notarize), project);
+    expect(notarized.ok, isTrue, reason: buffer.toString());
     expect(
-      notarized.ok,
-      isTrue,
-      reason: notarized.problem ?? buffer.toString(),
-    );
-    expect(
-      notarized.outputs,
+      Directory(stage.path)
+          .listSync(recursive: true)
+          .where((entity) => entity.path.endsWith('.zip')),
       isEmpty,
       reason: 'the zip is Apple\'s input, made outside the stage',
     );
@@ -197,24 +201,24 @@ executables:
     final archived = await chain(
       tools,
     ).archiveStep(step(StepKind.archive), project);
-    expect(archived.ok, isTrue, reason: archived.problem);
-    expect(archived.outputs.map((output) => (output.path, output.type)), [
-      (ReleaseAssets.archivePath(project, 'macos-arm64'), 'archive'),
-    ]);
+    expect(archived.ok, isTrue, reason: buffer.toString());
     expect(
       tools.calls.where((call) => call.startsWith('codesign --force')),
       hasLength(3),
       reason: 'each code file is signed once',
     );
     expect(
-      workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
+      File(
+        stage.pathOf(ReleaseAssets.archivePath(project, 'macos-arm64')),
+      ).existsSync(),
       isTrue,
     );
   });
 
   group('the runtime admits only the module it ships', () {
-    final signing = MacSigning(
+    final signing = MacIdentity(
       identity: _identity,
+      certificate: _identity.name,
       publishedRequirement: null,
       codeId: 'com.example.tool',
     );
@@ -231,7 +235,7 @@ executables:
           tools,
         ).buildStep(step(StepKind.build), project, signing: signing);
 
-        expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+        expect(built.ok, isTrue, reason: buffer.toString());
         final signed = signatures(tools);
         expect(signed.first, endsWith('/lib/tool/app.aot'));
         expect(signed.last, endsWith('/lib/tool/dartaotruntime'));
@@ -266,7 +270,7 @@ executables:
         ).buildStep(step(StepKind.build), project, signing: signing);
 
         expect(built.ok, isFalse);
-        expect(built.problem, contains('code hash of lib/tool/app.aot'));
+        expect(buffer.toString(), contains('code hash of lib/tool/app.aot'));
         expect(
           signatures(tools).where((call) => call.endsWith('dartaotruntime')),
           isEmpty,
@@ -298,8 +302,9 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: MacSigning(
+      signing: MacIdentity(
         identity: _identity,
+        certificate: _identity.name,
         publishedRequirement: published,
         codeId: 'com.example.tool',
       ),
@@ -316,7 +321,7 @@ executables:
     expect(buffer.toString(), contains('leaf "OLD"'));
     expect(
       ok.halt,
-      HaltKind.unfixableByRerun,
+      Stop.unfixable,
       reason:
           'the producer states the verdict; the coordinator speaks the '
           'halt once, after every lane has rested',
@@ -334,14 +339,15 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: MacSigning(
+      signing: MacIdentity(
         identity: _identity,
+        certificate: _identity.name,
         publishedRequirement: published,
         // Resolved by the caller before anything acts.
         codeId: 'io.github.example.tool',
       ),
     );
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
+    expect(ok.ok, isTrue, reason: buffer.toString());
     final sign = tools.calls.firstWhere(
       (c) => c.startsWith('codesign --force'),
     );
@@ -364,14 +370,15 @@ executables:
       final built = await chain(tools).buildStep(
         step(StepKind.build),
         project,
-        signing: MacSigning(
+        signing: MacIdentity(
           identity: _identity,
+          certificate: _identity.name,
           publishedRequirement: null,
           codeId: 'com.example.tool',
         ),
       );
-      expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-      workspace.write(
+      expect(built.ok, isTrue, reason: buffer.toString());
+      stage.write(
         '${ReleaseAssets.binaryRoot(project, 'macos-arm64')}/lib/tool/'
         'dartaotruntime.cstemp',
         utf8.encode('half-written signature'),
@@ -382,11 +389,7 @@ executables:
       ).notarizeStep(step(StepKind.notarize), project);
 
       // The scripted ditto checks that its payload is the artifact's files.
-      expect(
-        notarized.ok,
-        isTrue,
-        reason: notarized.problem ?? buffer.toString(),
-      );
+      expect(notarized.ok, isTrue, reason: buffer.toString());
     },
   );
 
@@ -405,11 +408,8 @@ executables:
         return null;
       },
     );
-    for (final file in ReleaseAssets.binaryOutputs(
-      project,
-      'macos-arm64',
-    ).keys) {
-      workspace.write(file, utf8.encode('BINARY'));
+    for (final file in ReleaseAssets.binaryOutputs(project, 'macos-arm64')) {
+      stage.write(file, utf8.encode('BINARY'));
     }
 
     final notarized = await chain(
@@ -434,11 +434,8 @@ executables:
         return null;
       },
     );
-    for (final file in ReleaseAssets.binaryOutputs(
-      project,
-      'macos-arm64',
-    ).keys) {
-      workspace.write(file, utf8.encode('BINARY'));
+    for (final file in ReleaseAssets.binaryOutputs(project, 'macos-arm64')) {
+      stage.write(file, utf8.encode('BINARY'));
     }
 
     final notarized = await chain(

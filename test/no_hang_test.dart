@@ -69,7 +69,6 @@ import 'dart:async';
 import 'dart:isolate';
 
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/output/progress.dart';
 
 Future<void> main() async {
   for (final (name, scenario) in [
@@ -111,16 +110,13 @@ void abandonedStep(Object? _) {
     terminalWidth: 80,
   );
   try {
-    final progress = output.progressBoard('cli · staging');
-    final row = progress.addRow(
-      id: 'cli/notarize/macos-arm64',
-      label: 'Local binary',
+    final progress = output.board('cli · staging');
+    final row = progress.add(
+      'cli/notarize/macos-arm64',
+      'Local binary',
       coordinate: 'macos-arm64',
     );
-    row.handle.begin(ProgressActivity(
-      running: 'notarizing',
-      failed: 'notarization failed',
-    ));
+    row.begin((running: 'notarizing', failed: 'notarization failed'));
     throw StateError('the step threw before it was finished');
   } on Object {
     // exactly what bin/rk.dart does on the way out
@@ -137,9 +133,8 @@ void unsafeWidth(Object? _) {
     terminalWidth: 1,
   );
   output
-      .progressBoard('cli · staging', delay: Duration.zero)
-      .addRow(id: 'cli/build', label: 'Local binary')
-      .handle
-      .begin(CommonProgressActivities.checking);
+      .board('cli · staging', delay: Duration.zero)
+      .add('cli/build', 'Local binary')
+      .begin(Activities.checking);
 }
 ''';

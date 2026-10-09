@@ -1,10 +1,13 @@
 import 'diagnostic.dart';
 
-/// A parser for exactly the TOML subset `release.toml` uses, and nothing more.
+/// [source], the file at [path], as a tree of [TomlTable] and [TomlArray]
+/// nodes with String, int and `List<String>` leaves; or null, with why in
+/// [diagnostics].
 ///
-/// Writing the parser narrowly rather than filtering a general one is the
-/// point: a construct the schema does not allow has no representation here, so
-/// it fails by construction rather than by a validation pass that has to
+/// The parser reads exactly the TOML subset `release.toml` uses, and nothing
+/// more. Writing it narrowly rather than filtering a general one is the
+/// point: a construct the schema does not allow has no representation here,
+/// so it fails by construction rather than by a validation pass that has to
 /// remember to reject it. The accepted grammar is:
 ///
 /// * comments (`# ...`) and blank lines
@@ -15,24 +18,9 @@ import 'diagnostic.dart';
 ///
 /// Deliberately absent: inline tables, multi-line or literal strings, floats,
 /// booleans, dates, exponents, underscores in numbers, dotted keys, quoted
-/// keys, and nested arrays.
-class TomlDocument {
-  TomlDocument._(this.root);
-
-  /// The parsed tree: [TomlTable] and [TomlArray] nodes with String, int, and
-  /// `List<String>` leaves.
-  final TomlTable root;
-
-  static TomlDocument? parse(
-    String source,
-    String path,
-    Diagnostics diagnostics,
-  ) {
-    final parser = _Parser(source, path, diagnostics);
-    final root = parser.run();
-    return root == null ? null : TomlDocument._(root);
-  }
-}
+/// keys, nested arrays, and a table inside an array of tables.
+TomlTable? parseToml(String source, String path, Diagnostics diagnostics) =>
+    _Parser(source, path, diagnostics).run();
 
 /// A table, remembering where each key was written so a later problem can
 /// point a reader at the line that caused it.
@@ -88,10 +76,8 @@ class _Parser {
       final text = _stripComment(_lines[_cursor]).trim();
       if (text.isEmpty) continue;
 
-      if (text.startsWith('[[')) {
-        _arrayHeader(text);
-      } else if (text.startsWith('[')) {
-        _tableHeader(text);
+      if (text.startsWith('[')) {
+        _header(text);
       } else {
         _assignment(text);
       }
@@ -126,40 +112,33 @@ class _Parser {
     );
   }
 
-  void _tableHeader(String text) {
-    if (!text.endsWith(']')) {
-      _fail('unterminated table header');
+  /// `[a.b]` opens a table, and `[[a.b]]` the next table of a list.
+  void _header(String text) {
+    final brackets = text.startsWith('[[') ? 2 : 1;
+    if (!text.endsWith(']' * brackets)) {
+      _fail(
+        brackets == 2
+            ? 'unterminated array-of-tables header'
+            : 'unterminated table header',
+      );
       return;
     }
-    final path = _headerPath(text.substring(1, text.length - 1));
-    if (path == null) return;
-    final table = _descend(path, createArray: false);
-    if (table != null) _current = table;
-  }
-
-  void _arrayHeader(String text) {
-    if (!text.endsWith(']]')) {
-      _fail('unterminated array-of-tables header');
-      return;
-    }
-    final path = _headerPath(text.substring(2, text.length - 2));
-    if (path == null) return;
-    final table = _descend(path, createArray: true);
-    if (table != null) _current = table;
-  }
-
-  List<String>? _headerPath(String inner) {
-    final path = inner.split('.').map((s) => s.trim()).toList();
-    if (path.isEmpty || path.any((s) => !_bareKey.hasMatch(s))) {
+    final path = text
+        .substring(brackets, text.length - brackets)
+        .split('.')
+        .map((s) => s.trim())
+        .toList();
+    if (path.any((s) => !_bareKey.hasMatch(s))) {
       _fail(
         'table names must be dot-separated bare keys',
         remedy:
             'use letters, digits, hyphens and underscores, as in '
             '[release.cli]',
       );
-      return null;
+      return;
     }
-    return path;
+    final table = _descend(path, createArray: brackets == 2);
+    if (table != null) _current = table;
   }
 
   /// Walks or creates the tables named by [path], appending a new element when
@@ -203,17 +182,8 @@ class _Parser {
             return null;
           }
           table = child;
-        case TomlArray array:
-          // Later headers extend the most recent element, so
-          // [[release.framework.project]] followed by [release.framework.x]
-          // resolves against the element just opened.
-          if (array.tables.isEmpty) {
-            _fail('"$key" has no entries to extend');
-            return null;
-          }
-          table = array.tables.last;
         default:
-          _fail('"$key" is a value, not a table');
+          _fail('"$key" is not a table');
           return null;
       }
     }

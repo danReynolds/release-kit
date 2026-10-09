@@ -1,12 +1,13 @@
 import 'dart:convert';
 
+import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/engine/checklist.dart';
-import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
+
+import 'support/memory_source_tree.dart';
 
 /// Captures what rk would print, so the contract can be asserted rather than
 /// eyeballed.
@@ -66,19 +67,54 @@ void main() {
     );
   });
 
+  test('units staged side by side say their warnings in one section, past '
+      'one that stops', () async {
+    // core found a warning; other stopped; third found one after that.
+    // However their staging interleaved, the run says both together.
+    final (out, captured) = make();
+    await out.holdingHalts(() async {
+      out.deferWarning(
+        const Diagnostic(code: 'RK-PUB-012', message: 'for core', remedy: 'r'),
+        unit: 'core',
+      );
+      out.problem(
+        const Diagnostic(code: 'RK-STAGE-003', message: 'other stopped'),
+        unit: 'other',
+      );
+      out.halt(Stop.partway);
+      out.deferWarning(
+        const Diagnostic(code: 'RK-PUB-012', message: 'for third', remedy: 'r'),
+        unit: 'third',
+      );
+      out.flushWarnings(order: const ['core', 'other', 'third']);
+    });
+
+    final text = captured.text;
+    expect('\nWarnings\n'.allMatches(text), hasLength(1), reason: text);
+    expect(text.indexOf('other stopped'), lessThan(text.indexOf('for core')));
+    expect(text.indexOf('for core'), lessThan(text.indexOf('for third')));
+    expect(text.indexOf('for third'), lessThan(text.indexOf('rk stopped')));
+  });
+
   test('public steps preserve concrete target identity in JSON', () {
     final (out, _) = make();
-    out.step(
-      Step(
-        id: 'core/pub.dev/core@1.2.3',
-        kind: StepKind.publishRegistry,
-        target: PublishTarget.pubDev,
-        unit: 'core',
-        project: 'core',
-        summary: 'publish core 1.2.3 to pub.dev',
-        needs: const [],
-      ),
-      show: false,
+    final diagnostics = Diagnostics();
+    final resolution = Resolution.resolve(
+      ReleaseConfig.parse(
+        'schema = 2\n\n[release.core]\npublish = ["pub.dev"]\n',
+        'release.toml',
+        diagnostics,
+      )!,
+      MemorySourceTree({'pubspec.yaml': 'name: core\nversion: 1.2.3\n'}),
+      diagnostics,
+    )!;
+    out.report.step(
+      UnitRelease.derive(
+        resolution.unit('core')!,
+        resolution,
+        repository: null,
+        problems: diagnostics,
+      ).packages.single,
     );
 
     final document = out.report.encode(exit: 0);
@@ -98,15 +134,13 @@ void main() {
       terminalWidth: 80,
     );
 
-    final progress = output.progressBoard('cli · staging');
-    final row = progress.addRow(
-      id: 'cli/build/macos-arm64',
-      label: 'Local binary',
+    final progress = output.board('cli · staging');
+    final row = progress.add(
+      'cli/build/macos-arm64',
+      'Local binary',
       coordinate: 'macos-arm64',
     );
-    row.handle.begin(
-      ProgressActivity(running: 'building', failed: 'build failed'),
-    );
+    row.begin((running: 'building', failed: 'build failed'));
     output.problem(
       Diagnostic(
         code: 'RK-BUILD-001',
@@ -154,22 +188,16 @@ void main() {
   group('non-terminal output is append-only', () {
     test('a live board prints nothing at all', () {
       final (out, captured) = make(isTerminal: false);
-      final board = out.progressBoard('Staging', delay: Duration.zero);
-      board
-          .addRow(id: 'build', label: 'linux-x64')
-          .handle
-          .begin(CommonProgressActivities.checking);
+      final board = out.board('Staging', delay: Duration.zero);
+      board.add('build', 'linux-x64').begin(Activities.checking);
       expect(captured.text, isEmpty, reason: 'a pipe sees no spinner');
       board.discard();
     });
 
     test('and no cursor movement is emitted', () {
       final (out, captured) = make(isTerminal: false);
-      final board = out.progressBoard('Staging', delay: Duration.zero);
-      board
-          .addRow(id: 'build', label: 'linux-x64')
-          .handle
-          .begin(CommonProgressActivities.checking);
+      final board = out.board('Staging', delay: Duration.zero);
+      board.add('build', 'linux-x64').begin(Activities.checking);
       out.line('built', mark: Mark.done);
       board.discard();
       expect(captured.text, isNot(contains('\r')));
@@ -188,15 +216,22 @@ void main() {
     test('target rows fit and erase exactly at 36 columns', () async {
       const width = 36;
       final (out, captured) = make(isTerminal: true, terminalWidth: width);
-      final checks = out.targetChecks(delay: Duration.zero);
-      checks
-        ..add('tag', 'Git tag')
-        ..add('pub', 'pub.dev · rk')
-        ..add('github', 'GitHub Release · danReynolds/release-kit');
+      final checks = out.board(
+        'Release targets',
+        delay: Duration.zero,
+        elapsed: false,
+      );
+      for (final (id, label) in [
+        ('tag', 'Git tag'),
+        ('pub', 'pub.dev · rk'),
+        ('github', 'GitHub Release · danReynolds/release-kit'),
+      ]) {
+        checks.add(id, label).begin(Activities.checking);
+      }
       await Future<void>.delayed(const Duration(milliseconds: 1));
 
-      checks.finish('github', Verdict.exact);
-      checks.close();
+      checks['github'].complete('checked', mark: Mark.satisfied);
+      checks.discard();
 
       final visibleLines = withoutControls(
         captured.text,
@@ -434,20 +469,20 @@ void main() {
   group('halts open with the sentence, not the noun', () {
     test('no public target changed', () {
       final (out, captured) = make();
-      out.halt(HaltKind.beforeActing);
+      out.halt(Stop.refused);
       expect(captured.text, contains('no public target changed'));
       expect(captured.text, contains('safe to re-run'));
     });
 
     test('something may have happened', () {
       final (out, captured) = make();
-      out.halt(HaltKind.lostTrack);
+      out.halt(Stop.lostTrack);
       expect(captured.text, contains('an effect may exist'));
     });
 
     test('re-running will not help', () {
       final (out, captured) = make();
-      out.halt(HaltKind.unfixableByRerun);
+      out.halt(Stop.unfixable);
       expect(captured.text, contains('No public targets changed'));
       expect(captured.text, contains('Resolve the conflict before retrying'));
       expect(out.report.rerunHelps, isFalse);
@@ -457,8 +492,8 @@ void main() {
       'a conflict after an earlier unit published acknowledges that act',
       () {
         final (out, captured) = make();
-        out.previousUnitActed = true;
-        out.halt(HaltKind.unfixableByRerun);
+        out.report.publicChanged = true;
+        out.halt(Stop.unfixable);
         expect(captured.text, isNot(contains('No public targets changed')));
         expect(captured.text, contains('rk acted'));
         final report = jsonDecode(out.report.encode(exit: 1)) as Map;
@@ -470,7 +505,7 @@ void main() {
 
   group('problems', () {
     final diagnostic = Diagnostic(
-      code: 'RK-CONF-019',
+      code: 'RK-CONF-009',
       message: 'a project in "core" does not say where to publish',
       source: SourceLocation('release.toml', 4),
       remedy: 'add publish = ["git-tag", "pub.dev"]',
@@ -487,9 +522,9 @@ void main() {
     test('hide the code from prose and preserve it in JSON', () {
       final (out, captured) = make();
       out.problem(diagnostic);
-      expect(captured.text, isNot(contains('RK-CONF-019')));
+      expect(captured.text, isNot(contains('RK-CONF-009')));
       final json = jsonDecode(out.report.encode(exit: 1)) as Map;
-      expect(((json['problems'] as List).single as Map)['code'], 'RK-CONF-019');
+      expect(((json['problems'] as List).single as Map)['code'], 'RK-CONF-009');
     });
 
     test('are reported in one pass', () {

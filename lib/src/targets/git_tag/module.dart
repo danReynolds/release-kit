@@ -1,13 +1,12 @@
 import '../../engine/assets.dart';
-import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/git.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
-import '../../engine/targets.dart';
+import '../../engine/stage.dart';
+import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
 import '../../engine/version.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 import 'transaction.dart';
@@ -18,49 +17,28 @@ final class GitTagTargetModule extends TargetModule {
   @override
   PublishTarget get target => PublishTarget.gitTag;
 
+  /// Origin's tag, and the lane's latest version, from one listing of
+  /// origin's tags per run.
   @override
-  Future<TargetReadinessOutcome> checkReadiness(
-    TargetReadinessContext context,
+  Future<TargetRead> read(
+    TargetReadContext reads,
     ResolvedUnit unit,
-  ) async => const TargetReady();
-
-  @override
-  ProgressActivity get publishActivity =>
-      ProgressActivity(running: 'creating', failed: 'tag creation failed');
-
-  @override
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
-  }) {
-    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
-    return TargetPlan(
-      label: 'Git tag',
-      kindLabel: 'Git tag',
-      identity: tag,
-      planNote: tag,
-      coordinate: tag,
-      targetVersion: unit.version.canonical,
-      step: step,
-      // The tag binds the manifest digest in its annotation; it does not
-      // host a file named release-manifest.json. Binary releases publish
-      // that file on GitHub. A pub-only release is recovered directly from
-      // its peeled source commit plus pub.dev's archive.
-      artifacts: const [],
-      uses: unit.buildsReleaseAssets
-          ? '${ReleaseAssets.manifest} from GitHub Release'
-          : null,
+    Target target, {
+    Stage? stage,
+  }) async {
+    final history = readHistory(() => _history(reads, unit, target));
+    return (
+      state: await _candidate(reads, unit, stage: stage),
+      history: await history,
     );
   }
 
-  @override
-  Future<Inspection> inspectCandidate(
+  Future<Inspection> _candidate(
     TargetReadContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-  ) async {
-    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async {
+    final tag = unit.tag!;
     final tools = context.tools;
     if (tools == null) {
       return Inspection.unknown(
@@ -70,20 +48,8 @@ final class GitTagTargetModule extends TargetModule {
       );
     }
     final destination = GitTag(tools: tools, root: context.git.root);
-    final stage = context.reusableStage(unit);
-    String? manifestSha256;
-    if (stage != null) {
-      try {
-        final manifest = stage.requireReceipt().artifacts.singleWhere(
-          (artifact) => artifact.path == ReleaseAssets.manifest,
-        );
-        manifestSha256 = manifest.sha256;
-      } on Object catch (error) {
-        return Inspection.unknown(
-          'the expected release tag binding could not be read: $error',
-        );
-      }
-    }
+    final manifestSha256 =
+        stage?.receipt?.files[ReleaseAssets.manifest]?.sha256;
 
     final remote = await destination.inspectReleaseBinding(
       listing: context.once(originTagsKey, destination.listTags),
@@ -138,11 +104,10 @@ final class GitTagTargetModule extends TargetModule {
         : local;
   }
 
-  @override
-  Future<TargetHistory> inspectHistory(
+  Future<TargetHistory> _history(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
   ) async {
     final tools = context.tools;
     final destination = tools == null
@@ -151,7 +116,7 @@ final class GitTagTargetModule extends TargetModule {
     final inspection = destination == null
         ? const Inspection.unknown('no tools to read origin with')
         : await destination.inspectLatestVersion(
-            requiredTargetTagPattern(unit, PublishTarget.gitTag),
+            unit.tagPattern!,
             listing: context.once(originTagsKey, destination.listTags),
           );
     final history = TargetHistory.versioned(
@@ -181,7 +146,7 @@ final class GitTagTargetModule extends TargetModule {
     TargetReadContext context,
     ResolvedUnit unit,
   ) sync* {
-    final pattern = requiredTargetTagPattern(unit, PublishTarget.gitTag);
+    final pattern = unit.tagPattern!;
     for (final tag in context.git.tagsMatching(pattern)) {
       final raw = GitState.versionIn(tag, pattern);
       if (raw == null) continue;
@@ -201,11 +166,7 @@ final class GitTagTargetModule extends TargetModule {
   }
 
   @override
-  Diagnostic diagnoseConflict(
-    ResolvedUnit unit,
-    TargetPlan target,
-    Inspection conflict,
-  ) {
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection conflict) {
     if (conflict.sourceMismatch != null) {
       final project = unit.projects.first;
       return Diagnostic(
@@ -222,7 +183,7 @@ final class GitTagTargetModule extends TargetModule {
             'changelog entry, then run rk stage ${unit.name}.',
       );
     }
-    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    final tag = unit.tag!;
     if (conflict.evidence['origin'] == 'has no $tag') {
       return Diagnostic(
         code: 'RK-REL-001',
@@ -248,7 +209,7 @@ final class GitTagTargetModule extends TargetModule {
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
-    Inspection inspected,
+    Target target,
+    Inspection before,
   ) => publishGitTag(context, unit);
 }

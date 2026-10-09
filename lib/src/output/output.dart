@@ -1,12 +1,26 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' show max, min;
 
-import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
-import 'progress.dart';
+import '../engine/git.dart';
 import 'report.dart';
 import 'timeline.dart';
 import '../engine/verdict.dart';
+
+export 'report.dart' show ReportSection;
+
+part 'board.dart';
+
+/// What a checkout is at, in one phrase: `main@abc1234 · 2 uncommitted`.
+/// The commit rides beside the branch for a reader; a document keeps them
+/// apart, because `branch` promises a branch name.
+String sourceIdentity(String? branch, String? commit, int? uncommitted) => [
+  if (branch != null && commit != null) '$branch@$commit',
+  if (branch != null && commit == null) branch,
+  if (branch == null && commit != null) commit,
+  if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
+].join(' · ');
 
 /// Makes untrusted text inert on a terminal while leaving report evidence raw.
 ///
@@ -31,6 +45,21 @@ String terminalSafeText(String text) {
   }
   if (escaped == null) return text;
   return escaped + String.fromCharCodes(runes.sublist(start));
+}
+
+/// Control, bidirectional and zero-width characters: what would move the
+/// cursor or reorder a line rather than show in it.
+final invisibleCharacters = RegExp(
+  r'[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
+);
+
+/// [text] as one line of at most [max] characters: what is invisible
+/// becomes a space, and a longer line ends in '…'. How much of a provider's
+/// note fits is a matter of display, never a reason to stop a release.
+String oneLine(String text, {int max = 120}) {
+  final line = text.replaceAll(invisibleCharacters, ' ').trim();
+  if (line.runes.length <= max) return line;
+  return '${String.fromCharCodes(line.runes.take(max - 1))}…';
 }
 
 /// How a line reads at a glance.
@@ -71,6 +100,16 @@ enum Mark {
     // Neither earns a glyph; the words separate them.
     Verdict.absent || Verdict.unknown => none,
   };
+
+  /// What the glyph is drawn in when nothing says otherwise.
+  RuntimeState get state => switch (this) {
+    done => RuntimeState.success,
+    satisfied => RuntimeState.satisfied,
+    blocked => RuntimeState.failure,
+    next => RuntimeState.active,
+    warning => RuntimeState.attention,
+    none => RuntimeState.neutral,
+  };
 }
 
 /// What a subject represents before rk has observed an outcome for it.
@@ -108,6 +147,16 @@ enum RuntimeState {
     Verdict.unknown => attention,
     Verdict.absent => neutral,
   };
+
+  /// What a heading over rows in [states] is drawn in: a failure or an
+  /// attention among them wins, rows that all agree are that, and a mix is
+  /// still active.
+  static RuntimeState agreed(Iterable<RuntimeState> states) {
+    final distinct = states.toSet();
+    if (distinct.contains(failure)) return failure;
+    if (distinct.contains(attention)) return attention;
+    return distinct.length == 1 ? distinct.single : active;
+  }
 }
 
 /// One styled fragment whose unstyled [text] remains the output contract.
@@ -115,64 +164,12 @@ final class OutputSpan {
   const OutputSpan(
     this.text, {
     this.role = VisualRole.primary,
-    this.state = RuntimeState.neutral,
     this.strong = false,
   });
 
   final String text;
   final VisualRole role;
-  final RuntimeState state;
   final bool strong;
-}
-
-/// RK's complete terminal colour vocabulary.
-///
-/// Standard ANSI colours let the terminal theme choose contrast. Styling is
-/// applied per span and reset immediately; it never crosses a newline or
-/// leaks into a native command.
-final class OutputTheme {
-  const OutputTheme({required this.useColor});
-
-  final bool useColor;
-
-  String paint(
-    String text, {
-    VisualRole role = VisualRole.primary,
-    RuntimeState state = RuntimeState.neutral,
-    bool strong = false,
-  }) {
-    final safe = terminalSafeText(text);
-    if (!useColor || safe.isEmpty) return safe;
-    final color = switch (state) {
-      RuntimeState.neutral => switch (role) {
-        VisualRole.primary => null,
-        VisualRole.secondary => '90', // grey
-        VisualRole.localWork => '34', // blue
-        VisualRole.checkpoint => '35', // violet/magenta
-        VisualRole.requirement => '33', // amber/yellow
-        VisualRole.releaseTarget || VisualRole.operatorAction => '36', // cyan
-      },
-      RuntimeState.active => '36', // cyan
-      RuntimeState.satisfied => '90', // grey
-      RuntimeState.success => '32', // green
-      RuntimeState.attention => '33', // yellow
-      RuntimeState.failure => '31', // red
-    };
-    final codes = [if (strong) '1', if (color != null) color];
-    if (codes.isEmpty) return safe;
-    return '\x1b[${codes.join(';')}m$safe\x1b[0m';
-  }
-
-  String render(Iterable<OutputSpan> spans) => spans
-      .map(
-        (span) => paint(
-          span.text,
-          role: span.role,
-          state: span.state,
-          strong: span.strong,
-        ),
-      )
-      .join();
 }
 
 /// Everything rk prints goes through here, so terseness, collapse, and the
@@ -243,8 +240,6 @@ class Output {
 
   final bool useColor;
 
-  OutputTheme get theme => OutputTheme(useColor: useColor);
-
   /// Columns available on an attached terminal.
   ///
   /// Transient rows are shortened to stay one physical row, because cursor-up
@@ -259,32 +254,24 @@ class Output {
   /// What a caller is told, recorded by the same calls that print.
   final Report report;
 
-  /// Whether an earlier unit in this repository command changed public
-  /// truth. Set by the release command at unit boundaries so a later local
-  /// refusal cannot claim the whole invocation changed nothing.
-  bool previousUnitActed = false;
-
   final Elapsed Function() _clock;
 
   /// This run's phases, rows and waits on a person, for the closing summary
   /// and `--timings`.
   final RunTimeline timeline;
 
-  LiveProgress? _progressBoard;
+  Board? _board;
 
-  /// A fixed-height, target-agnostic progress surface.
-  ///
-  /// Targets receive only row handles; the coordinator retains the returned
-  /// controllers and therefore remains the sole authority that can declare a
-  /// public row complete, failed, or not attempted.
-  LiveProgress progressBoard(
+  /// A fixed-height board of rows. Work is handed its rows; whoever made
+  /// the board is the one that ends it, with settle, conclude or discard.
+  Board board(
     String title, {
     Duration delay = const Duration(milliseconds: 80),
-    Duration pipeDelay = const Duration(seconds: 10),
-    bool emitSlowToNonTerminal = false,
-    bool showElapsed = true,
+    bool heartbeat = false,
+    Duration heartbeatAfter = const Duration(seconds: 10),
+    bool elapsed = true,
   }) {
-    final previous = _progressBoard;
+    final previous = _board;
     if (previous != null) {
       // A board still live when its successor arrives was never resolved
       // by its owner — the same bug [close] guards. Say so loudly in
@@ -294,27 +281,14 @@ class Output {
       previous.discard();
     }
     _yieldToProse();
-    final board = LiveProgress._(
+    return _board = Board._(
       this,
       title,
       delay,
-      pipeDelay: pipeDelay,
-      emitSlowToNonTerminal: emitSlowToNonTerminal,
-      showElapsed: showElapsed,
+      heartbeat: heartbeat,
+      heartbeatAfter: heartbeatAfter,
+      elapsed: elapsed,
     );
-    _progressBoard = board;
-    return board;
-  }
-
-  /// A fixed multi-line region for concurrent public-target reads.
-  ///
-  /// Nothing is emitted for a pipe. On a terminal the region appears only
-  /// after a short delay, so fast reads do not flicker, and [TargetChecks]
-  /// erases it completely before the deterministic report is rendered.
-  TargetChecks targetChecks({
-    Duration delay = const Duration(milliseconds: 80),
-  }) {
-    return TargetChecks._(this, delay);
   }
 
   /// A heading. Callers space their own sections; this adds nothing.
@@ -336,7 +310,7 @@ class Output {
     if (endsWithNewline) lines.removeLast();
     for (final (index, line) in lines.indexed) {
       sink(prefix);
-      sink(theme.render(_helpSpans(line)));
+      sink(_render(_helpSpans(line)));
       if (index < lines.length - 1 || endsWithNewline) sink('\n');
     }
   }
@@ -372,57 +346,49 @@ class Output {
   }
 
   /// The repository line, recorded in parts so a caller is not left parsing
-  /// "keybay · main · 2 uncommitted" back into fields.
-  void repository({
-    required String name,
-    String? branch,
-    String? commit,
+  /// "keybay · main · 2 uncommitted" back into fields. [git] is what was read
+  /// of it, when anything was, and each command counts [uncommitted] its own
+  /// way. With [source], the record says how a stage would be named: by its
+  /// commit, or not at all yet. [show] false records it without a heading.
+  void repository(
+    String name, {
+    GitState? git,
     int? uncommitted,
-    String? head,
-    String? remote,
-    String? sourceBinding,
-    String? sourceComparison,
+    bool source = false,
+    bool show = true,
   }) {
+    final commit = git != null && git.hasCommit;
     report.repository(
       name: name,
-      branch: branch,
+      branch: git?.branch,
       uncommitted: uncommitted,
-      head: head,
-      remote: remote,
-      sourceBinding: sourceBinding,
-      sourceComparison: sourceComparison,
+      head: commit ? git.head : null,
+      remote: git?.originUrl,
+      sourceBinding: source ? (commit ? 'gitCommit' : 'unbound') : null,
+      sourceComparison: source ? (commit ? 'exact' : 'unavailable') : null,
     );
-    heading(
-      [
-        name,
-        // The commit rides beside the branch for a reader; the document keeps
-        // them apart, because `branch` promises a branch name.
-        if (branch != null && commit != null) '$branch@$commit',
-        if (branch != null && commit == null) branch,
-        if (branch == null && commit != null) commit,
-        if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
-      ].join(' · '),
+    if (!show) return;
+    final identity = sourceIdentity(
+      git?.branch,
+      commit ? git.shortHead : null,
+      uncommitted,
     );
+    heading(identity.isEmpty ? name : '$name · $identity');
   }
 
-  /// Opens a unit. Steps printed after this belong to it.
+  /// Opens a unit, said as [display]. Steps printed after this belong to
+  /// it.
   void unit(
     String name, {
     required String version,
     required String? tag,
-    String? state,
-    String? display,
+    required String display,
   }) {
     report.unit(name: name, version: version, tag: tag);
     blank();
-    // › for becomes and for sequence, everywhere inline: the gutter's → is
-    // reserved for "your next move", and three reviewers independently
-    // caught it moonlighting.
     line(
       name,
-      note:
-          display ??
-          (state == null ? '$version › $tag' : '$version › $tag · $state'),
+      note: display,
       // The unit's own line is a sentence, not a column: what follows the
       // name belongs beside it, not at the note column the rows below
       // share.
@@ -432,76 +398,6 @@ class Output {
     );
   }
 
-  /// One step of a checklist, printed and recorded as one act.
-  ///
-  /// Taking the [Step] rather than its parts is what makes the two surfaces
-  /// agree: there is no way to show a person one id and hand a caller another,
-  /// because there is only one call and it reads both from the same object.
-  ///
-  /// [show] records without printing, for a step collapse leaves off the
-  /// screen. The asymmetry runs one way only and deliberately: everything
-  /// printed is recorded, while the document may carry more than the terminal
-  /// shows. Terseness is a rule about a person's attention, and a caller
-  /// keying on step ids wants the whole checklist.
-  void step(
-    Step step, {
-    Mark mark = Mark.none,
-    String? note,
-    Verdict verdict = Verdict.unknown,
-    String? detail,
-    Map<String, String> evidence = const {},
-    String? action,
-    int depth = 1,
-    bool show = true,
-  }) {
-    report.step(
-      id: step.id,
-      unit: step.unit,
-      summary: step.summary,
-      verdict: verdict.name,
-      kind: step.kind.name,
-      target: step.target?.wireName,
-      detail: detail,
-      evidence: evidence,
-      permanent: step.isPermanent,
-      public: step.isPublic,
-      needs: step.needs,
-      action: action,
-    );
-    if (!show) return;
-    line(
-      step.summary,
-      mark: mark,
-      note: note ?? (step.isPermanent ? 'permanent' : null),
-      depth: depth,
-      labelWidth: 48,
-      role: switch (step.kind) {
-        StepKind.prerequisite => VisualRole.requirement,
-        StepKind.build ||
-        StepKind.notarize ||
-        StepKind.archive ||
-        StepKind.buildAssets => VisualRole.localWork,
-        StepKind.completeStage => VisualRole.checkpoint,
-        StepKind.tag ||
-        StepKind.publishRegistry ||
-        StepKind.publishRelease ||
-        StepKind.publishHomebrew => VisualRole.releaseTarget,
-      },
-      state: RuntimeState.of(verdict),
-      noteState: step.isPermanent ? RuntimeState.attention : null,
-    );
-    // The difference itself, not the fact of one — on the surface a person
-    // reads, not only in the document. status's live forge conflict printed
-    // a bare blocked line while the JSON carried the six-asset table.
-    for (final entry in evidence.entries) {
-      line(
-        '${entry.key}  ${entry.value}',
-        depth: depth + 1,
-        role: VisualRole.secondary,
-      );
-    }
-  }
-
   /// Ends the run's rendering.
   ///
   /// A repeating timer keeps a Dart isolate alive, so an activity abandoned by
@@ -509,7 +405,7 @@ class Output {
   /// which in CI is worse than a crash because nothing reports it. Calling this
   /// on the way out is what makes that impossible rather than unlikely.
   void close() {
-    final board = _progressBoard;
+    final board = _board;
     if (board != null) {
       // Every board's owner must resolve it — settle, conclude, or discard.
       // A board alive at close is an owner bug; say so loudly in checked
@@ -546,15 +442,16 @@ class Output {
     bool strong = false,
     VisualRole noteRole = VisualRole.primary,
     RuntimeState? noteState,
-    bool noteStrong = false,
   }) {
     _yieldToProse();
     label = terminalSafeText(label);
     note = note == null ? null : terminalSafeText(note);
-    final effectiveState = state ?? _stateForMark(mark);
+    final effectiveState = state ?? mark.state;
     final effectiveNoteState = noteState ?? effectiveState;
     final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
-    final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark, effectiveState);
+    final paintedGlyph = mark == Mark.none
+        ? ' '
+        : _style(mark.glyph, state: effectiveState);
 
     // The mark sits beside its row, at the row's indent: a nested row's mark
     // reads as its bullet, not as a stray in the left margin. The text
@@ -591,7 +488,6 @@ class Output {
           continuationPrefix: continuationPrefix,
           role: noteRole,
           state: effectiveNoteState,
-          strong: noteStrong,
         );
       }
       return;
@@ -613,7 +509,7 @@ class Output {
       sink(
         '$glyph '
         '${_style(label, role: role, state: effectiveState, strong: strong)} '
-        '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
+        '${_style(note, role: noteRole, state: effectiveNoteState)}\n',
       );
       return;
     }
@@ -621,16 +517,46 @@ class Output {
     sink(
       '$glyph '
       '${_style(padded, role: role, state: effectiveState, strong: strong)} '
-      '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
+      '${_style(note, role: noteRole, state: effectiveNoteState)}\n',
     );
   }
 
+  /// RK's complete terminal colour vocabulary.
+  ///
+  /// Standard ANSI colours let the terminal theme choose contrast. Styling is
+  /// applied per span and reset immediately; it never crosses a newline or
+  /// leaks into a native command.
   String _style(
     String text, {
     VisualRole role = VisualRole.primary,
     RuntimeState state = RuntimeState.neutral,
     bool strong = false,
-  }) => theme.paint(text, role: role, state: state, strong: strong);
+  }) {
+    final safe = terminalSafeText(text);
+    if (!useColor || safe.isEmpty) return safe;
+    final color = switch (state) {
+      RuntimeState.neutral => switch (role) {
+        VisualRole.primary => null,
+        VisualRole.secondary => '90', // grey
+        VisualRole.localWork => '34', // blue
+        VisualRole.checkpoint => '35', // violet/magenta
+        VisualRole.requirement => '33', // amber/yellow
+        VisualRole.releaseTarget || VisualRole.operatorAction => '36', // cyan
+      },
+      RuntimeState.active => '36', // cyan
+      RuntimeState.satisfied => '90', // grey
+      RuntimeState.success => '32', // green
+      RuntimeState.attention => '33', // yellow
+      RuntimeState.failure => '31', // red
+    };
+    final codes = [if (strong) '1', if (color != null) color];
+    if (codes.isEmpty) return safe;
+    return '\x1b[${codes.join(';')}m$safe\x1b[0m';
+  }
+
+  String _render(Iterable<OutputSpan> spans) => spans
+      .map((span) => _style(span.text, role: span.role, strong: span.strong))
+      .join();
 
   /// Writes one pre-laid-out line made of semantic spans.
   ///
@@ -641,7 +567,7 @@ class Output {
     _yieldToProse();
     final values = List<OutputSpan>.unmodifiable(spans);
     assert(values.every((span) => !span.text.contains('\n')));
-    sink('${theme.render(values)}\n');
+    sink('${_render(values)}\n');
   }
 
   static int plainWidth(Iterable<OutputSpan> spans) =>
@@ -802,69 +728,46 @@ class Output {
   /// the transcript, and the next frame repaints it beneath. Boards end
   /// only by their owner's settle, conclude, or discard.
   void _yieldToProse() {
-    _progressBoard?.yieldToProse();
+    _board?._yieldToProse();
   }
 
   /// Runs [body] holding back its halts, then says the most serious once.
   /// Work running side by side stops together, rather than one halt landing
-  /// among the others' progress.
+  /// among the others' progress. Deferred warnings wait as well: a problem
+  /// in one unit does not say the others' early, so they are said in one
+  /// section, by [body] or with the halt.
   Future<T> holdingHalts<T>(Future<T> Function() body) async {
     _holdingHalts++;
     try {
       return await body();
     } finally {
       if (--_holdingHalts == 0) {
-        final held = _heldHalt;
-        _heldHalt = null;
+        final held = _heldStop;
+        _heldStop = null;
         if (held != null) halt(held);
       }
     }
   }
 
   var _holdingHalts = 0;
-  HaltKind? _heldHalt;
+  Stop? _heldStop;
 
-  /// The plain sentence that opens every halt, before any verdict noun.
-  void halt(HaltKind kind) {
+  /// Says how the run stopped, in the plain sentence that opens every halt.
+  ///
+  /// A site says why it stops; what that means for the whole run is decided
+  /// here, once, from whether anything public has changed by now. A lane
+  /// that stops while another publishes beside it is told so, whichever
+  /// finished first.
+  void halt(Stop stop) {
     if (_holdingHalts > 0) {
-      final held = _heldHalt;
-      // The kinds are declared in order of seriousness.
-      if (held == null || kind.index > held.index) _heldHalt = kind;
+      _heldStop = Stop.worst([?_heldStop, stop]);
       return;
     }
     flushWarnings();
-    // A later unit can fail before its own first act after an earlier unit in
-    // the same repository command already published. The report is for the
-    // whole invocation, so "nothing changed" would be false.
-    if (kind == HaltKind.beforeActing && previousUnitActed) {
-      kind = HaltKind.stoppedPartway;
-    }
-    if (kind == HaltKind.unfixableByRerun && previousUnitActed) {
-      kind = HaltKind.actedAndUnfixable;
-    }
-    final sentence = switch (kind) {
-      HaltKind.beforeActing =>
-        'rk stopped. no public target changed. safe to re-run.',
-      HaltKind.stoppedPartway =>
-        'rk stopped partway. everything already '
-            'done is real and stays done; re-running resumes after it.',
-      HaltKind.lostTrack =>
-        'rk acted, then lost sight of the result. '
-            'an effect may exist. still safe to re-run.',
-      HaltKind.unfixableByRerun =>
-        'No public targets changed. Resolve the conflict before retrying.',
-      HaltKind.actedAndUnfixable =>
-        'rk acted, and what it read back cannot be fixed by re-running.',
-    };
-    report.halt(
-      kind.name,
-      sentence,
-      helps:
-          kind != HaltKind.unfixableByRerun &&
-          kind != HaltKind.actedAndUnfixable,
-    );
+    final kind = HaltKind.of(stop, changed: report.publicChanged);
+    report.halt(kind);
     blank();
-    say(sentence);
+    say(kind.sentence);
     blank();
   }
 
@@ -878,7 +781,7 @@ class Output {
     String? target,
     int depth = 0,
   }) {
-    flushWarnings();
+    if (_holdingHalts == 0) flushWarnings();
     report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
@@ -903,9 +806,10 @@ class Output {
 
   /// Records a nonblocking diagnostic now, and shows it later with the run's
   /// other warnings, in one section: before the run's next problem, halt or
-  /// next move, or at [flushWarnings]. Units staged side by side each find
-  /// their own; said as they arrive, they made a section per unit and
-  /// repeated the remedy they share under every one.
+  /// next move, or at [flushWarnings]; while [holdingHalts] holds the halts,
+  /// not before a problem. Units staged side by side each find their own;
+  /// said as they arrive, they made a section per unit and repeated the
+  /// remedy they share under every one.
   void deferWarning(Diagnostic diagnostic, {String? unit, String? target}) {
     _deferredWarnings.add((diagnostic: diagnostic, unit: unit, target: target));
   }
@@ -985,533 +889,6 @@ class Output {
       );
     }
   }
-
-  String _paint(Mark mark, RuntimeState state) =>
-      _style(mark.glyph, state: state);
-
-  static RuntimeState _stateForMark(Mark mark) => switch (mark) {
-    Mark.done => RuntimeState.success,
-    Mark.satisfied => RuntimeState.satisfied,
-    Mark.blocked => RuntimeState.failure,
-    Mark.next => RuntimeState.active,
-    Mark.warning => RuntimeState.attention,
-    Mark.none => RuntimeState.neutral,
-  };
-}
-
-/// One live fixed-height progress surface.
-///
-/// Its model is terminal-agnostic; this class owns delayed display, redraw,
-/// suspension around inherited-stdio tools, and the one settled snapshot that
-/// survives. A caller must choose [discard] for a purely transient board or
-/// [settle] for a board whose final state belongs in the transcript.
-final class LiveProgress {
-  LiveProgress._(
-    this._output,
-    String title,
-    this._delayDuration, {
-    required Duration pipeDelay,
-    required this.emitSlowToNonTerminal,
-    required this.showElapsed,
-  }) : _pipeDelay = pipeDelay {
-    model = ProgressModel(
-      title: title,
-      clock: _output._clock,
-      changed: _changed,
-    );
-    if (_output.isTerminal) {
-      _delay = Timer(_delayDuration, _showTerminal);
-    }
-  }
-
-  final Output _output;
-  final Duration _delayDuration;
-
-  /// How long a row runs before a pipe is told about it. Only a wait a
-  /// reader would wonder about, such as a long build or a sign-in, is
-  /// worth a line: shorter ones made the transcript differ from one run to
-  /// the next with how fast a read happened to answer.
-  final Duration _pipeDelay;
-  final bool emitSlowToNonTerminal;
-  final bool showElapsed;
-  late final ProgressModel model;
-  final Map<String, ProgressRowController> _controllers = {};
-  final Map<String, Timer> _nonTerminalDelays = {};
-  final Map<String, ProgressActivity> _nonTerminalPrinted = {};
-  final Map<String, ProgressActivity> _nonTerminalScheduled = {};
-  Timer? _delay;
-  Timer? _ticker;
-  var _drawnLines = 0;
-  var _spin = 0;
-  var _closed = false;
-  var _suspended = false;
-  var _visible = false;
-  var _delayElapsed = false;
-
-  static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-  ProgressRowController addRow({
-    required String id,
-    required String label,
-    String? coordinate,
-    String? group,
-  }) {
-    final controller = model.addRow(
-      id: id,
-      label: label,
-      coordinate: coordinate,
-      group: group,
-    );
-    _controllers[id] = controller;
-    return controller;
-  }
-
-  void _changed(ProgressRow row) {
-    if (_closed) return;
-    // A row settles once, so this records it once. One still running when
-    // its board was discarded was recorded then, as unfinished.
-    if (row.took case final took?) _time(row, took, note: row.note);
-    if (_output.isTerminal) {
-      if (_visible && !_suspended) {
-        _draw();
-      } else if (_delayElapsed && !_suspended && model.rows.isNotEmpty) {
-        _showTerminal();
-      }
-      return;
-    }
-    if (!emitSlowToNonTerminal) return;
-    if (row.state != ProgressRowState.active) {
-      _nonTerminalDelays.remove(row.id)?.cancel();
-      _nonTerminalScheduled.remove(row.id);
-      return;
-    }
-    if (row.state != ProgressRowState.active || row.activity == null) return;
-    final activity = row.activity!;
-    if (_nonTerminalPrinted[row.id] == activity) {
-      return;
-    }
-    if ((_nonTerminalDelays[row.id]?.isActive ?? false) &&
-        _nonTerminalScheduled[row.id] == activity) {
-      return;
-    }
-    _nonTerminalDelays.remove(row.id)?.cancel();
-    _nonTerminalScheduled[row.id] = activity;
-    _nonTerminalDelays[row.id] = Timer(_pipeDelay, () {
-      if (_closed ||
-          row.state != ProgressRowState.active ||
-          row.activity != activity) {
-        return;
-      }
-      _nonTerminalScheduled.remove(row.id);
-      _nonTerminalPrinted[row.id] = activity;
-      final attached = identical(_output._progressBoard, this);
-      if (attached) _output._progressBoard = null;
-      _writeDurableRow(row, active: true, inPipe: true);
-      if (attached && !_closed) _output._progressBoard = this;
-    });
-  }
-
-  /// Clears the transient region so a durable line can join the transcript;
-  /// the board repaints beneath it a frame later. Prose composes with a live
-  /// board — only the owner's settle, conclude, or discard ends one.
-  void yieldToProse() {
-    if (_closed || _suspended || !_visible) return;
-    _erase();
-    _visible = false;
-    _ticker?.cancel();
-    _ticker = Timer(const Duration(milliseconds: 40), _showTerminal);
-  }
-
-  void _showTerminal() {
-    _delayElapsed = true;
-    if (_closed || _suspended || model.rows.isEmpty) return;
-    _ticker?.cancel();
-    _visible = true;
-    if (!_draw()) return;
-    _ticker = Timer.periodic(const Duration(milliseconds: 120), (_) => _draw());
-  }
-
-  bool _draw() {
-    if (_closed || _suspended || !_visible || model.rows.isEmpty) return false;
-    final width = _output.terminalWidth;
-    if (width == null || width < 12) {
-      _ticker?.cancel();
-      _erase();
-      _visible = false;
-      return false;
-    }
-    _erase();
-    final lines = _transientLines(width);
-    _output.sink('${lines.join('\n')}\n');
-    _drawnLines = lines.length;
-    _spin++;
-    return true;
-  }
-
-  List<String> _transientLines(int available) {
-    final lines = <String>[
-      _output._style(_fit(model.title, available), strong: true),
-    ];
-    final grouped = model.groups.isNotEmpty;
-    for (final group in model.groups) {
-      lines.add(
-        _output._style(
-          _fit('  $group', available),
-          role: VisualRole.secondary,
-          strong: true,
-        ),
-      );
-      for (final row in model.rows.where((row) => row.group == group)) {
-        lines.add(_transientRow(row, available, depth: 2));
-      }
-    }
-    for (final row in model.rows.where((row) => row.group == null)) {
-      lines.add(_transientRow(row, available, depth: grouped ? 1 : 1));
-    }
-    return lines;
-  }
-
-  String _transientRow(ProgressRow row, int? available, {required int depth}) {
-    final (glyph, rawStatus, glyphState, textState) = _rowPresentation(
-      row,
-      active: true,
-    );
-    final indent = '  ' * depth;
-    final left = terminalSafeText(
-      [row.label, if (row.coordinate != null) row.coordinate!].join('  '),
-    );
-    final overhead = _displayWidth(indent) + _displayWidth(glyph) + 3;
-    const minimumSubjectWidth = 6;
-    final status = terminalSafeText(
-      _detailGivesWay(
-        row,
-        rawStatus,
-        available == null
-            ? null
-            : available -
-                  overhead -
-                  _greater(_displayWidth(left), minimumSubjectWidth) -
-                  2,
-      ),
-    );
-    final room = available == null ? null : _atLeastZero(available - overhead);
-    final wantedStatus = _displayWidth(status);
-    final statusBudget = room == null
-        ? wantedStatus
-        : _lesser(wantedStatus, _atLeastZero(room - minimumSubjectWidth - 2));
-    final leftWidth = available == null
-        ? _displayWidth(left)
-        : _atLeastZero(available - overhead - statusBudget - 2);
-    final fitted = _fit(left, leftWidth);
-    final fittedLeft =
-        '$fitted${' ' * _atLeastZero(leftWidth - _displayWidth(fitted))}';
-    final remaining = available == null
-        ? null
-        : _atLeastZero(available - overhead - _displayWidth(fittedLeft) - 2);
-    final fittedStatus = _fit(status, remaining);
-    final gap = fittedLeft.isEmpty || fittedStatus.isEmpty ? '' : '  ';
-    return '$indent${_output._style(glyph, state: glyphState)} '
-        '${_output._style(fittedLeft, state: glyphState)}$gap'
-        '${_output._style(fittedStatus, state: textState)}';
-  }
-
-  /// [status], with an active row's long detail shortened or left out so
-  /// that it fits in [room] beside the whole label. The label and the elapsed
-  /// time say more than a long detail does, such as a build's latest line;
-  /// a short one, such as an upload's count, keeps its place.
-  String _detailGivesWay(ProgressRow row, String status, int? room) {
-    final detail = row.detail;
-    if (room == null ||
-        detail == null ||
-        row.state != ProgressRowState.active ||
-        _displayWidth(detail) <= 12 ||
-        _displayWidth(terminalSafeText(status)) <= room) {
-      return status;
-    }
-    final elapsed = [if (showElapsed) formatDuration(row.elapsed)];
-    final without = [row.activity!.running, ...elapsed].join(' · ');
-    final detailRoom = room - _displayWidth(without) - 3;
-    if (detailRoom < 10) return without;
-    return [
-      row.activity!.running,
-      _fit(detail, detailRoom),
-      ...elapsed,
-    ].join(' · ');
-  }
-
-  (String, String, RuntimeState, RuntimeState) _rowPresentation(
-    ProgressRow row, {
-    required bool active,
-    bool inPipe = false,
-  }) {
-    return switch (row.state) {
-      ProgressRowState.pending => (
-        '…',
-        row.note ?? 'queued',
-        RuntimeState.satisfied,
-        RuntimeState.satisfied,
-      ),
-      ProgressRowState.active => (
-        active ? _frames[_spin % _frames.length] : '…',
-        [
-          row.activity!.running,
-          // A count such as `2/6` is wherever the step had got to when the
-          // row was written: a pipe gets the step, not the moment.
-          if (row.detail != null && !inPipe) row.detail!,
-          if (active && showElapsed) formatDuration(row.elapsed),
-        ].join(' · '),
-        RuntimeState.active,
-        RuntimeState.active,
-      ),
-      ProgressRowState.complete => (
-        switch (row.mark) {
-          ProgressRowMark.done => Mark.done.glyph,
-          ProgressRowMark.satisfied => Mark.satisfied.glyph,
-          ProgressRowMark.none => Mark.none.glyph,
-        },
-        row.note!,
-        switch (row.mark) {
-          ProgressRowMark.done => RuntimeState.success,
-          ProgressRowMark.satisfied => RuntimeState.satisfied,
-          ProgressRowMark.none => RuntimeState.neutral,
-        },
-        switch (row.emphasis) {
-          ProgressRowEmphasis.plain => RuntimeState.neutral,
-          ProgressRowEmphasis.muted => RuntimeState.satisfied,
-          ProgressRowEmphasis.attention => RuntimeState.attention,
-        },
-      ),
-      ProgressRowState.failed => (
-        Mark.blocked.glyph,
-        row.note!,
-        RuntimeState.failure,
-        RuntimeState.failure,
-      ),
-      ProgressRowState.notAttempted => (
-        '—',
-        row.note!,
-        RuntimeState.satisfied,
-        RuntimeState.satisfied,
-      ),
-    };
-  }
-
-  /// Temporarily yields the terminal to a native inherited-stdio command.
-  ///
-  /// The durable active line remains above the native output. [resume] starts
-  /// a fresh board below it; it never erases what the native tool printed.
-  void suspend() {
-    if (_closed || _suspended) return;
-    if (!_output.isTerminal) return;
-    _suspended = true;
-    _delay?.cancel();
-    _ticker?.cancel();
-    _erase();
-    _visible = false;
-    final attached = identical(_output._progressBoard, this);
-    if (attached) _output._progressBoard = null;
-    for (final row in model.rows.where(
-      (row) => row.state == ProgressRowState.active,
-    )) {
-      _writeDurableRow(row, active: true);
-    }
-    if (attached) _output._progressBoard = this;
-  }
-
-  void resume({bool afterNativeOutput = false}) {
-    if (_closed || !_suspended) return;
-    _suspended = false;
-    if (_output.isTerminal) {
-      if (afterNativeOutput) _output.sink('\n');
-      _showTerminal();
-    }
-  }
-
-  /// Erases the transient surface without leaving a snapshot.
-  void discard() {
-    if (_closed) return;
-    // Work cut off mid-run, such as by a crash, still took its time.
-    for (final row in model.rows) {
-      if (row.state != ProgressRowState.active) continue;
-      if (row.ranFor case final ran?) _time(row, ran, note: 'unfinished');
-    }
-    final printedRows = !_output.isTerminal && emitSlowToNonTerminal
-        ? model.rows
-              .where(
-                (row) =>
-                    _nonTerminalPrinted.containsKey(row.id) &&
-                    row.state != ProgressRowState.pending &&
-                    row.state != ProgressRowState.active,
-              )
-              .toList()
-        : const <ProgressRow>[];
-    _closeTimers();
-    _erase();
-    _closed = true;
-    if (identical(_output._progressBoard, this)) {
-      _output._progressBoard = null;
-    }
-    for (final row in printedRows) {
-      _writeDurableRow(row, inPipe: true);
-    }
-  }
-
-  /// Replaces the transient board with one append-only final snapshot.
-  void settle({String? title}) {
-    if (_closed) return;
-    final unfinished = model.rows.where(
-      (row) =>
-          row.state == ProgressRowState.pending ||
-          row.state == ProgressRowState.active,
-    );
-    if (unfinished.isNotEmpty) {
-      throw StateError(
-        'cannot settle progress with unfinished rows: '
-        '${unfinished.map((row) => row.id).join(', ')}',
-      );
-    }
-    _closeTimers();
-    _erase();
-    _closed = true;
-    if (identical(_output._progressBoard, this)) {
-      _output._progressBoard = null;
-    }
-    _output.heading(title ?? model.title);
-    for (final group in model.groups) {
-      _output.line(group, depth: 1, role: VisualRole.secondary, strong: true);
-      for (final row in model.rows.where((row) => row.group == group)) {
-        _writeDurableRow(row, depth: 2);
-      }
-    }
-    for (final row in model.rows.where((row) => row.group == null)) {
-      _writeDurableRow(row, depth: 1);
-    }
-  }
-
-  /// Concludes a stopped run: still-active rows fail, untouched pending
-  /// rows become an explicit "not attempted", and the board becomes its
-  /// durable snapshot. A no-op on a board already settled or discarded.
-  ///
-  /// The renderer draws; the coordinator judges. A diagnostic never touches
-  /// board state — the owner that began the rows marks them and concludes
-  /// at its own halt sites, so a problem printed while concurrent lanes
-  /// drain cannot turn innocent still-running rows into failures.
-  void conclude() {
-    if (_closed) return;
-    final active = model.rows
-        .where((row) => row.state == ProgressRowState.active)
-        .toList();
-    for (final row in active) {
-      _controllers[row.id]!.fail();
-    }
-    for (final row in model.rows.where(
-      (row) => row.state == ProgressRowState.pending,
-    )) {
-      _controllers[row.id]!.notAttempted();
-    }
-    settle();
-  }
-
-  /// Tells the run's timeline that [row] ran for [took]. Its group goes with
-  /// it: rows under different groups can share a label.
-  void _time(ProgressRow row, Duration took, {required String? note}) =>
-      _output.timeline.rowSettled(
-        board: model.title,
-        id: row.id,
-        subject: row.group == null
-            ? row.subject
-            : '${row.group} · ${row.subject}',
-        note: note,
-        took: took,
-      );
-
-  /// [inPipe] is a row a pipe is told about on its own, outside the
-  /// board's snapshot: it names what it belongs to, and carries no time.
-  void _writeDurableRow(
-    ProgressRow row, {
-    int depth = 1,
-    bool active = false,
-    bool inPipe = false,
-  }) {
-    var (glyph, status, glyphState, textState) = _rowPresentation(
-      row,
-      active: active && !inPipe,
-      inPipe: inPipe,
-    );
-    // A finished row that ran long enough for its counter to tick keeps its
-    // total, on a terminal. A pipe's transcript stays the same every run.
-    final took = row.took;
-    if (!active &&
-        _output.isTerminal &&
-        took != null &&
-        took >= const Duration(seconds: 1)) {
-      status = '$status · ${formatDuration(took)}';
-    }
-    final mark = switch (glyph) {
-      '✓' => Mark.done,
-      '·' => Mark.satisfied,
-      '✗' => Mark.blocked,
-      _ => Mark.none,
-    };
-    final subject = inPipe
-        ? '${row.group ?? model.title} · ${row.subject}'
-        : row.subject;
-    final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
-    _output.line(
-      label,
-      mark: mark,
-      note: status,
-      depth: depth,
-      labelWidth: 48,
-      state: glyphState,
-      noteState: textState,
-    );
-  }
-
-  void _closeTimers() {
-    _delay?.cancel();
-    _ticker?.cancel();
-    for (final timer in _nonTerminalDelays.values) {
-      timer.cancel();
-    }
-    _nonTerminalDelays.clear();
-    _nonTerminalScheduled.clear();
-  }
-
-  void _erase() {
-    for (var i = 0; i < _drawnLines; i++) {
-      _output.sink('\x1b[1A\r\x1b[2K');
-    }
-    _drawnLines = 0;
-  }
-
-  static int _atLeastZero(int value) => value < 0 ? 0 : value;
-
-  static int _lesser(int left, int right) => left < right ? left : right;
-
-  static int _greater(int a, int b) => a > b ? a : b;
-
-  static String _fit(String text, int? width) {
-    text = terminalSafeText(text);
-    if (width == null || _displayWidth(text) <= width) return text;
-    if (width <= 0) return '';
-    if (width == 1) return '…';
-    final out = StringBuffer();
-    var used = 0;
-    for (final rune in text.runes) {
-      final next = _runeWidth(rune);
-      if (used + next > width - 1) break;
-      out.writeCharCode(rune);
-      used += next;
-    }
-    return '${out.toString()}…';
-  }
-
-  static int _displayWidth(String text) => Output.displayWidth(text);
-
-  static int _runeWidth(int rune) {
-    return _terminalRuneWidth(rune);
-  }
 }
 
 int _terminalRuneWidth(int rune) {
@@ -1539,60 +916,30 @@ int _terminalRuneWidth(int rune) {
   return 1;
 }
 
-/// Compatibility adapter for status's parallel public-target reads.
-///
-/// It now uses the same renderer that staging and release use, while retaining
-/// status's existing add/finish API and fully transient behavior.
-final class TargetChecks {
-  TargetChecks._(Output output, Duration delay)
-    : _board = output.progressBoard(
-        'Release targets',
-        delay: delay,
-        showElapsed: false,
-      );
+/// Why a site stops, in order of seriousness. What that means for the whole
+/// run is [HaltKind.of] it, once the run knows whether anything public
+/// changed.
+enum Stop {
+  /// Refused before acting on what it stopped at.
+  refused,
 
-  final LiveProgress _board;
-  final Map<String, ProgressRowController> _rows = {};
-  var _closed = false;
+  /// Stopped between acts: what completed was read back and stays done.
+  partway,
 
-  void add(String id, String label, {String? group}) {
-    if (_closed || _rows.containsKey(id)) return;
-    final row = _board.addRow(id: id, label: label, group: group);
-    _rows[id] = row;
-    row.handle.begin(CommonProgressActivities.checking);
-  }
+  /// Acted, then lost sight of the result.
+  lostTrack,
 
-  void finish(String id, Verdict verdict) {
-    if (_closed) return;
-    final row = _rows[id];
-    if (row == null) return;
-    switch (verdict) {
-      case Verdict.exact:
-        row.complete(note: 'checked', mark: ProgressRowMark.satisfied);
-      case Verdict.absent:
-        row.complete(note: 'checked', mark: ProgressRowMark.none);
-      case Verdict.conflict:
-        row.fail(note: 'differs');
-      case Verdict.unknown:
-        row.complete(
-          note: 'unread',
-          mark: ProgressRowMark.none,
-          emphasis: ProgressRowEmphasis.attention,
-        );
-    }
-  }
+  /// Something re-running will not resolve.
+  unfixable;
 
-  void close() {
-    if (_closed) return;
-    _closed = true;
-    _board.discard();
-  }
+  static Stop worst(Iterable<Stop> stops) =>
+      stops.reduce((left, right) => left.index >= right.index ? left : right);
 }
 
 /// Which of the two questions an operator has a halt is answering.
 enum HaltKind {
   /// No public target changed. Private preparation or native login may have.
-  beforeActing,
+  beforeActing('rk stopped. no public target changed. safe to re-run.'),
 
   /// The run stopped between acts; what completed stays done, nothing was
   /// lost sight of, and the next run continues from what it finds.
@@ -1602,20 +949,46 @@ enum HaltKind {
   /// have acted (a pushed tag). "nothing changed" would be false there, and
   /// "lost sight of the result" would be too: the result was read, and it
   /// was a refusal.
-  stoppedPartway,
+  stoppedPartway(
+    'rk stopped partway. everything already done is real and stays done; '
+    're-running resumes after it.',
+  ),
 
   /// Something may have happened; the next run classifies what it finds.
-  lostTrack,
+  lostTrack(
+    'rk acted, then lost sight of the result. an effect may exist. still '
+    'safe to re-run.',
+  ),
 
   /// Something is wrong that re-running will not resolve.
-  unfixableByRerun,
+  unfixableByRerun(
+    'No public targets changed. Resolve the conflict before retrying.',
+  ),
 
   /// rk acted, read the result back, and the result is permanently wrong.
   ///
   /// The pre-act sentence said "rk did not act" about the worst path rk has
   /// — a mismatch read back one step after a real publish — which answered
   /// the halt's own first question falsely.
-  actedAndUnfixable,
+  actedAndUnfixable(
+    'rk acted, and what it read back cannot be fixed by re-running.',
+  );
+
+  const HaltKind(this.sentence);
+
+  final String sentence;
+
+  bool get rerunHelps => this != unfixableByRerun && this != actedAndUnfixable;
+
+  /// What [stop] means for a run that has, or has not, [changed] a public
+  /// target. [Stop] is in order for each answer, so the worst of several
+  /// stops means the worst of what each would.
+  static HaltKind of(Stop stop, {required bool changed}) => switch (stop) {
+    Stop.refused => changed ? stoppedPartway : beforeActing,
+    Stop.partway => stoppedPartway,
+    Stop.lostTrack => lostTrack,
+    Stop.unfixable => changed ? actedAndUnfixable : unfixableByRerun,
+  };
 }
 
 /// Process exit codes, from the RFC's output contract.

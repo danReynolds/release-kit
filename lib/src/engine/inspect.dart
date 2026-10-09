@@ -1,15 +1,12 @@
 import '../targets/catalog.dart';
 import '../targets/target_module.dart';
-import 'assets.dart';
-import 'checklist.dart';
 import 'diagnostic.dart';
 import 'git.dart';
-import 'publish_target.dart';
 import 'registry.dart';
 import 'resolve.dart';
-import 'release_stage.dart';
-import 'targets.dart';
+import 'stage.dart';
 import 'tools.dart';
+import 'unit_release.dart';
 import 'verdict.dart';
 import 'timings.dart';
 
@@ -18,14 +15,14 @@ import 'timings.dart';
 /// One inspector rather than one per command. `status` is `release` without the
 /// acting, so a second implementation would be a second set of answers to the
 /// same question, and the two would drift — which they had: status inspected
-/// channels project by project and never learned that a checklist has build,
+/// channels project by project and never learned that a release has build,
 /// sign and archive steps in it, while release answered `absent` by default for
 /// every kind it did not name, asserting "definitely not there" about
 /// destinations it had never asked.
 ///
 /// It takes a step and returns a verdict. It holds no state between calls, acts
 /// on nothing, and is the seam CI needs: an executable step is decided from the
-/// checklist, its id, and destination reality (CI readiness, seam 1).
+/// release, its id, and destination reality (CI readiness, seam 1).
 class Inspector {
   Inspector({
     required this.registry,
@@ -33,7 +30,6 @@ class Inspector {
     this.pubDev,
     this.tools,
     this.repository,
-    this.stageFor,
     TargetCatalog? targets,
   }) : targets = targets ?? TargetCatalog.builtIn();
 
@@ -50,10 +46,6 @@ class Inspector {
   /// `owner/name`, when the repository has an origin to ask about.
   final String? repository;
 
-  /// Resolves the one content-addressed stage both verbs inspect. Null keeps
-  /// the engine usable in narrow destination tests that have no filesystem.
-  final ReleaseStage Function(ResolvedUnit unit)? stageFor;
-
   /// The one closed target catalog shared by status and release.
   final TargetCatalog targets;
 
@@ -64,7 +56,6 @@ class Inspector {
     git: git,
     tools: tools,
     repository: repository,
-    stageFor: stageFor,
     shared: _shared,
   );
 
@@ -100,74 +91,37 @@ class Inspector {
     Verdict.exact => false,
   };
 
-  /// The asset names a release of [unit] is expected to carry.
-  ///
-  /// Public and static so a test can hold the set itself to account: emptied,
-  /// every release inspects exact, and nothing else notices.
-  static Set<String> expectedAssets(ResolvedUnit unit) =>
-      ReleaseAssets.expectedForUnit(unit).toSet();
-
-  Future<Inspection> inspect(Step step, ResolvedUnit unit) =>
-      Timings.span('check ${step.id}', () => _inspect(step, unit));
-
-  Future<Inspection> _inspect(Step step, ResolvedUnit unit) async {
-    final module = targets.moduleForStep(step);
-    if (module != null) {
-      final target = module.plan(
-        unit: unit,
-        step: step,
-        repository: repository,
+  /// What [target]'s destination holds, and what its lane is already at.
+  /// [stage] is the unit's complete stage, if it has one: a target that
+  /// publishes staged bytes compares what is public with them.
+  Future<TargetRead> read(Target target, ResolvedUnit unit, {Stage? stage}) =>
+      Timings.span(
+        'check ${target.id}',
+        () => targets
+            .moduleFor(target.target)
+            .read(targetReads, unit, target, stage: stage),
       );
-      return module.inspectCandidate(targetReads, unit, target);
-    }
-    if (step.kind == StepKind.prerequisite) {
-      return _prerequisite(step);
-    }
-    if (step.kind == StepKind.completeStage) {
-      return _stageInspection(unit);
-    }
-    if (step.kind
-        case StepKind.build ||
-            StepKind.notarize ||
-            StepKind.archive ||
-            StepKind.buildAssets) {
-      return targetReads.reusableStage(unit) == null
-          ? const Inspection.unknown('local work, decided when it runs')
-          : const Inspection.exact(detail: 'validated in the release stage');
-    }
-    throw StateError('no inspector for ${step.kind.name}');
-  }
 
-  /// The newest public version visible in one configured target lane.
-  ///
-  /// This is status metadata, not a substitute for inspecting the exact
-  /// candidate coordinate. The candidate answers whether acting is needed;
-  /// this answers the separate operator question, "what is this lane at?"
-  Future<TargetHistory?> inspectHistory(TargetPlan target, ResolvedUnit unit) =>
-      targets.moduleForTarget(target).inspectHistory(targetReads, unit, target);
-
-  Inspection _stageInspection(ResolvedUnit unit) {
-    final factory = stageFor;
-    if (factory == null) {
-      return const Inspection.absent(detail: 'not staged');
-    }
-    try {
-      return factory(unit).inspect().asInspection;
-    } on Object catch (error) {
-      return Inspection.unknown('the release stage could not be read: $error');
-    }
-  }
+  /// What [step]'s destination holds: a target's, a package another unit
+  /// publishes, or for local work, nothing rk has looked at yet.
+  Future<Inspection> inspect(
+    Step step,
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async => switch (step) {
+    Target() => (await read(step, unit, stage: stage)).state,
+    Requirement() => await _prerequisite(step),
+    // Local work is decided where it runs, from the stage.
+    Work() => const Inspection.unknown('local work, decided when it runs'),
+  };
 
   /// A package another unit publishes, which must already be live.
-  Future<Inspection> _prerequisite(Step step) async {
+  Future<Inspection> _prerequisite(Requirement requirement) async {
     if (registry == null) {
       return const Inspection.unknown('the registry reader is not configured');
     }
-    final requires = step.requires;
-    if (requires == null) {
-      return const Inspection.unknown('the prerequisite could not be read');
-    }
-    final (package: name, :version) = requires;
+    final name = requirement.provider.name;
+    final version = requirement.provider.version.canonical;
 
     final RegistryPackage? package;
     try {
@@ -188,33 +142,11 @@ class Inspector {
         : Inspection.absent(detail: '$name $version is not published yet');
   }
 
-  /// [target]'s public history; a read that throws is unknown, never absent.
-  ///
-  /// Exact-coordinate inspection answers whether this version exists, not
-  /// whether a newer one exists in the same lane: a shallow checkout can
-  /// find `v1.0.0` absent while origin is at `v2.0.0`. Targets decide whether
-  /// their latest-version read is a meaningful guard; Homebrew, whose exact
-  /// inspection reads the formula's version, declines this one.
-  Future<TargetHistory?> readHistory(
-    TargetPlan target,
-    ResolvedUnit unit,
-  ) async {
-    try {
-      return await inspectHistory(target, unit);
-    } on Object catch (error) {
-      return TargetHistory(
-        inspection: Inspection.unknown(
-          'the latest public version could not be read: $error',
-        ),
-      );
-    }
-  }
-
   /// What a release learns from its lanes' histories: the names it claims
   /// for the first time, and in [problems], every history that refuses it —
   /// a version regression, or a history that could not be read.
   static ReleaseHistoryCheck historyFindings(
-    Iterable<(TargetPlan, TargetHistory?)> histories,
+    Iterable<(Target, TargetHistory?)> histories,
     Diagnostics problems,
   ) {
     final claims = <TargetClaim>[];
@@ -264,34 +196,26 @@ class Inspector {
   ///   would publish HEAD's content under a name that points somewhere else.
   List<Diagnostic> tagGuards(
     ResolvedUnit unit,
-    Checklist checklist,
+    UnitRelease release,
     Map<String, Inspection> states,
   ) {
-    if (!unit.publish.contains(PublishTarget.gitTag)) return const [];
-    if (!checklist.steps.any((s) => s.kind == StepKind.tag)) return const [];
-    final tag = unit.tag;
-    if (tag == null) {
-      throw StateError('a selected git-tag target has no resolved tag');
-    }
+    final tagStep = release.tag;
+    if (tagStep == null) return const [];
+    final tag = unit.tag!;
 
     // A tag on an earlier commit reads exact while nothing the unit releases
     // has changed since, which keeps a finished release released. It does not
     // make this commit the source of an unfinished one: the tag binds what was
     // staged at its own commit, and publishing the rest from here would put
     // this commit's bytes under it.
-    final tagStep = checklist.steps.firstWhere(
-      (step) => step.kind == StepKind.tag,
-    );
     final tagState = states[tagStep.id];
     final releasedFrom = tagState?.releasedFrom;
     if (tagState != null &&
         tagState.isExact &&
         releasedFrom != null &&
-        checklist.steps.any(
-          (step) =>
-              step.isPublic &&
-              step != tagStep &&
-              (states[step.id]?.isAbsent ?? false),
+        release.targets.any(
+          (target) =>
+              target != tagStep && (states[target.id]?.isAbsent ?? false),
         )) {
       return [
         Diagnostic(
@@ -309,9 +233,9 @@ class Inspector {
       ];
     }
 
-    final publishes = checklist.steps
-        .where((step) => step.isPermanent)
-        .map((s) => states[s.id])
+    final publishes = release.targets
+        .where((target) => target.isPermanent)
+        .map((target) => states[target.id])
         .whereType<Inspection>()
         .toList();
     if (publishes.isEmpty) return const [];

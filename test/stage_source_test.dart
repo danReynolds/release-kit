@@ -1,13 +1,11 @@
 import 'dart:io';
 
-import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/file_mode.dart';
-import 'package:rk/src/engine/producer_lane.dart';
-import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_source.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 /// A snapshot of a new repository's one commit: [files], [links] by their
 /// targets as `ln -s` writes them, and [submodules] by their paths.
@@ -50,7 +48,7 @@ Future<StageSourceSnapshot> _committed(
     'source',
   ]);
   return StageSourceSnapshot.capture(
-    GitSourceTree(root.path),
+    WorkingTree(root.path, git: true),
     commit: git(['rev-parse', 'HEAD']),
   );
 }
@@ -85,6 +83,16 @@ void main() {
     expect(snapshot.read('packages/app/elsewhere.md'), isNull);
     expect(snapshot.exists('packages/app/elsewhere.md'), isFalse);
   });
+
+  test(
+    'a file named as macOS names a folder\'s icon, Icon\\r, is staged',
+    () async {
+      final snapshot = await _committed({'Icon\r': 'icon\n', 'a.txt': 'a\n'});
+
+      expect(snapshot.trackedFiles(), ['Icon\r', 'a.txt']);
+      expect(snapshot.read('Icon\r'), 'icon\n');
+    },
+  );
 
   test('an export carries what the links it holds lead to', () async {
     final snapshot = await _committed(
@@ -381,7 +389,7 @@ void main() {
       '${root.path}/nested/data': '0755',
     });
     final snapshot = await StageSourceSnapshot.capture(
-      GitSourceTree(root.path),
+      WorkingTree(root.path, git: true),
       commit: commit,
     );
     expect(snapshot.trackedFiles(), ['nested/data', 'run']);
@@ -398,13 +406,6 @@ void main() {
     expect(posixMode(run.statSync().mode), '0755');
     expect(posixMode(data.statSync().mode), '0644');
 
-    await expectLater(
-      StageSourceSnapshot.capture(
-        GitCommitSourceTree(root.path, commit),
-        commit: 'f' * 40,
-      ),
-      throwsStateError,
-    );
     await expectLater(
       StageSourceSnapshot.capture(snapshot, commit: 'f' * 40),
       throwsStateError,
@@ -432,43 +433,6 @@ void main() {
           '[package]\nname = "parser"\nversion = "1.0.0"\n',
       'native/parser/src/lib.rs': '',
     };
-    final everything = [...repository.keys]..sort();
-
-    Future<List<String>> lane(String unit) async {
-      final tree = MemorySourceTree(repository);
-      final diagnostics = Diagnostics();
-      final resolution = Resolution.resolve(
-        ReleaseConfig.parse(
-          '''
-schema = 2
-
-[release.app]
-path = "packages/app"
-binary_platforms = ["linux-x64"]
-
-[release.parser]
-path = "native/parser"
-publish = ["git-tag", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["parser.so"]
-''',
-          'release.toml',
-          diagnostics,
-        )!,
-        tree,
-        diagnostics,
-      )!;
-      expect(diagnostics.found, isEmpty);
-      final lane = ProducerLaneSource.export(
-        await StageSourceSnapshot.capture(tree),
-        project: resolution.unit(unit)!.projects.single,
-      );
-      addTearDown(lane.close);
-      return [
-        for (final entry in Directory(lane.path).listSync(recursive: true))
-          if (entry is File) entry.path.substring(lane.path.length + 1),
-      ]..sort();
-    }
 
     test(
       'Pub: its packages, every pubspec, and what sits above its own',
@@ -498,16 +462,6 @@ assets = ["parser.so"]
         ]);
       },
     );
-
-    test('a binary build: everything, since Dart source imports any file by '
-        'its path', () async {
-      expect(await lane('app'), everything);
-    });
-
-    test('a project\'s own build: everything, since rk cannot know what it '
-        'reads', () async {
-      expect(await lane('parser'), everything);
-    });
   });
 
   test('an export adds what it selects beside what is there', () async {

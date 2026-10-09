@@ -2,14 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/engine/assets.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/ref_name.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/targets/homebrew/client.dart';
@@ -19,6 +18,7 @@ import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
+import 'support/memory_source_tree.dart';
 
 const _assets = {
   'macos-arm64': PlatformAsset(
@@ -297,11 +297,12 @@ binary_platforms = ["linux-x64"]
         diagnostics,
       )!;
       final unit = resolution.unit('cli')!;
-      final step = Checklist.derive(
+      final target = UnitRelease.derive(
         unit,
         resolution,
-        diagnostics,
-      ).steps.singleWhere((step) => step.kind == StepKind.publishHomebrew);
+        repository: 'owner/tool',
+        problems: diagnostics,
+      ).homebrew!;
       const module = HomebrewTargetModule();
       // Written by an earlier renderer: what the tap holds at this version
       // is what its users install, whatever rk would render now.
@@ -311,18 +312,18 @@ binary_platforms = ["linux-x64"]
         ),
       );
 
-      final inspected = await module.inspectCandidate(
+      final (state: inspected, :history) = await module.read(
         TargetReadContext(
           registry: null,
           pubDev: null,
           git: GitState.none('/repo'),
           tools: tools,
           repository: 'owner/tool',
-          stageFor: null,
         ),
         unit,
-        module.plan(unit: unit, step: step, repository: 'owner/tool'),
+        target,
       );
+      expect(history, isNull, reason: 'a formula carries its own version');
 
       expect(inspected.verdict, Verdict.exact, reason: inspected.detail);
       expect(tools.calls, [

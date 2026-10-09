@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:pub_semver/pub_semver.dart' as semver;
-import '../../installations/metadata.dart';
 
 import '../../engine/diagnostic.dart';
 import '../../engine/pubspec.dart';
@@ -11,8 +10,7 @@ import '../../installations/model.dart';
 import '../../installations/provider.dart';
 
 /// Pub owns the activation and dependency graph; rk owns only its routing.
-class PubInstallationProvider
-    implements InstallationProvider, InstallationUpdates {
+class PubInstallationProvider implements InstallationProvider {
   PubInstallationProvider(
     this.tools,
     this.dart,
@@ -156,7 +154,7 @@ class PubInstallationProvider
   @override
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async {
     if (dart == null || !project.project.pubspec.declaresPubDev) {
       throw const InstallationFailure(
@@ -215,34 +213,18 @@ class PubInstallationProvider
       );
     }
     compatible.sort();
-    return _PubRelease(project, compatible.last.toString());
+    return AvailableInstallation(compatible.last.toString());
   }
 
-  @override
-  Future<Installation> download(
-    ExecutableProject project,
-    AvailableInstallation release,
-    void Function(String) progress,
-  ) {
-    if (release is! _PubRelease) {
-      throw const InstallationFailure('Invalid Pub release.');
-    }
-    return _activate(project, release.version, progress);
-  }
-
+  /// Pub picks the newest version this SDK allows unless [release] names
+  /// one. No native binstubs: install prepares; only use selects.
   @override
   Future<Installation> install(
     ExecutableProject project,
-    void Function(String) progress,
-  ) => _activate(project, null, progress);
-
-  /// Pub picks the newest version this SDK allows unless [version] is named.
-  /// No native binstubs: install prepares; only use selects.
-  Future<Installation> _activate(
-    ExecutableProject project,
-    String? version,
+    AvailableInstallation? release,
     void Function(String) progress,
   ) async {
+    final version = release?.version;
     progress(
       'Installing ${project.name}${version == null ? '' : ' $version'} from pub.dev…',
     );
@@ -259,10 +241,7 @@ class PubInstallationProvider
   }
 
   @override
-  Future<void> uninstall(
-    ExecutableProject project,
-    Installation installation,
-  ) async {
+  Future<void> uninstall(ExecutableProject project) async {
     await checked(tools, dart!, [
       '--suppress-analytics',
       'pub',
@@ -271,9 +250,4 @@ class PubInstallationProvider
       project.name,
     ], environment: _environment);
   }
-}
-
-class _PubRelease extends AvailableInstallation {
-  _PubRelease(ExecutableProject project, String version)
-    : super(project, InstallationSource.pub, version);
 }

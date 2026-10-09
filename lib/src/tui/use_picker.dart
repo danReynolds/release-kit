@@ -4,104 +4,106 @@ import 'package:fleury/fleury.dart';
 
 import '../engine/version.dart';
 import '../installations/manager.dart';
-import '../installations/metadata.dart';
 import '../installations/model.dart';
 import '../installations/provider.dart';
 import '../output/output.dart' show terminalSafeText;
 import 'matrix.dart';
 import 'terminal.dart';
 
-typedef InstallationOperation =
-    Future<String> Function(
-      ExecutableProject,
-      InstallationSource,
-      void Function(String),
-      InstallationCancellation,
-    );
-
 typedef SourceKey = (String, InstallationSource);
-typedef CheckAvailable =
-    Future<AvailableInstallation> Function(
-      ExecutableProject,
-      InstallationSource,
-      InstallationCheck,
-    );
-typedef DownloadAvailable =
-    Future<String> Function(
-      ExecutableProject,
-      AvailableInstallation,
-      void Function(String),
-      InstallationCancellation,
-    );
 
 class AvailableState {
   bool checking = false;
   AvailableInstallation? release;
   String? error;
-  InstallationCheck? request;
-}
-
-/// Mutation execution is serialized by the picker, matching the manager/store
-/// lock. Metadata readers and navigation remain live while a provider runs.
-class _Operation {
-  _Operation(this.state, this.source, this.release, this.remove);
-  final ProjectInstallations state;
-  final InstallationSource source;
-  final AvailableInstallation? release;
-  final bool remove;
-  final cancellation = InstallationCancellation();
-  final done = Completer<void>();
-  SourceKey get key => (state.project.name, source);
+  InstallationCancellation? request;
 }
 
 /// Local inspection, remote checks, and mutations have independent lifetimes.
 /// Checks never block selection and cannot replace installed state on failure.
+/// The picker runs one operation at a time, matching the manager's lock;
+/// checks and navigation stay live while one runs.
 class UsePicker extends Notifier {
   UsePicker({
     required this.states,
     required this.refresh,
-    required this.checkAvailable,
-    required this.downloadAvailable,
-    required this.use,
+    required Future<AvailableInstallation> Function(
+      ExecutableProject,
+      InstallationSource,
+      InstallationCancellation,
+    )
+    check,
+    required this.perform,
     required this.close,
-    this.uninstall,
     this.command = 'rk use',
-  });
+  }) : _check = check;
   List<ProjectInstallations> states;
   final Future<List<ProjectInstallations>> Function() refresh;
-  final CheckAvailable checkAvailable;
-  final DownloadAvailable downloadAvailable;
-  final InstallationOperation use;
-  final InstallationOperation? uninstall;
+  final Future<AvailableInstallation> Function(
+    ExecutableProject,
+    InstallationSource,
+    InstallationCancellation,
+  )
+  _check;
+  final Future<String> Function(Operation, void Function(String)) perform;
 
   /// The command that opened the table: bare install and uninstall open it too.
   final String command;
   (ProjectInstallations, InstallationSource)? removal;
   final void Function() close;
   final available = <SourceKey, AvailableState>{};
-  final _operations = <SourceKey, _Operation>{};
-  _Operation? _active;
-  bool get busy => _operations.isNotEmpty;
+  final _queue = <SourceKey, (Operation, Completer<void>)>{};
+  Operation? _active;
+  bool get busy => _queue.isNotEmpty;
   bool failed = false, closing = false, _disposed = false;
   String message = '';
   ({String title, String body})? details;
   final outcomes = <String>[];
 
   bool isPending(ProjectInstallations state, InstallationSource source) =>
-      _operations.containsKey((state.project.name, source));
+      _queue.containsKey((state.project.name, source));
 
   String? operationLabel(
     ProjectInstallations state,
     InstallationSource source,
   ) {
-    final operation = _operations[(state.project.name, source)];
-    if (operation == null) return null;
-    if (operation != _active) return 'Queued';
-    if (operation.remove) return 'Removing…';
-    if (operation.release == null) return 'Switching…';
-    return state.sources[source]?.installation == null
-        ? 'Installing…'
-        : 'Updating…';
+    final queued = _queue[(state.project.name, source)];
+    if (queued == null) return null;
+    return queued.$1 == _active ? _wording(queued.$1).status : 'Queued';
+  }
+
+  /// What an operation is called on its row and in the footer while it runs,
+  /// and when it fails.
+  ({String status, String footer, String failure}) _wording(
+    Operation operation,
+  ) {
+    final source = operation.source.label;
+    final verb =
+        states
+                .where((s) => s.project.name == operation.project.name)
+                .firstOrNull
+                ?.sources[operation.source]
+                ?.installation ==
+            null
+        ? 'Installing'
+        : 'Updating';
+    return switch (operation.action) {
+      InstallationAction.use => (
+        status: 'Switching…',
+        footer: 'Switching to $source…',
+        failure: 'Could not switch source',
+      ),
+      InstallationAction.install => (
+        status: '$verb…',
+        footer: '$verb $source ${operation.release!.version}…',
+        failure: 'Could not complete installation',
+      ),
+      InstallationAction.uninstall => (
+        status: 'Removing…',
+        footer: 'Removing $source…',
+        failure: 'Could not remove installation',
+      ),
+    };
   }
 
   bool canChoose(ProjectInstallations state, InstallationSource source) =>
@@ -130,12 +132,12 @@ class UsePicker extends Notifier {
     if (_disposed || closing) return;
     final result = availability(state, source);
     result.request?.cancel();
-    final request = result.request = InstallationCheck();
+    final request = result.request = InstallationCancellation();
     result.checking = true;
     result.error = null;
     notify();
     try {
-      final release = await checkAvailable(state.project, source, request);
+      final release = await _check(state.project, source, request);
       if (!_disposed && !request.cancelled) result.release = release;
     } on Object catch (error) {
       if (!_disposed && !request.cancelled) result.error = _describe(error);
@@ -163,32 +165,28 @@ class UsePicker extends Notifier {
     return current != null && next != null && next.compareTo(current) > 0;
   }
 
+  /// Whether the project's commands already run [source]: for Local, from
+  /// this checkout.
+  bool isDefault(ProjectInstallations state, InstallationSource source) =>
+      state.currentSource == source &&
+      (source != InstallationSource.local ||
+          state.sources[source]!.installation?.location ==
+              state.project.directory);
+
+  bool canUse(ProjectInstallations state, InstallationSource source) =>
+      canChoose(state, source) &&
+      !isDefault(state, source) &&
+      state.sources[source]!.problem == null &&
+      (source == InstallationSource.local ||
+          state.sources[source]!.installation != null);
+
   Future<void> choose(
     ProjectInstallations state,
     InstallationSource source,
   ) async {
-    if (!canChoose(state, source)) return;
-    final inspection = state.sources[source]!;
-    if (inspection.problem != null) {
-      details = (
-        title: '${state.project.label} · ${source.label}',
-        body: inspection.problem!,
-      );
-      notify();
-      return;
+    if (canUse(state, source)) {
+      await _run(Operation(state.project, source, InstallationAction.use));
     }
-    if (inspection.installation == null && source != InstallationSource.local) {
-      message = 'Install ${source.label} before choosing Use.';
-      notify();
-      return;
-    }
-    if (state.currentSource == source &&
-        (source != InstallationSource.local ||
-            inspection.installation?.location == state.project.directory)) {
-      // Already effective: keep its launcher intact. Done is a separate action.
-      return;
-    }
-    await _run(state, source, null);
   }
 
   Future<void> download(
@@ -196,12 +194,18 @@ class UsePicker extends Notifier {
     InstallationSource source,
   ) async {
     if (!canDownload(state, source)) return;
-    await _run(state, source, availability(state, source).release!);
+    await _run(
+      Operation(
+        state.project,
+        source,
+        InstallationAction.install,
+        release: availability(state, source).release,
+      ),
+    );
   }
 
   bool canUninstall(ProjectInstallations state, InstallationSource source) =>
       canChoose(state, source) &&
-      uninstall != null &&
       state.sources[source]?.installation != null &&
       state.selected != source &&
       !state.currentSources.values.contains(source);
@@ -216,31 +220,30 @@ class UsePicker extends Notifier {
     final request = removal;
     if (request == null || !canUninstall(request.$1, request.$2)) return;
     removal = null;
-    await _run(request.$1, request.$2, null, remove: true);
+    await _run(
+      Operation(request.$1.project, request.$2, InstallationAction.uninstall),
+    );
   }
 
-  Future<void> _run(
-    ProjectInstallations state,
-    InstallationSource source,
-    AvailableInstallation? release, {
-    bool remove = false,
-  }) {
-    final operation = _Operation(state, source, release, remove);
-    _operations[operation.key] = operation;
+  Future<void> _run(Operation operation) {
+    final done = Completer<void>();
+    _queue[(operation.project.name, operation.source)] = (operation, done);
     notify();
     if (_active == null) unawaited(_drain());
-    return operation.done.future;
+    return done.future;
   }
 
   Future<void> _drain() async {
     var switched = false;
-    while (_operations.isNotEmpty && !closing && !_disposed) {
-      final operation = _active = _operations.values.first;
+    while (_queue.isNotEmpty && !closing && !_disposed) {
+      final (operation, done) = _queue.values.first;
+      _active = operation;
       final succeeded = await _perform(operation);
-      switched |= succeeded && !operation.remove && operation.release == null;
-      _operations.remove(operation.key);
+      // Only a switch closes a one-project picker.
+      switched |= succeeded && operation.action == InstallationAction.use;
+      _queue.remove((operation.project.name, operation.source));
       _active = null;
-      operation.done.complete();
+      done.complete();
       if (!_disposed) notify();
     }
     if (!_disposed &&
@@ -249,17 +252,10 @@ class UsePicker extends Notifier {
     }
   }
 
-  Future<bool> _perform(_Operation operation) async {
-    final state = operation.state;
-    final source = operation.source;
-    final release = operation.release;
-    final remove = operation.remove;
+  Future<bool> _perform(Operation operation) async {
+    final wording = _wording(operation);
     failed = false;
-    message = remove
-        ? 'Removing ${source.label}…'
-        : release == null
-        ? 'Switching to ${source.label}…'
-        : '${state.sources[source]?.installation == null ? 'Installing' : 'Updating'} ${source.label} ${release.version}…';
+    message = wording.footer;
     notify();
     void progress(String value) {
       if (!closing) message = value;
@@ -267,21 +263,7 @@ class UsePicker extends Notifier {
     }
 
     try {
-      message = remove
-          ? await uninstall!(
-              state.project,
-              source,
-              progress,
-              operation.cancellation,
-            )
-          : release == null
-          ? await use(state.project, source, progress, operation.cancellation)
-          : await downloadAvailable(
-              state.project,
-              release,
-              progress,
-              operation.cancellation,
-            );
+      message = await perform(operation, progress);
       outcomes.add(message);
     } on Object catch (error) {
       failed = true;
@@ -292,17 +274,12 @@ class UsePicker extends Notifier {
     if (closing ||
         _disposed ||
         (!failed &&
-            !remove &&
-            release == null &&
+            operation.action == InstallationAction.use &&
             states.length == 1 &&
-            _operations.length == 1)) {
+            _queue.length == 1)) {
       return !failed;
     }
-    var failureTitle = remove
-        ? 'Could not remove installation'
-        : release == null
-        ? 'Could not switch source'
-        : 'Could not complete installation';
+    var failureTitle = wording.failure;
     try {
       states = await refresh();
     } on Object catch (error) {
@@ -311,7 +288,7 @@ class UsePicker extends Notifier {
       message += '\nCould not refresh installations: ${_describe(error)}';
     }
     if (failed && !closing) {
-      if (_operations.length > 1) message += '\nQueued actions cancelled.';
+      if (_queue.length > 1) message += '\nQueued actions cancelled.';
       removal = null;
       details = (title: failureTitle, body: message);
       // Resolve a failure before starting another queued mutation.
@@ -322,11 +299,11 @@ class UsePicker extends Notifier {
   }
 
   void _cancelQueued() {
-    for (final operation in _operations.values.toList()) {
+    for (final (operation, done) in _queue.values.toList()) {
       if (operation == _active) continue;
       operation.cancellation.cancel();
-      _operations.remove(operation.key);
-      operation.done.complete();
+      _queue.remove((operation.project.name, operation.source));
+      done.complete();
     }
   }
 
@@ -370,27 +347,32 @@ class UsePicker extends Notifier {
   }
 }
 
-String _describe(Object error) => error is InstallationFailure
-    ? '${error.message} ${error.remedy}'.trim()
-    : '$error';
+String _describe(Object error) {
+  if (error is! Exception) return '$error';
+  final failure = installationFailure(error);
+  return '${failure.message} ${failure.remedy}'.trim();
+}
 
-Future<InstallationPickerResult> runUsePicker({
+/// Runs the picker until it closes. [failure] is the last operation's error
+/// when it closed on one.
+Future<({int exitCode, String? failure})> runUsePicker({
   required List<ProjectInstallations> states,
   required Future<List<ProjectInstallations>> Function() refresh,
-  required CheckAvailable checkAvailable,
-  required DownloadAvailable downloadAvailable,
-  required InstallationOperation use,
-  required InstallationOperation uninstall,
+  required Future<AvailableInstallation> Function(
+    ExecutableProject,
+    InstallationSource,
+    InstallationCancellation,
+  )
+  check,
+  required Future<String> Function(Operation, void Function(String)) perform,
   String command = 'rk use',
 }) async {
   final model = UsePicker(
     command: command,
     states: states,
     refresh: refresh,
-    checkAvailable: checkAvailable,
-    downloadAvailable: downloadAvailable,
-    use: use,
-    uninstall: uninstall,
+    check: check,
+    perform: perform,
     close: exitApp,
   );
   try {
@@ -399,7 +381,7 @@ Future<InstallationPickerResult> runUsePicker({
       interrupt: model.interrupt,
       mouse: true,
     );
-    return InstallationPickerResult(model.failed, model.message, code);
+    return (exitCode: code, failure: model.failed ? model.message : null);
   } finally {
     model.dispose();
   }
@@ -415,6 +397,18 @@ class UseScreen extends StatefulWidget {
 enum _SourceAction { download, use, remove }
 
 typedef _ActionKey = (SourceKey, _SourceAction);
+
+/// What one source's row shows and offers, worked out once for focus order,
+/// rendering and taps. [status] is a queued or running operation, shown in
+/// place of Use. An action without a callback shows disabled, and navigation
+/// skips it.
+typedef _Row = ({
+  String installed,
+  String available,
+  bool newer,
+  String? status,
+  Map<_SourceAction, (String, void Function()?)> actions,
+});
 
 class _UseScreenState extends State<UseScreen> {
   UsePicker get model => widget.model;
@@ -441,18 +435,69 @@ class _UseScreenState extends State<UseScreen> {
     super.dispose();
   }
 
-  bool _canUse(ProjectInstallations state, InstallationSource source) =>
-      model.canChoose(state, source) &&
-      !_isDefault(state, source) &&
-      state.sources[source]!.problem == null &&
-      (source == InstallationSource.local ||
-          state.sources[source]!.installation != null);
+  _Row _row(ProjectInstallations state, InstallationSource source) {
+    final inspection = state.sources[source]!;
+    final installation = inspection.installation;
+    final result = model.availability(state, source);
+    final local = source == InstallationSource.local;
+    final status = model.operationLabel(state, source);
+    return (
+      installed: local
+          ? (installation != null &&
+                    installation.location != state.project.directory
+                ? 'Other checkout'
+                : 'This checkout')
+          : installation?.version ??
+                (inspection.problem == null ? 'Not installed' : 'Unavailable'),
+      available: local
+          ? '—'
+          : result.checking
+          ? 'Checking…'
+          : result.error != null
+          ? 'Check failed'
+          : result.release?.version ?? 'Checking…',
+      newer: model.canDownload(state, source) && installation != null,
+      status: status,
+      actions: {
+        if (model.canChoose(state, source) &&
+            !local &&
+            inspection.problem == null &&
+            (result.error != null || model.canDownload(state, source)))
+          _SourceAction.download: result.error != null
+              ? ('Retry', () => unawaited(model.check(state, source)))
+              : (
+                  installation == null ? 'Install' : 'Update',
+                  () => unawaited(model.download(state, source)),
+                ),
+        // A problem that blocks Use offers Remove in its place.
+        if (status == null && !model.isDefault(state, source))
+          if (inspection.problem != null && model.canUninstall(state, source))
+            _SourceAction.remove: (
+              'Remove',
+              () => model.requestRemoval(state, source),
+            )
+          else
+            _SourceAction.use: (
+              'Use',
+              model.canUse(state, source)
+                  ? () => unawaited(model.choose(state, source))
+                  : null,
+            ),
+      },
+    );
+  }
 
-  bool _isDefault(ProjectInstallations state, InstallationSource source) =>
-      state.currentSource == source &&
-      (source != InstallationSource.local ||
-          state.sources[source]!.installation?.location ==
-              state.project.directory);
+  /// The row's actions that do something, in focus order.
+  List<_ActionKey> _choices(
+    ProjectInstallations state,
+    InstallationSource source,
+  ) => [
+    for (final MapEntry(key: action, value: (_, onPressed)) in _row(
+      state,
+      source,
+    ).actions.entries)
+      if (onPressed != null) ((state.project.name, source), action),
+  ];
 
   void _removeFocused() {
     final key = _focused?.$1;
@@ -463,29 +508,6 @@ class _UseScreenState extends State<UseScreen> {
     if (state != null) model.requestRemoval(state, key.$2);
   }
 
-  bool _canFocusDownload(
-    ProjectInstallations state,
-    InstallationSource source,
-  ) =>
-      model.canChoose(state, source) &&
-      source != InstallationSource.local &&
-      state.sources[source]!.problem == null &&
-      (model.availability(state, source).error != null ||
-          model.canDownload(state, source));
-
-  List<_ActionKey> _choices(
-    ProjectInstallations state,
-    InstallationSource source,
-  ) => [
-    if (_canFocusDownload(state, source))
-      ((state.project.name, source), _SourceAction.download),
-    if (_canUse(state, source))
-      ((state.project.name, source), _SourceAction.use),
-    if (state.sources[source]!.problem != null &&
-        model.canUninstall(state, source))
-      ((state.project.name, source), _SourceAction.remove),
-  ];
-
   _ActionKey? get _current =>
       _actions.entries.where((entry) => entry.value.hasFocus).firstOrNull?.key;
 
@@ -494,7 +516,9 @@ class _UseScreenState extends State<UseScreen> {
     final rows = [
       for (final state in model.states)
         for (final source in state.sources.keys)
-          if (_choices(state, source).isNotEmpty) _choices(state, source),
+          if (_choices(state, source) case final choices
+              when choices.isNotEmpty)
+            choices,
     ];
     if (rows.isEmpty) return;
     final current = _current;
@@ -533,18 +557,27 @@ class _UseScreenState extends State<UseScreen> {
     KeyBinding(KeySequence.r, onTrigger: (_) => model.checkAll()),
   ];
 
-  Widget _action(
-    SourceKey source,
+  /// A row's action button. Focus is keyed by the kind of action: when Use
+  /// turns into Remove, focus drops instead of moving Enter to Remove.
+  Widget? _action(
+    ProjectInstallations state,
+    InstallationSource source,
+    _Row row,
     _SourceAction action,
-    Widget Function(FocusNode) builder,
   ) {
-    final key = (source, action);
+    final (text, onPressed) = row.actions[action] ?? (null, null);
+    if (text == null) return null;
+    final key = ((state.project.name, source), action);
     return FocusDetector(
       key: ValueKey(key),
       onFocusChange: (focused) {
         if (focused) setState(() => _focused = key);
       },
-      child: builder(_actions.putIfAbsent(key, FocusNode.new)),
+      child: MatrixButton(
+        focusNode: _actions.putIfAbsent(key, FocusNode.new),
+        text: text,
+        onPressed: onPressed,
+      ),
     );
   }
 
@@ -572,15 +605,30 @@ class _UseScreenState extends State<UseScreen> {
       });
     }
     _overlay = model.details != null || model.removal != null;
-    if (model.removal case final request?) {
-      return RemovalConfirmation(
-        project: request.$1.project,
-        source: request.$2,
-        installed: request.$1.sources[request.$2]!.installation!,
+    if (model.removal case (final state, final source)) {
+      final installed = state.sources[source]!.installation!;
+      return MatrixDetails(
         command: model.command,
         maxWidth: commandTableWidth,
-        onCancel: model.exit,
-        onConfirm: () => unawaited(model.confirmRemoval()),
+        title: 'Remove ${state.project.label} from ${source.label}?',
+        body: [
+          'Version: ${installed.version}',
+          'Location: ${installed.location}',
+          'Commands: ${state.project.commands.join(', ')}',
+          '',
+          source == InstallationSource.local
+              ? 'Only the local registration is removed. Your checkout stays.'
+              : 'This removes the ${source.label} installation, including its use outside this repository.',
+        ].join('\n'),
+        onBack: model.exit,
+        actions: [
+          MatrixButton(text: 'Cancel', autofocus: true, onPressed: model.exit),
+          MatrixButton(
+            text: 'Remove installation',
+            variant: ButtonVariant.error,
+            onPressed: () => unawaited(model.confirmRemoval()),
+          ),
+        ],
       );
     }
     if (model.details case final details?) {
@@ -668,7 +716,7 @@ class _UseScreenState extends State<UseScreen> {
                       ),
                     const MatrixRule(),
                     for (final source in state.sources.keys) ...[
-                      _row(state, source, wide),
+                      _layout(state, source, wide),
                       if (state.sources[source]?.problem case final problem?)
                         Padding(
                           padding: const EdgeInsets.only(left: 2),
@@ -697,92 +745,42 @@ class _UseScreenState extends State<UseScreen> {
     );
   }
 
-  Widget _row(
+  /// Lays out a row: Source, Installed, Available with its download action,
+  /// and Use, Remove, the operation's status or ✓ Default.
+  Widget _layout(
     ProjectInstallations state,
     InstallationSource source,
     bool wide,
   ) {
-    final key = (state.project.name, source);
-    final inspection = state.sources[source]!;
-    final result = model.availability(state, source);
-    final local = source == InstallationSource.local;
+    final row = _row(state, source);
     final active = state.currentSource == source;
     final selected = state.selected == source;
-    final operation = model.operationLabel(state, source);
-    final pending = operation != null;
-    final installed = local
-        ? (inspection.installation != null &&
-                  inspection.installation!.location != state.project.directory
-              ? 'Other checkout'
-              : 'This checkout')
-        : inspection.installation?.version ??
-              (inspection.problem == null ? 'Not installed' : 'Unavailable');
-    final recoveryRemoval =
-        inspection.problem != null &&
-        (model.canUninstall(state, source) || pending);
-    final availableText = local
-        ? '—'
-        : result.checking
-        ? 'Checking…'
-        : result.error != null
-        ? 'Check failed'
-        : result.release?.version ?? 'Checking…';
-    final canDownload = model.canDownload(state, source);
-    Widget downloadButton() => _action(
-      key,
-      _SourceAction.download,
-      (node) => MatrixButton(
-        focusNode: node,
-        text: result.error != null
-            ? 'Retry'
-            : (inspection.installation == null ? 'Install' : 'Update'),
-        onPressed: result.error != null
-            ? () => unawaited(model.check(state, source))
-            : () => unawaited(model.download(state, source)),
-      ),
-    );
     Widget useButton() => SizedBox(
       width: 15,
-      child: pending
-          ? Text(operation, textAlign: TextAlign.center, style: mutedText)
-          : _isDefault(state, source)
+      child: row.status != null
+          ? Text(row.status!, textAlign: TextAlign.center, style: mutedText)
+          : model.isDefault(state, source)
           ? const Text(
               '✓ Default',
               textAlign: TextAlign.center,
               style: selectedStyle,
             )
-          : _action(
-              key,
-              recoveryRemoval ? _SourceAction.remove : _SourceAction.use,
-              (node) => MatrixButton(
-                focusNode: node,
-                text: recoveryRemoval ? 'Remove' : 'Use',
-                selected: false,
-                onPressed: recoveryRemoval
-                    ? () => model.requestRemoval(state, source)
-                    : _canUse(state, source)
-                    ? () => unawaited(model.choose(state, source))
-                    : null,
-              ),
-            ),
+          : _action(state, source, row, _SourceAction.use) ??
+                _action(state, source, row, _SourceAction.remove),
     );
     Widget availability() => Row(
       children: [
         Expanded(
           child: Text(
-            terminalSafeText(availableText),
-            style: canDownload && inspection.installation != null
-                ? const CellStyle(foreground: warning)
-                : mutedText,
+            terminalSafeText(row.available),
+            style: row.newer ? const CellStyle(foreground: warning) : mutedText,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
         ),
         SizedBox(
           width: 17,
-          child: !pending && _canFocusDownload(state, source)
-              ? downloadButton()
-              : null,
+          child: _action(state, source, row, _SourceAction.download),
         ),
       ],
     );
@@ -795,11 +793,12 @@ class _UseScreenState extends State<UseScreen> {
           const Text('Selected', style: CellStyle(foreground: warning)),
       ],
     );
+    final use = ((state.project.name, source), _SourceAction.use);
     return GestureDetector(
       // Blank row space previews Use without running it. Only buttons own focus.
-      onTap: _canUse(state, source)
-          ? () => _actions[(key, _SourceAction.use)]?.requestFocus()
-          : null,
+      onTap: row.actions[_SourceAction.use]?.$2 == null
+          ? null
+          : () => _actions[use]?.requestFocus(),
       child: DefaultTextStyle(
         style: active ? selectedStyle : const CellStyle(),
         child: Container(
@@ -810,7 +809,7 @@ class _UseScreenState extends State<UseScreen> {
                     SizedBox(width: 13, child: sourceLabel()),
                     SizedBox(
                       width: 21,
-                      child: Text(terminalSafeText(installed), maxLines: 1),
+                      child: Text(terminalSafeText(row.installed), maxLines: 1),
                     ),
                     Expanded(child: availability()),
                     const SizedBox(width: 1),
@@ -828,7 +827,7 @@ class _UseScreenState extends State<UseScreen> {
                       ],
                     ),
                     Text(
-                      'Installed  ${terminalSafeText(installed)}',
+                      'Installed  ${terminalSafeText(row.installed)}',
                       style: mutedText,
                     ),
                     Row(
@@ -843,62 +842,4 @@ class _UseScreenState extends State<UseScreen> {
       ),
     );
   }
-}
-
-class InstallationPickerResult {
-  InstallationPickerResult(this.failed, this.message, this.exitCode);
-  final bool failed;
-  final String message;
-  final int exitCode;
-}
-
-/// The same scoped confirmation is used from use and uninstall.
-class RemovalConfirmation extends StatelessWidget {
-  const RemovalConfirmation({
-    super.key,
-    required this.project,
-    required this.source,
-    required this.installed,
-    required this.onCancel,
-    required this.onConfirm,
-    this.command = 'rk uninstall',
-    this.maxWidth = 128,
-  });
-  final ExecutableProject project;
-  final InstallationSource source;
-  final Installation installed;
-  final void Function() onCancel, onConfirm;
-  final String command;
-  final int maxWidth;
-  @override
-  Widget build(BuildContext context) => MatrixShell(
-    command: command,
-    maxWidth: maxWidth,
-    subtitle: 'Remove ${project.label} from ${source.label}?',
-    scrollFromActions: true,
-    onEscape: onCancel,
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Version: ${installed.version}'),
-        Text('Location: ${installed.location}'),
-        Text('Commands: ${project.commands.join(', ')}'),
-        const SizedBox(height: 1),
-        Text(
-          source == InstallationSource.local
-              ? 'Only the local registration is removed. Your checkout stays.'
-              : 'This removes the ${source.label} installation, including its use outside this repository.',
-        ),
-      ],
-    ),
-    actions: [
-      MatrixButton(text: 'Cancel', autofocus: true, onPressed: onCancel),
-      MatrixButton(
-        text: 'Remove installation',
-        variant: ButtonVariant.error,
-        onPressed: onConfirm,
-      ),
-    ],
-  );
 }

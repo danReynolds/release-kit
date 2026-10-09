@@ -1,15 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'binary_chain.dart';
+import 'targets/target_module.dart';
 import 'engine/assets.dart';
-import 'engine/checklist.dart';
 import 'engine/diagnostic.dart';
 import 'engine/resolve.dart';
+import 'engine/stage.dart';
 import 'engine/tools.dart';
-import 'engine/workspace.dart';
+import 'engine/unit_release.dart';
 import 'output/output.dart';
-import 'output/progress.dart';
 
 /// A project's own build, run for the release assets it declares.
 ///
@@ -26,14 +25,16 @@ final class AssetBuild {
   AssetBuild({
     required this.tools,
     required this.output,
-    required this.workspace,
+    required this.stage,
     required this.sourceRoot,
     this.cacheDirectory,
   });
 
   final Tools tools;
   final Output output;
-  final Workspace workspace;
+
+  /// Where the declared assets are kept.
+  final Stage stage;
 
   /// The lane's copy of the staged source, where the build runs.
   final String sourceRoot;
@@ -53,11 +54,11 @@ final class AssetBuild {
   /// Runs [project]'s build with [environment] added to rk's own, which
   /// carries the facts a build may need about the release it is part of.
   /// While it runs, the first of [progress]'s rows shows its latest line.
-  Future<LocalProducerOutcome> build(
-    Step step,
+  Future<Produced> build(
+    Work step,
     ResolvedProject project, {
     Map<String, String> environment = const {},
-    ProgressHandle? progress,
+    Rows? progress,
   }) async {
     final out = Directory.systemTemp.createTempSync('rk-build-');
     try {
@@ -86,9 +87,7 @@ final class AssetBuild {
             ),
             unit: step.unit,
           );
-          return const LocalProducerOutcome.failed(
-            'the build cache could not be made',
-          );
+          return const Produced.failed();
         }
       }
       final tail = <String>[];
@@ -171,7 +170,7 @@ final class AssetBuild {
           ),
           unit: step.unit,
         );
-        return const LocalProducerOutcome.failed('the build did not start');
+        return const Produced.failed();
       } finally {
         // The rows settle once the build returns, and must not redraw after.
         wait?.cancel();
@@ -195,9 +194,7 @@ final class AssetBuild {
           ),
           unit: step.unit,
         );
-        return LocalProducerOutcome.failed(
-          'the build exited ${result.exitCode}',
-        );
+        return const Produced.failed();
       }
       final missing = [
         for (final declared in project.assets)
@@ -234,24 +231,16 @@ final class AssetBuild {
           ),
           unit: step.unit,
         );
-        return const LocalProducerOutcome.failed(
-          'the build did not write every declared asset',
-        );
+        return const Produced.failed();
       }
       for (final declared in project.assets) {
         final staged = File(
-          workspace.pathOf(ReleaseAssets.assetPath(project, declared)),
+          stage.pathOf(ReleaseAssets.assetPath(project, declared)),
         );
         staged.parent.createSync(recursive: true);
         File('${out.path}/$declared').copySync(staged.path);
       }
-      return LocalProducerOutcome.succeeded(
-        outputs: [
-          for (final entry in ReleaseAssets.assetOutputs(project).entries)
-            LocalProducerOutput(entry.key, entry.value),
-        ],
-        evidence: {'command': project.build, 'cache': ?cache},
-      );
+      return Produced(evidence: {'command': project.build, 'cache': ?cache});
     } finally {
       out.deleteSync(recursive: true);
     }
@@ -263,7 +252,7 @@ final class AssetBuild {
   static String? _readable(String line) {
     final text = _expandTabs(
       _withoutEscapes(line),
-    ).replaceAll(_invisible, ' ').trimRight();
+    ).replaceAll(invisibleCharacters, ' ').trimRight();
     if (text.trim().isEmpty) return null;
     final runes = text.runes.toList();
     return runes.length <= 300
@@ -278,12 +267,6 @@ final class AssetBuild {
       // A character set's designation, then any other escape.
       .replaceAll(RegExp(r'\x1b[()*+].'), '')
       .replaceAll(RegExp(r'\x1b[@-_]'), '');
-
-  /// Control, bidirectional and zero-width characters: what would move the
-  /// cursor or reorder a line rather than show in it.
-  static final _invisible = RegExp(
-    r'[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
-  );
 
   /// [line] with each tab widened to the next eighth column, as a terminal
   /// would show it, so what lines up under it still does.
@@ -307,9 +290,10 @@ final class AssetBuild {
   /// [line] as one short printable line, or null when nothing is left once
   /// terminal escapes and control characters are gone.
   static String? _printable(String line) {
-    final text = _withoutEscapes(
-      line,
-    ).replaceAll(_invisible, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = _withoutEscapes(line)
+        .replaceAll(invisibleCharacters, ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     if (text.isEmpty) return null;
     final runes = text.runes.toList();
     return runes.length <= 100

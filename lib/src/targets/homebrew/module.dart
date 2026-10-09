@@ -2,13 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../engine/assets.dart';
-import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
-import '../../engine/targets.dart';
+import '../../engine/stage.dart';
+import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
-import '../../output/progress.dart';
 import '../github_release/client.dart';
 import '../target_module.dart';
 import 'client.dart';
@@ -20,47 +19,23 @@ final class HomebrewTargetModule extends TargetModule {
   @override
   PublishTarget get target => PublishTarget.homebrew;
 
+  /// The tap's formula, compared with the staged one; without a stage, with
+  /// one rendered from the digests GitHub reports for the release. A
+  /// formula keeps no history of its own: its read carries its version.
   @override
-  Future<TargetReadinessOutcome> checkReadiness(
-    TargetReadinessContext context,
+  Future<TargetRead> read(
+    TargetReadContext reads,
     ResolvedUnit unit,
-  ) async => const TargetReady();
+    Target target, {
+    Stage? stage,
+  }) async =>
+      (state: await _inspect(reads, unit, target, stage), history: null);
 
-  @override
-  ProgressActivity get publishActivity =>
-      ProgressActivity(running: 'updating', failed: 'update failed');
-
-  @override
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
-  }) {
-    final project = unit.project(step.project!);
-    final tap = repository == null ? unit.homebrewTap : unit.tapFor(repository);
-    return TargetPlan(
-      label: tap == null ? 'Homebrew' : 'Homebrew · $tap',
-      kindLabel: 'Homebrew',
-      identity: tap ?? 'no tap configured',
-      planNote: '${project.executable} formula',
-      coordinate: tap == null
-          ? 'Formula/${ReleaseAssets.formulaName(project.executable!)}'
-          : '$tap/Formula/${ReleaseAssets.formulaName(project.executable!)}',
-      targetVersion: project.version.canonical,
-      step: step,
-      project: project,
-      artifacts: [ReleaseAssets.formulaName(project.executable!)],
-      uses:
-          '${ReleaseAssets.formulaName(project.executable!)} bound in the '
-          'release manifest',
-    );
-  }
-
-  @override
-  Future<Inspection> inspectCandidate(
+  Future<Inspection> _inspect(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
+    Stage? stage,
   ) async {
     final tools = context.tools;
     if (tools == null) {
@@ -73,31 +48,19 @@ final class HomebrewTargetModule extends TargetModule {
     final tap = unit.tapFor(repository);
     final project = target.project!;
     final executable = project.executable!;
-    final stage = context.reusableStage(unit);
-    final name = ReleaseAssets.formulaName(executable);
-    final stagedPath = ReleaseAssets.formulaPath(project);
-    if (stage != null) {
-      final expected = File(stage.directory.resolve(stagedPath));
-      if (!expected.existsSync()) {
-        return Inspection.conflict('the completed stage has no $name');
-      }
-      final destination = HomebrewTarget(
-        tools: tools,
-        tap: tap,
-        workingDirectory: context.git.root,
-      );
-      return destination.inspect(
-        formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
-        intendedVersion: project.version,
-        expectedBytes: expected.readAsBytesSync(),
-      );
-    }
-
     final destination = HomebrewTarget(
       tools: tools,
       tap: tap,
       workingDirectory: context.git.root,
     );
+    if (stage != null) {
+      return destination.inspect(
+        formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
+        intendedVersion: project.version,
+        expectedBytes: stage.readBytes(target.files.single.path)!,
+      );
+    }
+
     final publicFormula = await destination.inspect(
       formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
@@ -125,11 +88,15 @@ final class HomebrewTargetModule extends TargetModule {
       }
       return current.inspection;
     }
-    return destination.inspect(
+    final recovered = await destination.inspect(
       formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
       expectedBytes: current.bytes,
     );
+    // An update rendered from public digests needs no stage.
+    return recovered.authority is HomebrewUpdateAuthority
+        ? recovered.recovering()
+        : recovered;
   }
 
   Future<({Inspection inspection, List<int>? bytes})> _publishedFormula(
@@ -138,7 +105,7 @@ final class HomebrewTargetModule extends TargetModule {
     required ResolvedProject project,
   }) async {
     final repository = context.repository!;
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
+    final tag = unit.tag!;
     final executable = project.executable!;
     final archiveNames = {
       for (final platform in project.binaryPlatforms)
@@ -196,41 +163,55 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  bool recoversWithoutStage(Inspection inspected) =>
-      switch (inspected.authority) {
-        HomebrewUpdateAuthority(:final replacement) => replacement != null,
-        _ => false,
-      };
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection state) =>
+      Diagnostic(
+        code: 'RK-REL-001',
+        message:
+            '${target.label}: '
+            '${state.detail ?? 'the published formula does not match'}',
+        remedy:
+            'restore the formula to the exact release bytes it is meant '
+            'to reference, or advance the source version intentionally; '
+            'then run rk status ${unit.name} again',
+      );
 
   @override
-  Diagnostic diagnoseConflict(
+  ({Diagnostic diagnostic, String? next}) explainAct(
     ResolvedUnit unit,
-    TargetPlan target,
-    Inspection conflict,
-  ) => Diagnostic(
-    code: 'RK-REL-001',
-    message:
-        '${target.label}: '
-        '${conflict.detail ?? 'the published formula does not match'}',
-    remedy:
-        'restore the formula to the exact release bytes it is meant to '
-        'reference, or advance the source version intentionally; then '
-        'run rk status ${unit.name} again',
+    Target target,
+    Inspection state,
+    TargetActOutcome acted,
+  ) => (
+    diagnostic: switch (state.verdict) {
+      Verdict.unknown => const Diagnostic(
+        code: 'RK-BREW-002',
+        message: 'the tap was updated and could not be read back',
+      ),
+      Verdict.conflict => const Diagnostic(
+        code: 'RK-BREW-003',
+        message: 'the public tap does not hold what rk pushed',
+      ),
+      Verdict.absent || Verdict.exact => const Diagnostic(
+        code: 'RK-BREW-001',
+        message: 'the tap formula was not updated',
+      ),
+    },
+    next: null,
   );
 
   @override
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
-    Inspection inspected,
+    Target target,
+    Inspection before,
   ) async {
     final repository = context.repository;
     if (repository == null) {
       return TargetActOutcome(
         ok: false,
         diagnostic: Diagnostic(
-          code: 'RK-GIT-002',
+          code: 'RK-GIT-003',
           message:
               'homebrew needs an origin remote, and this repository '
               'has none',
@@ -241,7 +222,7 @@ final class HomebrewTargetModule extends TargetModule {
         ),
       );
     }
-    final authority = inspected.authority;
+    final authority = before.authority;
     if (authority is! HomebrewUpdateAuthority) {
       return const TargetActOutcome(
         ok: false,
@@ -252,20 +233,11 @@ final class HomebrewTargetModule extends TargetModule {
     }
     final project = target.project!;
     final executable = project.executable!;
-    // A recovered payload is authenticated public input. A non-reusable stage
-    // may still contain stale files, so it must never outrank that authority.
+    // A recovered payload is authenticated public input; without one, the
+    // stage was checked just before this act.
     final formula =
         authority.replacement ??
-        context.workspace.readBytes(ReleaseAssets.formulaPath(project));
-    if (formula == null) {
-      return TargetActOutcome(
-        ok: false,
-        problem:
-            'the workspace has no '
-            '${ReleaseAssets.formulaName(executable)}; the staging phase '
-            'renders it — re-running runs it',
-      );
-    }
+        context.stage!.readBytes(target.files.single.path)!;
     final Directory scratch;
     try {
       scratch = Directory.systemTemp.createTempSync('rk-tap-');
@@ -300,35 +272,6 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  bool get conflictIsPermanent => false;
-
-  @override
-  ({String code, String message, String? next}) nameUnconfirmed(
-    ResolvedUnit unit,
-    TargetPlan target,
-    Inspection state,
-    TargetActOutcome act,
-  ) => switch (state.verdict) {
-    Verdict.unknown => (
-      code: 'RK-BREW-002',
-      message: 'the tap was updated and could not be read back',
-      next: null,
-    ),
-    Verdict.conflict => (
-      code: 'RK-BREW-003',
-      message: 'the public tap does not hold what rk pushed',
-      next: null,
-    ),
-    Verdict.absent || Verdict.exact => (
-      code: 'RK-BREW-001',
-      message: 'the tap formula was not updated',
-      next: null,
-    ),
-  };
-
-  @override
-  TargetStage stageInput({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-  }) => homebrewFormulaStage(unit: unit, target: target);
+  Future<Produced> prepare(StageRun run, Work work) =>
+      prepareFormula(run, work);
 }

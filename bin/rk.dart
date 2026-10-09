@@ -26,16 +26,14 @@ import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/target.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/targets/pub_dev/endpoint.dart';
-import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/release_source.dart';
-import 'package:rk/src/engine/stage_store.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/targets/catalog.dart';
@@ -170,36 +168,32 @@ To prepare without publishing: rk stage tools
 Use rk plan tools to see the configured work before running it.
 ''';
 
-const _verbs = {
-  'status',
-  'plan',
-  'stage',
-  'release',
-  'init',
-  'clean',
-  'target',
-};
-
-/// The flags each verb takes. A flag that exists but does not apply to a
-/// verb is refused the same way as one that does not exist: accepting
-/// `rk status --yes` would imply that a read-only report needs
+/// Each verb's usage, and the flags it takes. A flag that exists but does
+/// not apply to a verb is refused the same way as one that does not exist:
+/// accepting `rk status --yes` would imply that a read-only report needs
 /// authorization.
-const _perVerb = {
-  'status': {'-h', '--help', '--json'},
-  'plan': {'-h', '--help', '--json'},
-  'stage': {'-h', '--help', '--json', '--timings'},
-  'release': {'-h', '--help', '--json', '-y', '--yes', '--timings'},
-  'init': {'-h', '--help', '--json', '--write'},
-  'clean': {'-h', '--help', '--json', '-y', '--yes'},
-  'target': {'-h', '--help', '--json'},
-  'help': {'-h', '--help', '--json'},
+const _verbs = <String, ({String usage, Set<String> flags})>{
+  'status': (usage: _statusUsage, flags: {'-h', '--help', '--json'}),
+  'plan': (usage: _planUsage, flags: {'-h', '--help', '--json'}),
+  'stage': (usage: _stageUsage, flags: {'-h', '--help', '--json', '--timings'}),
+  'release': (
+    usage: _releaseUsage,
+    flags: {'-h', '--help', '--json', '-y', '--yes', '--timings'},
+  ),
+  'init': (usage: _initUsage, flags: {'-h', '--help', '--json', '--write'}),
+  'clean': (
+    usage: CleanCommand.usage,
+    flags: {'-h', '--help', '--json', '-y', '--yes'},
+  ),
+  'target': (usage: TargetCommand.usage, flags: {'-h', '--help', '--json'}),
+  'help': (usage: _usage, flags: {'-h', '--help', '--json'}),
 };
 
 /// What a misused verb takes instead, in one line: the usage itself is a
 /// command away, rather than poured under the refusal.
 String _takes(String command) {
   final flags = [
-    for (final flag in _perVerb[command]!)
+    for (final flag in _verbs[command]!.flags)
       if (flag == '--yes')
         '-y/--yes'
       else if (flag != '-h' && flag != '--help' && flag != '-y')
@@ -215,17 +209,6 @@ const _commands =
     'the commands are init, status, stage, release, plan, target, clean, '
     'use, install, uninstall and help; a unit follows one, as in '
     'rk status [unit]';
-
-String _usageFor(String? command) => switch (command) {
-  'init' => _initUsage,
-  'status' => _statusUsage,
-  'plan' => _planUsage,
-  'stage' => _stageUsage,
-  'release' => _releaseUsage,
-  'target' => TargetCommand.usage,
-  'clean' => CleanCommand.usage,
-  _ => _usage,
-};
 
 Future<void> main(List<String> args) {
   // A reader that stops reading, as `rk --help | head -1` does, closes the
@@ -263,15 +246,7 @@ Future<void> runRk(
     return;
   }
 
-  const known = {
-    '-h',
-    '--help',
-    '--json',
-    '-y',
-    '--yes',
-    '--write',
-    '--timings',
-  };
+  final known = {for (final verb in _verbs.values) ...verb.flags};
   final flags = args.where((argument) => argument.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
@@ -291,51 +266,48 @@ Future<void> runRk(
 
   final output = Output.stdio(json: json, command: command);
 
-  if (!_verbs.contains(command)) {
-    output.problem(
+  if (!_verbs.containsKey(command)) {
+    return _refuse(
+      output,
       Diagnostic(
-        code: 'RK-CLI-008',
+        code: 'RK-CLI-003',
         message: 'rk has no command named "$command"',
         remedy: _commands,
       ),
+      json: json,
     );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-    return;
   }
 
-  final inapplicable = flags.difference(_perVerb[command] ?? known);
+  final inapplicable = flags.difference(_verbs[command]!.flags);
   final unknown = flags.difference(known);
   if (unknown.isNotEmpty) {
     // Silently ignoring a flag is worse than refusing it: a caller asking for
     // something rk does not do should be told, not answered as if it had not
     // asked. It is told through the report as well, so a refusal a caller
     // asked for in JSON is not answered in prose it cannot read.
-    output.problem(
+    return _refuse(
+      output,
       Diagnostic(
-        code: 'RK-CLI-001',
+        code: 'RK-CLI-005',
         message: 'rk does not have ${unknown.join(', ')}',
         remedy: _takes(command),
       ),
+      json: json,
     );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-    return;
   }
 
   if (inapplicable.isNotEmpty &&
       !flags.contains('-h') &&
       !flags.contains('--help')) {
-    output.problem(
+    return _refuse(
+      output,
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
         remedy: _takes(command),
       ),
+      json: json,
     );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-    return;
   }
 
   // Misuse is refused, not repaired: a third word would be dropped as if it
@@ -343,7 +315,8 @@ Future<void> runRk(
   // repository while reading as if it had scoped itself to one unit.
   if (positional.length > 2 ||
       ((command == 'init' || command == 'clean') && target != null)) {
-    output.problem(
+    return _refuse(
+      output,
       Diagnostic(
         code: 'RK-CLI-007',
         message:
@@ -357,23 +330,17 @@ Future<void> runRk(
                   '"${positional.join(' ')}"',
         remedy: 'rk help $command',
       ),
+      json: json,
     );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-    return;
   }
 
   if (flags.contains('-h') || flags.contains('--help')) {
-    final usage = _usageFor(first);
-    // Under --json stdout carries the document and nothing else, so the usage
-    // travels inside it rather than beside it.
-    if (json) {
-      output.report.next(usage.trim());
-      stdout.write(output.report.encode(exit: ExitCodes.ok));
-    } else {
-      output.help(usage);
-    }
-    return;
+    // `rk --help`, with no verb, is rk's own usage.
+    return _showUsage(
+      output,
+      first == null ? _usage : _verbs[command]!.usage,
+      json: json,
+    );
   }
 
   int code;
@@ -414,15 +381,9 @@ Future<void> runRk(
     // reached the write — which teaches a reader to discount the sentence
     // everywhere it is true.
     output.halt(
-      output.report.changedWhatHaltsSpeakOf
-          ? HaltKind.lostTrack
-          : HaltKind.beforeActing,
+      output.report.changedWhatHaltsSpeakOf ? Stop.lostTrack : Stop.refused,
     );
-    final recordsDiagnosis = Diagnosis.shouldWrite(
-      command: command,
-      acted: output.report.acted,
-      crashed: true,
-    );
+    final recordsDiagnosis = output.report.keepsDiagnosis(crashed: true);
     output.problem(
       Diagnostic(
         code: 'RK-INT-001',
@@ -466,52 +427,60 @@ Future<void> _help(
   required bool json,
 }) async {
   final output = Output.stdio(json: json, command: 'help');
-  void refuse(Diagnostic problem) {
-    output.problem(problem);
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-  }
-
-  final inapplicable = flags.difference(_perVerb['help']!);
+  final inapplicable = flags.difference(_verbs['help']!.flags);
   if (inapplicable.isNotEmpty) {
-    return refuse(
+    return _refuse(
+      output,
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk help does not have ${inapplicable.join(', ')}',
         remedy: _takes('help'),
       ),
+      json: json,
     );
   }
   if (words.length > 1) {
-    return refuse(
+    return _refuse(
+      output,
       Diagnostic(
         code: 'RK-CLI-007',
         message: 'rk help takes one command, and got "${words.join(' ')}"',
         remedy: _commands,
       ),
+      json: json,
     );
   }
-  final named = words.firstOrNull;
-  String? usage;
-  if (named == null || named == 'help') {
-    usage = _usage;
-  } else if (_verbs.contains(named)) {
-    usage = _usageFor(named);
-  } else if (const {'use', 'install', 'uninstall'}.contains(named)) {
+  final named = words.firstOrNull ?? 'help';
+  String? usage = _verbs[named]?.usage;
+  if (const {'use', 'install', 'uninstall'}.contains(named)) {
     await installations.loadLibrary();
     usage = installations.installationUsage;
   }
   if (usage == null) {
-    return refuse(
+    return _refuse(
+      output,
       Diagnostic(
-        code: 'RK-CLI-008',
+        code: 'RK-CLI-003',
         message: 'rk has no command named "$named"',
         remedy: _commands,
       ),
+      json: json,
     );
   }
-  // Under --json stdout carries the document and nothing else, so the usage
-  // travels inside it rather than beside it.
+  _showUsage(output, usage, json: json);
+}
+
+/// Refuses how rk was asked: a usage problem, in the report too when that
+/// is what was asked for.
+void _refuse(Output output, Diagnostic problem, {required bool json}) {
+  output.problem(problem);
+  exitCode = ExitCodes.usage;
+  if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+}
+
+/// Shows [usage]. Under --json stdout carries the document and nothing
+/// else, so the usage travels inside it rather than beside it.
+void _showUsage(Output output, String usage, {required bool json}) {
   if (json) {
     output.report.next(usage.trim());
     stdout.write(output.report.encode(exit: ExitCodes.ok));
@@ -543,16 +512,15 @@ void _reportTimings(
   if (!requested) return;
   stderr.write('\n${output.timeline.breakdown()}');
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
   final directory = '$root/.rk';
   final trace = '$directory/timings.json';
-  // As the stage store does, rk writes only into a .rk that is a real
-  // directory, and never through a link: either could point outside the
-  // repository.
+  // rk writes the trace only as a plain file of its own, never through a
+  // link that could point outside the repository.
   final unsafe = switch ((
-    FileSystemEntity.typeSync(directory, followLinks: false),
+    FileSystemEntity.typeSync(directory),
     FileSystemEntity.typeSync(trace, followLinks: false),
   )) {
     (FileSystemEntityType.notFound, _) => null,
@@ -587,29 +555,18 @@ void _reportTimings(
 /// strictly read-only even when rk itself fails.
 void _recordDiagnosis(Output output, int code, {String? crash}) {
   if (code == ExitCodes.ok || code == ExitCodes.usage) return;
-  if (!Diagnosis.shouldWrite(
-    command: output.report.command,
-    acted: output.report.acted,
-    crashed: crash != null,
-  )) {
-    return;
-  }
+  if (!output.report.keepsDiagnosis(crashed: crash != null)) return;
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
 
-  final at = Diagnosis.write(
+  final at = output.report.writeDiagnosis(
     root,
     stamp: DateTime.now().toIso8601String().replaceAll(':', '-'),
-    report: output.report,
     exit: code,
-    attachments: {
-      ...output.report.attachments,
-      if (crash != null) 'crash.txt': crash,
-    },
+    crash: crash,
   );
-  output.report.diagnosis = at;
   output.say('what this run saw: $at');
 }
 
@@ -618,11 +575,9 @@ Future<int> _init(
   required bool interactive,
   required bool write,
 }) async {
-  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
+  final gitRoot = WorkingTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
-  final tree = gitRoot == null
-      ? FileSystemSourceTree(root)
-      : GitSourceTree(gitRoot) as SourceTree;
+  final tree = WorkingTree(root, git: gitRoot != null);
   final git = gitRoot == null ? null : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
@@ -682,10 +637,10 @@ Future<int> _clean(
   required bool interactive,
 }) {
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   return CleanCommand(
-    store: StageStore(root),
+    stages: Stages(root),
     output: output,
     yes: yes,
     confirm: interactive && stdin.hasTerminal && stdout.hasTerminal
@@ -744,7 +699,7 @@ Future<int> _release(
   if (!source.inRepository) {
     _showRepository(output, source);
     output.problem(source.git.stagingProblem()!);
-    output.halt(HaltKind.beforeActing);
+    output.halt(Stop.refused);
     return ExitCodes.refused;
   }
   final resolution = prepared.resolution!;
@@ -754,10 +709,11 @@ Future<int> _release(
   );
   // A container runtime is asked for only when a smoke test needs one.
   final capabilities = HostCapabilities.detect();
-  StageStoreLock? stageLock;
+  final stages = Stages(source.root);
+  StagesLock? stageLock;
   try {
     try {
-      stageLock = StageStore(source.root).acquireForMutation();
+      stageLock = stages.lock();
     } on StageStoreBusy catch (error) {
       output.problem(_stageStoreProblem(error));
       return ExitCodes.refused;
@@ -768,25 +724,12 @@ Future<int> _release(
     final tree = source.tree;
     final git = source.git;
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
-    final stages = ReleaseStages(
-      source: tree,
-      git: git,
-      stageContracts: targets.stageContractResolver(resolution),
-    );
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
       resolution: resolution,
       tree: tree,
       git: git,
-      inspector: Inspector(
-        registry: registry,
-        pubDev: PubDevTarget(registry: registry),
-        git: git,
-        tools: targetTools,
-        repository: git.originUrl,
-        stageFor: stages.call,
-        targets: targets,
-      ),
+      inspector: _inspector(registry, git, targetTools, targets),
       tools: const SystemTools(),
       capabilities: capabilities,
       output: output,
@@ -804,7 +747,7 @@ Future<int> _release(
       allowInteractiveTools:
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       stageOnly: stageOnly,
-      stageFor: stages.call,
+      stageFor: (unit) => stages.of(unit, git, tree),
     ).run(only: unit);
   } finally {
     stageLock?.close();
@@ -848,9 +791,9 @@ class _Prepared {
 /// from the working tree otherwise — for status, plan, stage and release.
 Future<_Prepared> _prepare(Output output) async {
   final source = await ReleaseSource.open(Directory.current.absolute.path);
-  switch (source.readConfig()) {
+  switch (await source.readConfig()) {
     case ConfigMissing():
-      output.repository(name: source.root.split('/').last);
+      output.repository(source.root.split('/').last);
       output.blank();
       output.line('no release.toml', mark: Mark.none);
       output.next('rk init');
@@ -869,14 +812,11 @@ Future<_Prepared> _prepare(Output output) async {
 void _showRepository(Output output, ReleaseSource source) {
   final git = source.git;
   output.repository(
-    name: source.root.split('/').last,
-    branch: git.branch,
-    commit: git.hasCommit ? git.shortHead : null,
+    source.root.split('/').last,
+    git: git,
     uncommitted: source.inRepository && git.worktreeStatusError == null
         ? git.uncommitted.length
         : null,
-    head: git.hasCommit ? git.head : null,
-    remote: git.originUrl,
   );
 }
 
@@ -887,7 +827,6 @@ Future<int> _plan(Output output, String? unit) async {
     resolution: prepared.resolution!,
     git: prepared.source!.git,
     output: output,
-    targets: TargetCatalog.builtIn(),
   ).run(only: unit);
 }
 
@@ -909,11 +848,7 @@ Future<int> _status(
   final git = source.git;
   try {
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
-    final stages = ReleaseStages(
-      source: tree,
-      git: git,
-      stageContracts: targets.stageContractResolver(resolution),
-    );
+    final stages = Stages(source.root);
     final targetTools = SystemTools(
       timeout: const Duration(minutes: 2),
       cancellation: cancellation,
@@ -922,16 +857,9 @@ Future<int> _status(
       resolution: resolution,
       tree: tree,
       git: git,
-      inspector: Inspector(
-        registry: registry,
-        pubDev: PubDevTarget(registry: registry),
-        git: git,
-        tools: targetTools,
-        repository: git.originUrl,
-        stageFor: stages.call,
-        targets: targets,
-      ),
+      inspector: _inspector(registry, git, targetTools, targets),
       output: output,
+      stageFor: (unit) => stages.of(unit, git, tree),
     );
     return await command.run(only: unit);
   } finally {
@@ -939,6 +867,21 @@ Future<int> _status(
     registry.close();
   }
 }
+
+/// What status and release read destinations with.
+Inspector _inspector(
+  Registry registry,
+  GitState git,
+  Tools tools,
+  TargetCatalog targets,
+) => Inspector(
+  registry: registry,
+  pubDev: PubDevTarget(registry: registry),
+  git: git,
+  tools: tools,
+  repository: git.originUrl,
+  targets: targets,
+);
 
 Diagnostic _stageStoreProblem(Object error) => Diagnostic(
   code: 'RK-STAGE-006',

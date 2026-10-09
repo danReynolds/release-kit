@@ -2,8 +2,6 @@ import 'package:fleury/fleury_core.dart';
 import '../output/output.dart' show terminalSafeText;
 
 const commandTableWidth = 104;
-const positiveText = CellStyle(foreground: RgbColor(160, 230, 185));
-const attentionText = CellStyle(foreground: warning);
 
 const mutedText = CellStyle(dim: true);
 const accent = AnsiColor(6);
@@ -451,11 +449,15 @@ class MatrixDetails extends StatelessWidget {
     required this.onBack,
     this.failed = false,
     this.maxWidth = 128,
+    this.actions,
   });
   final String command, title, body;
   final void Function() onBack;
   final bool failed;
   final int maxWidth;
+
+  /// What the reader can do from here: Back, unless said otherwise.
+  final List<Widget>? actions;
 
   @override
   Widget build(BuildContext context) => MatrixShell(
@@ -468,7 +470,9 @@ class MatrixDetails extends StatelessWidget {
       body.split('\n').map(terminalSafeText).join('\n'),
       style: failed ? const CellStyle(foreground: warning) : const CellStyle(),
     ),
-    actions: [MatrixButton(text: 'Back', autofocus: true, onPressed: onBack)],
+    actions:
+        actions ??
+        [MatrixButton(text: 'Back', autofocus: true, onPressed: onBack)],
   );
 }
 

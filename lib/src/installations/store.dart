@@ -6,8 +6,8 @@ import 'model.dart';
 import 'provider.dart';
 
 /// A launcher rk wrote, read back: the project it names, the source it runs
-/// and where that source is installed. [project] is null for a launcher an
-/// older rk wrote, which named the project by a hash of its origin.
+/// and where that source is installed. [project] is null for a launcher rk
+/// 0.1.14 wrote, which named the project by a hash of its origin.
 typedef Launcher = ({
   String? project,
   InstallationSource source,
@@ -56,14 +56,12 @@ class InstallationStore {
   }
 
   /// `# rk-managed:<project>:<source>`, naming the project by its package.
-  /// Older launchers name it by a [_hash] of its origin: rk 0.1.14's carry no
-  /// source, and later development builds' do.
+  /// rk 0.1.14's launchers name it by a hash of its origin, and no source.
   static final _header = RegExp(
     r'^# rk-managed:([^:\s]+)(?::(\w+))?$',
     multiLine: true,
   );
   static final _location = RegExp(r'^# rk-location:(.+)$', multiLine: true);
-  static final _hash = RegExp(r'^[0-9a-f]{64}$');
 
   /// The launcher rk wrote for [command], or null when there is none or it
   /// cannot be read.
@@ -73,19 +71,17 @@ class InstallationStore {
     final text = file.readAsStringSync();
     final header = _header.firstMatch(text);
     if (header == null) return null;
-    final owner = header[1]!;
-    final legacy = _hash.hasMatch(owner);
-    if (header[2] == null) return legacy ? _legacy(owner) : null;
-    final source = InstallationSource.named(header[2]!);
-    final location = _location.firstMatch(text)?[1];
-    if (source == null || location == null) return null;
-    return (project: legacy ? null : owner, source: source, location: location);
-  }
-
-  /// What a launcher rk 0.1.14 wrote runs: it forwards to its project's
-  /// current generation, whose installation.json records the source.
-  Launcher? _legacy(String hash) {
-    final record = File('$root/projects/$hash/current/installation.json');
+    if (header[2] case final name?) {
+      final source = InstallationSource.named(name);
+      final location = _location.firstMatch(text)?[1];
+      if (source == null || location == null) return null;
+      return (project: header[1], source: source, location: location);
+    }
+    // rk 0.1.14's launcher forwards to its project's current generation,
+    // whose installation.json records the source.
+    final record = File(
+      '$root/projects/${header[1]}/current/installation.json',
+    );
     if (!record.existsSync()) return null;
     try {
       if (jsonDecode(record.readAsStringSync()) case {
@@ -117,22 +113,22 @@ class InstallationStore {
       launchers(project).values.firstOrNull;
 
   /// A launcher rk wrote for this project may be replaced, and so may one
-  /// that names no project. A command rk did not write, or selected for
-  /// another project, is not this project's.
+  /// that names no project (0.1.14's). A command rk did not write, or
+  /// selected for another project, is not this project's.
   void checkOwnership(ExecutableProject project) {
     for (final command in project.commands) {
       final file = File('$bin/$command');
       if (!file.existsSync()) continue;
-      final owner = _header.firstMatch(file.readAsStringSync())?[1];
-      if (owner == null) {
+      final header = _header.firstMatch(file.readAsStringSync());
+      if (header == null) {
         throw InstallationFailure(
           '$command is already owned by another installation.',
           'rk will not replace ${file.path}. Resolve the command collision first.',
         );
       }
-      if (owner != project.name && !_hash.hasMatch(owner)) {
+      if (header[2] != null && header[1] != project.name) {
         throw InstallationFailure(
-          '$command is selected for $owner.',
+          '$command is selected for ${header[1]}.',
           'rk will not replace ${file.path} for ${project.name}. Resolve the command collision first.',
         );
       }
@@ -152,7 +148,6 @@ class InstallationStore {
         'Use a version whose complete executable set matches this project.',
       );
     }
-    checkOwnership(project);
     Directory(bin).createSync(recursive: true);
     final scripts = {
       for (final entry in installation.commands.entries)
@@ -218,6 +213,31 @@ class InstallationStore {
     ];
   }
 
+  /// A child cannot edit its parent's environment. Fish can persist a
+  /// universal path which other fish sessions pick up at their next prompt.
+  /// Other shells get an explicit command; rk never rewrites a startup file
+  /// behind their back.
+  Future<String?> putFirstOnPath(
+    ExecutableProject project,
+    Map<String, String> environment,
+  ) async {
+    if (routingProblems(project, environment).isEmpty) return null;
+    final shell = environment['SHELL'] ?? '';
+    if (shell.split('/').last == 'fish' && shell.startsWith('/')) {
+      try {
+        await checked(tools, shell, [
+          '-c',
+          r'fish_add_path --universal --move --prepend -- $argv[1]',
+          bin,
+        ], environment: environment);
+        return 'Ready at the next prompt.';
+      } on InstallationFailure catch (error) {
+        return 'Selected, but fish PATH setup failed: ${error.message}. Run: fish_add_path --move --prepend ${shellQuote(bin)}';
+      }
+    }
+    return 'Selection saved. Put the managed commands first in this shell: export PATH=${shellQuote(bin)}:"\$PATH"';
+  }
+
   /// Whether [command] on [environment]'s PATH is its launcher, however PATH
   /// spells the directory: with a trailing slash, or through a link.
   bool routes(String command, Map<String, String> environment) {
@@ -229,7 +249,6 @@ class InstallationStore {
   /// earlier downloads, and any an interrupted run left half unpacked. The
   /// download the current launchers run is never removed.
   void retire(ExecutableProject project, Installation kept) {
-    if (!kept.managed) return;
     final parent = Directory(kept.location).parent;
     if (parent.path != downloads(project)) return;
     final inUse = selected(project)?.location;

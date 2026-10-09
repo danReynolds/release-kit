@@ -1,126 +1,49 @@
-import '../engine/stage_board.dart';
-import '../engine/stage_receipt.dart';
-import '../engine/targets.dart';
+import '../engine/receipt.dart';
 import '../engine/tools.dart';
+import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 import '../targets/target_module.dart';
 
-/// Long enough that a preparation board helps instead of flashing briefly.
-const briefPhase = Duration(milliseconds: 800);
-
-/// Public-target rows rendered through RK's shared progress model.
-final class TargetReleaseProgress {
-  TargetReleaseProgress(
-    Output output, {
-    required String title,
-    required Iterable<TargetPlan> targets,
-    Duration delay = const Duration(milliseconds: 80),
-  }) : _output = output,
-       live = output.progressBoard(
-         title,
-         delay: delay,
-         emitSlowToNonTerminal: true,
-       ) {
-    for (final target in targets) {
-      _controllers[target.step.id] = live.addRow(
-        id: target.step.id,
-        label: target.kindLabel,
-        coordinate: target.coordinate,
-      );
-    }
+/// A board with a row for each of [targets], by target id. A pipe hears of
+/// a row still at one thing after a while: a sign-in or a long upload.
+Board targetBoard(
+  Output output,
+  String title,
+  Iterable<Target> targets, {
+  Duration delay = const Duration(milliseconds: 80),
+}) {
+  final board = output.board(title, delay: delay, heartbeat: true);
+  for (final target in targets) {
+    board.add(target.id, target.kindLabel, coordinate: target.coordinate);
   }
+  return board;
+}
 
-  final Output _output;
-  final LiveProgress live;
-  final Map<String, ProgressRowController> _controllers = {};
-
-  ProgressRowController _row(TargetPlan target) =>
-      _controllers[target.step.id]!;
-
-  ProgressHandle handle(TargetPlan target) => _row(target).handle;
-
-  ProgressHandle combined(Iterable<TargetPlan> targets) =>
-      ProgressHandle.combine(targets.map(handle));
-
-  void waiting(TargetPlan target, {required String note}) {
-    final row = _row(target);
-    if (row.state != ProgressRowState.pending) return;
-    row.wait(note: note);
+/// Settles [row], checking its target, with what the read found.
+void observe(Row row, Inspection state) {
+  if (row.state != RowState.active) return;
+  if (state.isExact) {
+    row.complete('already published', mark: Mark.satisfied);
+  } else if (state.isAbsent) {
+    row.complete('not published', mark: Mark.none);
+  } else {
+    row.complete(
+      state.verdict == Verdict.conflict ? 'conflict' : 'unreadable',
+      mark: Mark.none,
+      tone: RuntimeState.attention,
+    );
   }
+}
 
-  void begin(TargetPlan target, ProgressActivity activity, {String? detail}) {
-    final row = _row(target);
-    if (row.state == ProgressRowState.complete) return;
-    row.handle.begin(activity, detail: detail);
-  }
-
-  void complete(
-    TargetPlan target, {
-    required String note,
-    bool satisfied = false,
-    bool restore = false,
-  }) {
-    final row = _row(target);
-    if (row.state == ProgressRowState.complete) return;
-    final mark = satisfied ? ProgressRowMark.satisfied : ProgressRowMark.done;
-    if (restore || row.state == ProgressRowState.pending) {
-      row.restoreComplete(note: note, mark: mark);
-    } else {
-      row.complete(note: note, mark: mark);
-    }
-  }
-
-  void observe(TargetPlan target, Inspection inspection) {
-    final row = _row(target);
-    if (row.state != ProgressRowState.active) return;
-    if (inspection.isExact) {
-      row.complete(note: 'already published', mark: ProgressRowMark.satisfied);
-    } else if (inspection.isAbsent) {
-      row.complete(note: 'not published', mark: ProgressRowMark.none);
-    } else {
-      row.complete(
-        note: inspection.verdict == Verdict.conflict
-            ? 'conflict'
-            : 'unreadable',
-        mark: ProgressRowMark.none,
-        emphasis: ProgressRowEmphasis.attention,
-      );
-    }
-  }
-
-  void fail(TargetPlan target, {ProgressActivity? activity, String? note}) {
-    final row = _row(target);
-    if (row.state == ProgressRowState.active) {
-      row.fail(activity: activity, note: note);
-    }
-  }
-
-  void failAll(
-    Iterable<TargetPlan> targets, {
-    required ProgressActivity activity,
-  }) {
-    for (final target in targets) {
-      fail(target, activity: activity);
-    }
-  }
-
-  void notAttemptedPending() {
-    for (final row in _controllers.values.where(
-      (row) => row.state == ProgressRowState.pending,
-    )) {
-      row.notAttempted();
-    }
-  }
-
-  ProgressInteractiveRunner interactive(Tools tools) {
-    return (
+/// Runs a native tool on the terminal [board] steps aside for.
+ProgressInteractiveRunner interactive(Board board, Tools tools) =>
+    (
       String executable,
       List<String> arguments, {
       String? workingDirectory,
     }) async {
-      live.suspend();
+      board.suspend();
       try {
         return await tools.runInteractive(
           executable,
@@ -128,116 +51,79 @@ final class TargetReleaseProgress {
           workingDirectory: workingDirectory,
         );
       } finally {
-        live.resume(afterNativeOutput: _output.isTerminal);
+        board.resume(afterNativeOutput: true);
       }
     };
+
+/// Says, with the run's other warnings, what [receipt]'s work found while
+/// it staged [release], each with the target that work prepares.
+void deferStageWarnings(Output output, UnitRelease release, Receipt receipt) {
+  for (final work in release.work) {
+    for (final warning in receipt.warnings(work.name)) {
+      output.deferWarning(
+        warning,
+        unit: release.unit.name,
+        target: release.preparing(work)?.id,
+      );
+    }
   }
-
-  void discard() => live.discard();
-
-  void settle({bool released = false}) => live.settle(
-    title: released
-        ? live.model.title.replaceFirst(' · releasing', ' · released')
-        : null,
-  );
 }
 
-/// Receipt-backed stage rows rendered through the shared progress model.
-final class StageReleaseProgress {
-  StageReleaseProgress(
-    Output output, {
-    required String title,
-    required this.board,
-  }) : live = output.progressBoard(title, emitSlowToNonTerminal: true),
-       _owned = true {
-    _addRows(null);
-  }
-
-  /// One unit's rows on a board several units share, each group named for
-  /// [unit]. The board's owner settles it; this only fills the rows.
-  StageReleaseProgress.shared(
-    this.live, {
-    required this.board,
-    required String unit,
-  }) : _owned = false {
-    _addRows(unit);
-  }
-
-  void _addRows(String? unit) {
-    for (final group in board.groups) {
+/// One unit's stage rows on a board: those [UnitRelease.board] lists, each
+/// filled by the work that makes it. The board's owner ends the board.
+final class StageRows {
+  /// Adds [release]'s rows to [board], each group named for [unit] when
+  /// units stage side by side on one board.
+  StageRows(Board board, UnitRelease release, {String? unit}) {
+    for (final group in release.board) {
       for (final row in group.rows) {
-        _controllers[row] = live.addRow(
-          id: row.id,
-          label: row.name,
+        _rows[row] = board.add(
+          row.id,
+          row.name,
           group: unit == null ? group.label : '$unit · ${group.label}',
         );
       }
     }
   }
 
-  final StageBoard board;
-  final LiveProgress live;
-  final bool _owned;
-  final Map<StageBoardRow, ProgressRowController> _controllers = {};
-  final Map<String, StageStep> _recorded = {};
+  final Map<BoardRow, Row> _rows = {};
 
-  ProgressHandle? handleFor(String producer) {
-    final rows = board.rowsFor(producer);
-    if (rows.isEmpty) return null;
-    return ProgressHandle.combine(rows.map((row) => _controllers[row]!.handle));
-  }
+  /// Each recorded producer's evidence, by its name.
+  final Map<String, Map<String, Object?>> _recorded = {};
 
-  Map<String, ProgressHandle> handlesFor(TargetStage stage) => {
-    for (final view in stage.progress)
-      view.id: _controllers[board.progressRow(stage.contract.name, view.id)!]!
-          .handle,
-  };
+  /// The rows [work] fills, in board order. Work whose output reaches no
+  /// destination — the release notes — fills none, and says nothing.
+  List<Row> _of(Work work) => [
+    for (final MapEntry(key: row, value: shown) in _rows.entries)
+      if (row.filledBy.any((filler) => filler.name == work.name)) shown,
+  ];
 
-  void begin(String producer, ProgressActivity activity) {
-    for (final row in board.rowsFor(producer)) {
-      final controller = _controllers[row]!;
-      if (controller.state == ProgressRowState.complete) continue;
-      controller.handle.begin(activity);
+  Rows of(Work work) => Rows(_of(work));
+
+  void begin(Work work, Activity activity) => of(work).begin(activity);
+
+  /// Fills each row whose work [receipt] records: all of it, so a row
+  /// several pieces of work make waits for the last.
+  void restore(Receipt receipt) {
+    _recorded.addAll(receipt.producers);
+    for (final MapEntry(key: row, value: shown) in _rows.entries) {
+      final expected = {for (final work in row.filledBy) work.name};
+      if (expected.isEmpty || !expected.every(_recorded.containsKey)) continue;
+      shown.complete(
+        _noteFor(expected),
+        mark: shown.state == RowState.pending ? Mark.satisfied : Mark.done,
+      );
     }
   }
 
-  void record(StageStep step) => restore([step]);
-
-  void restore(Iterable<StageStep> steps) {
-    for (final step in steps) {
-      _recorded[step.name] = step;
-    }
-    for (final group in board.groups) {
-      for (final row in group.rows) {
-        final expected = board.producersFor(row);
-        if (expected.isEmpty || !expected.every(_recorded.containsKey)) {
-          continue;
-        }
-        final controller = _controllers[row]!;
-        final note = _noteFor(expected);
-        switch (controller.state) {
-          case ProgressRowState.pending:
-            controller.restoreComplete(
-              note: note,
-              mark: ProgressRowMark.satisfied,
-            );
-          case ProgressRowState.active:
-            controller.complete(note: note);
-          case ProgressRowState.complete:
-          case ProgressRowState.failed:
-          case ProgressRowState.notAttempted:
-            break;
-        }
-      }
-    }
-  }
-
+  /// What a filled row holds: staged, and signed and notarized when its
+  /// work's evidence says so.
   String _noteFor(Set<String> producers) {
     final facts = <String>['staged'];
     for (final producer in producers) {
-      final step = _recorded[producer]!;
-      final signature = step.evidence['signature'];
-      final notary = step.evidence['notary'];
+      final evidence = _recorded[producer]!;
+      final signature = evidence['signature'];
+      final notary = evidence['notary'];
       if (signature is Map && signature['certificate'] is String) {
         facts.add('signed');
       }
@@ -248,47 +134,25 @@ final class StageReleaseProgress {
     return facts.toSet().join(' · ');
   }
 
-  void fail(String producer) {
-    for (final row in board.rowsFor(producer)) {
-      final controller = _controllers[row]!;
-      if (controller.state == ProgressRowState.active) {
-        controller.fail();
-      }
+  void fail(Work work) {
+    for (final row in _of(work)) {
+      row.fail();
     }
   }
 
-  void conclude() {
-    if (_owned) live.conclude();
-  }
-
-  /// Ends this unit's part without producing anything. On a shared board
-  /// its rows say they were not attempted.
-  void discard() {
-    if (_owned) {
-      live.discard();
-      return;
-    }
-    for (final controller in _controllers.values) {
-      if (controller.state == ProgressRowState.pending ||
-          controller.state == ProgressRowState.active) {
-        controller.notAttempted();
-      }
+  /// Ends this unit's part on a board units share, having produced
+  /// nothing: its rows were not attempted.
+  void abandon() {
+    for (final row in _rows.values) {
+      row.skip();
     }
   }
 
-  void concludeStopped() {
-    for (final group in board.groups) {
-      for (final row in group.rows) {
-        final controller = _controllers[row]!;
-        if (controller.state == ProgressRowState.active) {
-          controller.notAttempted();
-        }
-      }
+  /// After a stop elsewhere: what was under way when its lane drained was
+  /// not attempted, rather than failed.
+  void stopped() {
+    for (final row in _rows.values) {
+      if (row.state == RowState.active) row.skip();
     }
-    if (_owned) live.conclude();
-  }
-
-  void settle({String? title}) {
-    if (_owned) live.settle(title: title);
   }
 }

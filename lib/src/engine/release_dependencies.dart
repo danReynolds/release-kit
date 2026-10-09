@@ -134,12 +134,7 @@ final class ReleaseDependencyPlan {
       for (final project in unit.projects)
         for (final provider in requires(project))
           if (provider.unitName != unit.name)
-            ExternalPrerequisite(
-              dependent: project.name,
-              package: provider.name,
-              version: provider.version,
-              declaredBy: provider.unitName,
-            ),
+            ExternalPrerequisite(dependent: project.name, provider: provider),
     ];
   }
 
@@ -199,23 +194,22 @@ final class ReleaseDependencyPlan {
 /// A dependency on a package released by another unit, which must be live
 /// and verified before this unit's publication can proceed.
 class ExternalPrerequisite {
-  ExternalPrerequisite({
-    required this.dependent,
-    required this.package,
-    required this.version,
-    required this.declaredBy,
-  });
+  ExternalPrerequisite({required this.dependent, required this.provider});
 
   final String dependent;
-  final String package;
+
+  /// The sibling project that publishes the depended-on package.
+  final ResolvedProject provider;
+
+  String get package => provider.name;
 
   /// The version required, read from the depended-on project's own manifest —
   /// never inferred from the pin's form, since an ordinary caret pin would
   /// otherwise derive nothing.
-  final Version version;
+  Version get version => provider.version;
 
   /// The unit whose project declares the depended-on package.
-  final String declaredBy;
+  String get declaredBy => provider.unitName;
 
   String get coordinate => 'pub.dev/$package/$version';
 }

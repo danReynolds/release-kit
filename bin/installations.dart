@@ -4,19 +4,16 @@ library;
 import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
-import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/release_source.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/timings.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/installations/discovery.dart';
 import 'package:rk/src/installations/local.dart';
-import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
-import 'package:rk/src/installations/shell_routing.dart';
 import 'package:rk/src/installations/store.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
@@ -47,30 +44,13 @@ Future<void> installationMain(List<String> args, String command) async {
   var code = ExitCodes.ok;
   try {
     code = await _run(args, command, output, json);
-  } on InstallationFailure catch (error) {
+  } on Exception catch (error) {
+    final failure = installationFailure(error);
     output.problem(
       Diagnostic(
         code: 'RK-USE-001',
-        message: error.message,
-        remedy: error.remedy,
-      ),
-    );
-    code = ExitCodes.refused;
-  } on FileSystemException catch (error) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-USE-002',
-        message: 'Installation files could not be accessed.',
-        remedy: error.toString(),
-      ),
-    );
-    code = ExitCodes.refused;
-  } on FormatException catch (error) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-USE-002',
-        message: 'Installation metadata could not be read.',
-        remedy: '$error',
+        message: failure.message,
+        remedy: failure.remedy,
       ),
     );
     code = ExitCodes.refused;
@@ -91,70 +71,80 @@ Future<void> installationMain(List<String> args, String command) async {
   if (json) stdout.write(output.report.encode(exit: code));
 }
 
+/// What [args] ask of rk [command], with the first usage error among them.
+({
+  String? project,
+  String? source,
+  bool list,
+  bool yes,
+  bool latest,
+  bool help,
+  String? error,
+})
+_arguments(List<String> args, String command) {
+  String? project, source, error;
+  var list = false, yes = false, latest = false, help = false;
+  final rest = [...args]..remove(command);
+  for (var i = 0; i < rest.length && error == null; i++) {
+    final arg = rest[i];
+    switch (arg) {
+      case '--latest':
+        latest = true;
+      case '--list':
+        list = true;
+      case '--json': // Owned by the output.
+        break;
+      case '-y' || '--yes':
+        yes = true;
+      case '-h' || '--help':
+        help = true;
+      case _
+          when arg == '-p' ||
+              arg == '--project' ||
+              arg.startsWith('--project='):
+        if (project != null) {
+          error = 'Name one project only.';
+        } else {
+          project = arg.startsWith('--project=')
+              ? arg.substring(10)
+              : ++i < rest.length && !rest[i].startsWith('-')
+              ? rest[i]
+              : '';
+          if (project.isEmpty) error = '$arg needs a package name.';
+        }
+      case _ when !arg.startsWith('-') && source == null:
+        source = arg;
+      default:
+        error = 'Unexpected argument: $arg';
+    }
+  }
+  if (latest && (command != 'install' || source == null || list)) {
+    error = '--latest needs an explicit rk install source.';
+  }
+  if (latest && source == 'local') error = followsCheckout;
+  if (yes && (command != 'uninstall' || source == null || list)) {
+    error = '--yes needs an explicit rk uninstall source.';
+  }
+  if (list && source != null) error = '--list does not select a source.';
+  return (
+    project: project,
+    source: source,
+    list: list,
+    yes: yes,
+    latest: latest,
+    help: help,
+    error: error,
+  );
+}
+
 Future<int> _run(
   List<String> args,
   String command,
   Output output,
   bool json,
 ) async {
-  String? projectName, sourceName;
-  var list = false,
-      yes = false,
-      latest = false,
-      help = false,
-      seenCommand = false;
-  String? usageError;
-  for (var i = 0; i < args.length; i++) {
-    final arg = args[i];
-    if (arg == command && !seenCommand) {
-      seenCommand = true;
-      continue;
-    }
-    if (arg == '-p' || arg == '--project' || arg.startsWith('--project=')) {
-      if (projectName != null) {
-        usageError = 'Name one project only.';
-        break;
-      }
-      if (arg.startsWith('--project=')) {
-        projectName = arg.substring(10);
-      } else if (++i < args.length && !args[i].startsWith('-')) {
-        projectName = args[i];
-      } else {
-        usageError = '$arg needs a package name.';
-        break;
-      }
-      if (projectName.isEmpty) usageError = '$arg needs a package name.';
-    } else if (arg == '--latest') {
-      latest = true;
-    } else if (arg == '--list') {
-      list = true;
-    } else if (arg == '--json') {
-      /* Owned by the output. */
-    } else if (arg == '-y' || arg == '--yes') {
-      yes = true;
-    } else if (arg == '-h' || arg == '--help') {
-      help = true;
-    } else if (!arg.startsWith('-') && sourceName == null) {
-      sourceName = arg;
-    } else {
-      usageError = 'Unexpected argument: $arg';
-      break;
-    }
-  }
-  if (latest && (command != 'install' || sourceName == null || list)) {
-    usageError = '--latest needs an explicit rk install source.';
-  }
-  if (latest && sourceName == 'local') {
-    usageError =
-        'Local follows this checkout; it has no remote version to update.';
-  }
-  if (yes && (command != 'uninstall' || sourceName == null || list)) {
-    usageError = '--yes needs an explicit rk uninstall source.';
-  }
-  if (list && sourceName != null) {
-    usageError = '--list does not select a source.';
-  }
-  if (usageError != null) {
+  final asked = _arguments(args, command);
+  if (asked.error case final usageError?) {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-005',
@@ -164,7 +154,7 @@ Future<int> _run(
     );
     return ExitCodes.usage;
   }
-  if (help) {
+  if (asked.help) {
     output.help(installationUsage);
     output.report.next(installationUsage);
     return ExitCodes.ok;
@@ -195,19 +185,21 @@ Future<int> _run(
       'Run inside your project, or start with rk init.',
     );
   }
-  final tree = FileSystemSourceTree(root);
-  final diagnostics = Diagnostics();
-  final config = ReleaseConfig.parse(
-    tree.read('release.toml')!,
-    'release.toml',
-    diagnostics,
-  );
-  final resolution = config == null
-      ? null
-      : Resolution.forInstallation(config, tree, diagnostics);
-  if (resolution == null || diagnostics.isNotEmpty) {
-    output.problems(diagnostics.found);
-    return ExitCodes.refused;
+  final Resolution resolution;
+  switch (await ReleaseSource.configIn(
+    WorkingTree(root, git: false),
+    releasing: false,
+  )) {
+    case ConfigResolved(resolution: final resolved):
+      resolution = resolved;
+    case ConfigProblems(:final problems):
+      output.problems(problems);
+      return ExitCodes.refused;
+    case ConfigMissing():
+      throw const InstallationFailure(
+        'No rk setup found in this directory.',
+        'Run inside your project, or start with rk init.',
+      );
   }
   // Installation discovery needs only the origin, not release preflight's
   // worktree status, tags, signing configuration or branch ancestry.
@@ -218,11 +210,11 @@ Future<int> _run(
     repository: repository,
   );
   var projects = discovered;
-  if (projectName != null) {
-    projects = projects.where((p) => p.name == projectName).toList();
+  if (asked.project case final name?) {
+    projects = projects.where((p) => p.name == name).toList();
     if (projects.isEmpty) {
       throw InstallationFailure(
-        '$projectName is not an executable project here.',
+        '$name is not an executable project here.',
         'Executable projects: ${discovered.map((p) => p.name).join(', ')}.',
       );
     }
@@ -233,12 +225,12 @@ Future<int> _run(
       'Libraries are consumed as dependencies; they cannot be selected with rk use.',
     );
   }
-  final source = sourceName == null
+  final source = asked.source == null
       ? null
-      : InstallationSource.named(sourceName);
-  if (sourceName != null && source == null) {
+      : InstallationSource.named(asked.source!);
+  if (asked.source != null && source == null) {
     throw InstallationFailure(
-      'Unknown source: $sourceName',
+      'Unknown source: ${asked.source}',
       'Use rk $command --list to see supported sources.',
     );
   }
@@ -261,6 +253,7 @@ Future<int> _run(
     tools,
   );
   final dart = findExecutable('dart', environment);
+  final platform = HostCapabilities.inspect().hostPlatform;
   final manager = InstallationManager(
     store: store,
     environment: environment,
@@ -270,22 +263,22 @@ Future<int> _run(
       InstallationSource.homebrew: HomebrewInstallationProvider(
         tools,
         findExecutable('brew', environment),
+        platform: platform,
       ),
       InstallationSource.github: GithubInstallationProvider(
         tools,
         store,
-        HostCapabilities.inspect().hostPlatform,
+        platform,
       ),
     },
   );
   final commandAction = InstallationAction.values.byName(command);
-  final action = commandAction;
   final outcomes = <String>[];
   Future<List<ProjectInstallations>> refresh() async {
     final states = [
       for (final project in projects) await manager.inspect(project),
     ];
-    output.report.installations({
+    output.report.section(ReportSection.installations, {
       'root': root,
       'managed_bin': store.bin,
       'projects': states.map((s) => s.toJson()).toList(),
@@ -294,75 +287,12 @@ Future<int> _run(
     return states;
   }
 
-  Future<String> downloadLatest(
-    ExecutableProject project,
-    AvailableInstallation release,
+  Future<String> perform(
+    Operation operation,
     void Function(String) progress,
-    InstallationCancellation cancellation,
   ) async {
-    cancellation.check();
     output.report.acted = true;
-    final message = await manager.download(
-      project,
-      release,
-      progress: progress,
-      cancellation: cancellation,
-    );
-    outcomes.add(message);
-    return message;
-  }
-
-  Future<String> operate(
-    ExecutableProject project,
-    InstallationSource source,
-    void Function(String) progress,
-    InstallationCancellation cancellation, [
-    InstallationAction? override,
-  ]) async {
-    final action = override ?? commandAction;
-    cancellation.check();
-    output.report.acted = true;
-    final result = await manager.act(
-      project,
-      source,
-      action,
-      progress: progress,
-      cancellation: cancellation,
-    );
-    final routing = action == InstallationAction.use
-        ? await ShellRouting(store, tools, environment).ensure(project)
-        : null;
-    final message = [result, if (routing != null) routing].join('\n');
-    outcomes.add(message);
-    return message;
-  }
-
-  Future<String> installLatest(
-    ExecutableProject project,
-    InstallationSource source,
-    void Function(String) progress,
-    InstallationCancellation cancellation,
-  ) async {
-    final release = await manager.latest(project, source);
-    cancellation.check();
-    return downloadLatest(project, release, progress, cancellation);
-  }
-
-  Future<String> remove(
-    ExecutableProject project,
-    InstallationSource source,
-    void Function(String) progress,
-    InstallationCancellation cancellation,
-  ) async {
-    cancellation.check();
-    output.report.acted = true;
-    final message = await manager.act(
-      project,
-      source,
-      InstallationAction.uninstall,
-      progress: progress,
-      cancellation: cancellation,
-    );
+    final message = await manager.apply(operation, progress: progress);
     outcomes.add(message);
     return message;
   }
@@ -373,22 +303,14 @@ Future<int> _run(
       stdout.hasTerminal &&
       environment['TERM'] != 'dumb';
   final states = await refresh();
-  if (source == null && !list && interactive) {
+  if (source == null && !asked.list && interactive) {
     final result = await runUsePicker(
       states: states,
       refresh: refresh,
-      use: (project, source, progress, cancellation) => operate(
-        project,
-        source,
-        progress,
-        cancellation,
-        InstallationAction.use,
-      ),
-      uninstall: remove,
-      command: 'rk $command',
-      checkAvailable: (project, source, check) =>
+      check: (project, source, check) =>
           manager.latest(project, source, check: check),
-      downloadAvailable: downloadLatest,
+      perform: perform,
+      command: 'rk $command',
     );
     // The picker refreshes after operations. Dismissing it is not another
     // inspection: a Homebrew subprocess here delayed even an idle Ctrl+C.
@@ -396,47 +318,12 @@ Future<int> _run(
       _result(output, message);
     }
     if (result.exitCode != 0) return result.exitCode;
-    if (result.failed) throw InstallationFailure(result.message);
+    if (result.failure case final failure?) throw InstallationFailure(failure);
     if (outcomes.isEmpty) output.say('No installations changed.');
   } else if (source == null) {
-    for (final state in states) {
-      output.line(
-        state.project.name == state.project.label
-            ? state.project.name
-            : '${state.project.name} · ${state.project.label}',
-        strong: true,
-      );
-      for (final e in state.sources.entries) {
-        output.line(
-          e.key.label,
-          depth: 1,
-          mark: state.selected == e.key || state.currentSource == e.key
-              ? Mark.done
-              : Mark.none,
-          note:
-              e.value.problem ??
-              (e.value.installation == null
-                  ? 'Not installed'
-                  : '${e.value.installation!.version}${state.currentSource == e.key
-                        ? ' · default on PATH'
-                        : state.selected == e.key
-                        ? ' · selected'
-                        : ' · installed'}'),
-        );
-        if (e.key == InstallationSource.local && e.value.installation != null) {
-          output.line(
-            e.value.installation!.location,
-            depth: 2,
-            role: VisualRole.secondary,
-          );
-        }
-      }
-      for (final problem in state.routing) {
-        output.line(problem, mark: Mark.warning);
-      }
-    }
+    _list(output, states);
   } else {
-    if (action == InstallationAction.uninstall && !yes) {
+    if (commandAction == InstallationAction.uninstall && !asked.yes) {
       if (!interactive) {
         throw const InstallationFailure(
           'Removal needs confirmation.',
@@ -453,11 +340,12 @@ Future<int> _run(
       }
     }
     try {
-      final result = await (latest ? installLatest : operate)(
-        projects.single,
-        source,
+      final release = asked.latest
+          ? await manager.latest(projects.single, source)
+          : null;
+      final result = await perform(
+        Operation(projects.single, source, commandAction, release: release),
         (message) => output.say(message),
-        InstallationCancellation(),
       );
       _result(output, result);
     } finally {
@@ -471,5 +359,45 @@ void _result(Output output, String message) {
   final lines = message.split('\n');
   for (var i = 0; i < lines.length; i++) {
     output.line(lines[i], mark: i == 0 ? Mark.done : Mark.none);
+  }
+}
+
+/// The inventory `--list`, or a bare command without a terminal, prints.
+void _list(Output output, List<ProjectInstallations> states) {
+  for (final state in states) {
+    output.line(
+      state.project.name == state.project.label
+          ? state.project.name
+          : '${state.project.name} · ${state.project.label}',
+      strong: true,
+    );
+    for (final e in state.sources.entries) {
+      output.line(
+        e.key.label,
+        depth: 1,
+        mark: state.selected == e.key || state.currentSource == e.key
+            ? Mark.done
+            : Mark.none,
+        note:
+            e.value.problem ??
+            (e.value.installation == null
+                ? 'Not installed'
+                : '${e.value.installation!.version}${state.currentSource == e.key
+                      ? ' · default on PATH'
+                      : state.selected == e.key
+                      ? ' · selected'
+                      : ' · installed'}'),
+      );
+      if (e.key == InstallationSource.local && e.value.installation != null) {
+        output.line(
+          e.value.installation!.location,
+          depth: 2,
+          role: VisualRole.secondary,
+        );
+      }
+    }
+    for (final problem in state.routing) {
+      output.line(problem, mark: Mark.warning);
+    }
   }
 }

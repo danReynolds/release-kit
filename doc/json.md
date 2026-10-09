@@ -66,7 +66,9 @@ changes no public target.
 `unfixableByRerun`, or `actedAndUnfixable`. `beforeActing` means no public
 target changed; late native session acquisition may still have refreshed local
 credential state. The accompanying sentence states what changed and whether
-re-running can advance the work.
+re-running can advance the work. It is decided once, when the run stops, from
+what every act read back, so targets published side by side get one halt that
+is true for all of them.
 
 An empty `problems[]` remains the release gate. `warnings[]` never changes the
 exit code or authorizes work by itself; it discloses facts such as a staged
@@ -79,9 +81,9 @@ summary; `next[]` contains the publish command when publication is configured.
 
 Status reads the saved stage for the current source, if any. Its
 `completeStage` evidence includes the actual `stage id`. An exact local stage
-verdict means the receipt names this stage and records the producers this rk
-runs, and every file it publishes still has its recorded size and digest. Status performs no dependency resolution or
-producer work. An incomplete saved stage reports only its recorded local
+verdict means the receipt names this stage and records every file this rk
+publishes for the unit, each still at its recorded size and digest. Status
+performs no dependency resolution or producer work. An incomplete saved stage reports only its recorded local
 progress.
 
 ## Release plan

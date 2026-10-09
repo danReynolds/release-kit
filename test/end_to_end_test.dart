@@ -14,20 +14,18 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/release_stage.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'pub_resolution_double.dart';
 import 'rk_process.dart';
 import 'status_test.dart' show FakeRegistry;
 import 'support/compiled_rk.dart';
+import 'support/memory_source_tree.dart';
 
 /// rk run end to end: against the example repositories, through its
 /// machine surface, and through whole releases with scripted tools.
@@ -130,15 +128,18 @@ void main() {
       late Run run;
 
       setUpAll(() {
-        // A release definition that is not UTF-8. This is a real, currently
-        // unhandled decoding failure rather than an injected one — which is
-        // the point:
-        // the crash path has to be proved against something that actually
-        // crashes. When rk learns to report this one, this test must be
-        // pointed at another genuine crash, and if none can be found that is
-        // a decision worth making deliberately rather than by deletion.
+        // A project path with a NUL byte in it, which no file system can
+        // hold. This is a real, currently unhandled failure rather than an
+        // injected one — which is the point: the crash path has to be proved
+        // against something that actually crashes. When rk learns to report
+        // this one, this test must be pointed at another genuine crash, and
+        // if none can be found that is a decision worth making deliberately
+        // rather than by deletion.
         final directory = Directory('${scratch.path}/broken')..createSync();
-        File('${directory.path}/release.toml').writeAsBytesSync([0xff]);
+        File('${directory.path}/release.toml').writeAsStringSync(
+          'schema = 2\n\n[release.tool]\npath = "a\u0000b"\n'
+          'publish = ["git-tag"]\n',
+        );
         broken = Rk(directory.path);
         run = broken(['status', '--json']);
       });
@@ -380,7 +381,7 @@ publish = ["git-tag", "pub.dev"]
         signingConfigured: true,
         originUrl: 'example/keybay',
       );
-      late ReleaseStages stages;
+      late Stages stages;
       String normalizedPubKey(String key) {
         if (key.contains('pub publish --to-archive ')) {
           return 'dart pub publish --to-archive <archive>';
@@ -460,10 +461,13 @@ publish = ["git-tag", "pub.dev"]
             );
           }
           if (key == 'git cat-file tag $tagObject') {
-            final stage = stages.call(resolution.unit('core')!);
-            final manifest = File(
-              stage.directory.resolve('release-manifest.json'),
+            final stage = stages.of(
+              resolution.unit('core')!,
+              git,
+              tree,
+              sdk: sdk,
             );
+            final manifest = File(stage.pathOf('release-manifest.json'));
             final digest = manifest.existsSync()
                 ? Sha256.hex(manifest.readAsBytesSync())
                 : 'b' * 64;
@@ -496,15 +500,7 @@ publish = ["git-tag", "pub.dev"]
         addTearDown(() {
           if (stageRoot.existsSync()) stageRoot.deleteSync(recursive: true);
         });
-        stages = ReleaseStages(
-          source: tree,
-          git: git,
-          stageContracts: TargetCatalog.builtIn().stageContractResolver(
-            resolution,
-          ),
-          repositoryRoot: stageRoot.path,
-          sdk: sdk,
-        );
+        stages = Stages(stageRoot.path);
         code = await ReleaseCommand(
           allowInteractiveTools: true,
           stageOnly: stageOnly,
@@ -522,7 +518,6 @@ publish = ["git-tag", "pub.dev"]
             git: git,
             tools: tools,
             repository: 'example/keybay',
-            stageFor: stages.call,
           ),
           tools: tools,
           output: output,
@@ -535,7 +530,7 @@ publish = ["git-tag", "pub.dev"]
           // A conformance run must not read the pub session of whoever is
           // running it.
           refreshEnvironment: () => const {'HOME': '/nowhere'},
-          stageFor: stages.call,
+          stageFor: (unit) => stages.of(unit, git, tree, sdk: sdk),
         ).run(only: 'core');
       } on Object catch (error) {
         died = error;
@@ -1153,7 +1148,7 @@ publish = ["git-tag", "pub.dev"]
         expect(
           accepted,
           contains(flag),
-          reason: '$path names $flag, which rk refuses with RK-CLI-001',
+          reason: '$path names $flag, which rk refuses with RK-CLI-005',
         );
       }
     }
@@ -1326,38 +1321,27 @@ executables:
       signingConfigured: true,
       originUrl: 'example/tool',
     );
-    final stageCache = <String, ReleaseStage>{};
-    ReleaseStage stageFor(ResolvedUnit unit) =>
-        stageCache.putIfAbsent(unit.name, () {
-          final plan = <String, Object?>{
-            'unit': unit.name,
-            'version': unit.version.canonical,
-            'fixture': label,
-          };
-          final directory = StageDirectory(
-            repositoryRoot: root.path,
-            identity: StageIdentity.forPlan(
-              headCommit: git.head,
-              headTree: '2222222222222222222222222222222222222222',
-              resolvedPlan: plan,
-            ),
-          );
-          return ReleaseStage(
-            unit: unit,
-            source: tree,
-            // The scripted tools answer `dart compile`, not this machine's
-            // SDK.
-            sdk: () =>
-                DartSdk(executable: fixtureDartSdk(root), version: 'fixture'),
-            repository: git.originUrl,
-            directory: directory,
-            enforceUnitContract: true,
-            resolvedPlan: plan,
-            targetContributions: TargetCatalog.builtIn().stageContractResolver(
-              resolution,
-            )(unit: unit, repository: git.originUrl),
-          );
-        });
+    final stageCache = <String, Stage>{};
+    Stage stageFor(ResolvedUnit unit) => stageCache.putIfAbsent(unit.name, () {
+      final plan = <String, Object?>{
+        'unit': unit.name,
+        'version': unit.version.canonical,
+        'fixture': label,
+      };
+      return Stage(
+        root: root.path,
+        id: StageId.of(
+          commit: git.head,
+          tree: '2222222222222222222222222222222222222222',
+          plan: plan,
+        ),
+        plan: plan,
+        source: tree,
+        // The scripted tools answer `dart compile`, not this machine's SDK.
+        sdk: () =>
+            DartSdk(executable: fixtureDartSdk(root), version: 'fixture'),
+      );
+    });
     const releaseTagObject = '4444444444444444444444444444444444444444';
     final pushed = <String>{...remoteTags};
     final uploaded = <String>{};
@@ -1367,13 +1351,16 @@ executables:
     List<int>? publishedFormula;
     var publishedIdentityReads = 0;
     File stagedPublicAsset(String name) {
-      final stage = stageFor(resolution.unit('cli')!);
-      final artifact = name == ReleaseAssets.manifest
-          ? stage.requireReceipt().artifacts.singleWhere(
-              (item) => item.path == ReleaseAssets.manifest,
-            )
-          : stage.releaseAssets()[name]!;
-      return File(stage.directory.resolve(artifact.path));
+      final unit = resolution.unit('cli')!;
+      return File(
+        stageFor(unit).pathOf(
+          name == ReleaseAssets.manifest
+              ? name
+              : ReleaseAssets.bundleFor(
+                  unit,
+                ).singleWhere((asset) => asset.publicName == name).stagedPath,
+        ),
+      );
     }
 
     List<Map<String, Object?>> uploadedAssets() => [
@@ -1773,7 +1760,6 @@ executables:
           git: git,
           tools: tools,
           repository: 'example/tool',
-          stageFor: stageFor,
         ),
         tools: tools,
         output: output,
@@ -1808,7 +1794,7 @@ executables:
       json:
           jsonDecode(output.report.encode(exit: code)) as Map<String, Object?>,
       notes: notesAtCreate,
-      expected: Inspector.expectedAssets(resolution.unit('cli')!),
+      expected: ReleaseAssets.expectedForUnit(resolution.unit('cli')!),
     );
   }
 
@@ -2025,8 +2011,8 @@ executables:
           uploaded,
           equals(run.expected),
           reason:
-              'the release publishes exactly the set Inspector.'
-              'expectedAssets derives — any difference is a conflict verdict '
+              'the release publishes exactly the set ReleaseAssets.'
+              'expectedForUnit derives — any difference is a conflict verdict '
               'on the next run, and a published release cannot be edited',
         );
         expect(

@@ -32,7 +32,7 @@ Example: rk target pub.dev
     if (choice == null) {
       output.problem(
         Diagnostic(
-          code: 'RK-CLI-009',
+          code: 'RK-CLI-003',
           message: 'rk does not support a release choice named "$name"',
           remedy:
               'Supported: ${ReleaseChoice.values.map((item) => item.id).join(', ')}\n'
@@ -45,7 +45,9 @@ Example: rk target pub.dev
   }
 
   int _list() {
-    output.report.releaseChoices(_references.values.map((item) => item.json));
+    output.report.section(ReportSection.releaseChoices, [
+      for (final item in _references.values) item.json,
+    ]);
     output.heading('Release choices supported by rk $rkVersion');
     output.blank();
     output.say('This lists everything the installed rk can create or publish.');
@@ -79,7 +81,7 @@ Example: rk target pub.dev
 
   int _detail(_Reference reference) {
     final choice = reference.choice;
-    output.report.releaseChoices([reference.json]);
+    output.report.section(ReportSection.releaseChoices, [reference.json]);
     output.heading('${choice.id} — ${reference.title}');
     output.blank();
     output.say(reference.description);

@@ -53,27 +53,29 @@ void main() {
       final model = UsePicker(
         states: inspect(),
         refresh: () async => inspect(),
-        checkAvailable: (_, source, _) async {
+        check: (_, _, _) async {
           checks++;
-          return Release(project, source, '1.3.0');
+          return const AvailableInstallation('1.3.0');
         },
-        downloadAvailable: (_, release, progress, _) async {
-          calls.add(release.source);
-          expect(
-            ++running,
-            1,
-            reason: 'Mutations retain the store lock contract.',
-          );
-          progress('Downloading ${release.source.label}…');
-          await gates[release.source]!.future;
-          versions[release.source] = release.version;
-          running--;
-          return '${release.source.label} installed';
-        },
-        use: (_, source, _, _) async {
-          switched.add(source);
-          return 'Used';
-        },
+        perform: perform(
+          install: (_, source, release, progress, _) async {
+            calls.add(source);
+            expect(
+              ++running,
+              1,
+              reason: 'Mutations retain the store lock contract.',
+            );
+            progress('Downloading ${source.label}…');
+            await gates[source]!.future;
+            versions[source] = release.version;
+            running--;
+            return '${source.label} installed';
+          },
+          use: (_, source, _, _) async {
+            switched.add(source);
+            return 'Used';
+          },
+        ),
         close: () => closed = true,
       );
       addTearDown(model.dispose);
@@ -156,16 +158,17 @@ void main() {
         final model = UsePicker(
           states: [state],
           refresh: () async => [state],
-          checkAvailable: (_, source, _) async =>
-              Release(project, source, '1.3.0'),
-          downloadAvailable: (_, _, _, cancel) async {
-            calls++;
-            await gate.future;
-            if (failure) throw const InstallationFailure('Download failed.');
-            expect(cancel.requested, isTrue);
-            return 'Completed installation';
-          },
-          use: (_, _, _, _) async => throw StateError('No switch'),
+          check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+          perform: perform(
+            install: (_, _, _, _, cancel) async {
+              calls++;
+              await gate.future;
+              if (failure) throw const InstallationFailure('Download failed.');
+              expect(cancel.cancelled, isTrue);
+              return 'Completed installation';
+            },
+            use: (_, _, _, _) async => throw StateError('No switch'),
+          ),
           close: () => closed = true,
         );
         addTearDown(model.dispose);
@@ -201,13 +204,15 @@ void main() {
     final model = UsePicker(
       states: [state],
       refresh: () async => [state],
-      checkAvailable: (_, source, _) async => Release(project, source, '1.3.0'),
-      downloadAvailable: (_, _, _, _) => gate.future,
-      use: (_, _, _, _) async => 'Used',
-      uninstall: (_, _, _, _) async {
-        removals++;
-        return 'Removed';
-      },
+      check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+      perform: perform(
+        install: (_, _, _, _, _) => gate.future,
+        use: (_, _, _, _) async => 'Used',
+        uninstall: (_, _, _, _) async {
+          removals++;
+          return 'Removed';
+        },
+      ),
       close: () {},
     );
     addTearDown(model.dispose);
@@ -239,13 +244,15 @@ void main() {
       final model = UsePicker(
         states: [state],
         refresh: () async => [state],
-        checkAvailable: (_, _, _) {
+        check: (_, _, _) {
           final reply = Completer<AvailableInstallation>();
           replies.add(reply);
           return reply.future;
         },
-        downloadAvailable: (_, _, _, _) async => throw StateError('No update'),
-        use: (_, _, _, _) async => 'Used',
+        perform: perform(
+          install: (_, _, _, _, _) async => throw StateError('No update'),
+          use: (_, _, _, _) async => 'Used',
+        ),
         close: () {},
       );
       addTearDown(model.dispose);
@@ -265,9 +272,7 @@ void main() {
           tester.pump();
         }
         expect(updateVisible(), isFalse);
-        replies.last.complete(
-          Release(project, InstallationSource.pub, version),
-        );
+        replies.last.complete(AvailableInstallation(version));
         await settle();
         tester.pump();
         expect(updateVisible(), version == '1.4.0');

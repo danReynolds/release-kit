@@ -1,225 +1,114 @@
-import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/publish_target.dart';
 import '../engine/registry.dart';
-import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage_contract.dart';
-import '../engine/stage_receipt.dart';
+import '../engine/stage.dart';
 import '../engine/stage_source.dart';
-import '../engine/targets.dart';
 import '../engine/tools.dart';
+import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
-import '../engine/workspace.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 
-/// The tag coordinate guaranteed by a selected tag-backed target.
-///
-/// Untagged units legitimately carry no tag. Target derivation is the boundary
-/// where configuration has already proved that a Git tag, GitHub Release, or
-/// Homebrew target is selected and therefore has a tag prerequisite.
-String requiredTargetTag(ResolvedUnit unit, PublishTarget target) {
-  assert(_selects(unit, target));
-  assert(unit.publish.contains(PublishTarget.gitTag));
-  final tag = unit.tag;
-  assert(tag != null);
-  return tag!;
-}
+/// What one read of a target finds: the state of this release there, and
+/// the lane's public history. Null history means the target keeps none: its
+/// state carries its version.
+typedef TargetRead = ({Inspection state, TargetHistory? history});
 
-/// The tag pattern guaranteed by a selected tag-backed target.
-String requiredTargetTagPattern(ResolvedUnit unit, PublishTarget target) {
-  assert(_selects(unit, target));
-  assert(unit.publish.contains(PublishTarget.gitTag));
-  final pattern = unit.tagPattern;
-  assert(pattern != null);
-  return pattern!;
-}
-
-bool _selects(ResolvedUnit unit, PublishTarget target) =>
-    target.scope == TargetScope.unit
-    ? unit.publish.contains(target)
-    : unit.projects.any((project) => project.publish.contains(target));
-
-/// One built-in public target and the manifest-derived identity it reports.
+/// One built-in public target's provider behaviour.
 ///
 /// This is intentionally a closed application seam, not a runtime plugin API.
-/// Provider behavior grows behind these modules while checklist ordering stays
-/// explicit in the release coordinator.
+/// What a target is — its identity, its stage work, its files — is release
+/// model data; a module reads, prepares and publishes it, and the core
+/// release loop decides when.
 abstract base class TargetModule {
   const TargetModule();
 
   PublishTarget get target;
 
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
+  /// What [target]'s destination holds, and what its lane is already at:
+  /// read for the snapshot, again before each act, and by default after
+  /// one. [stage] is the unit's complete stage, when it has one: what a
+  /// release would publish from.
+  Future<TargetRead> read(
+    TargetReadContext reads,
+    ResolvedUnit unit,
+    Target target, {
+    Stage? stage,
   });
 
-  Future<Inspection> inspectCandidate(
-    TargetReadContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-  );
+  /// Prepares [work], this target's input to the stage: what its release
+  /// model says this target contributes.
+  Future<Produced> prepare(StageRun run, Work work) =>
+      throw StateError('${target.configName} contributes no stage work');
 
-  /// Reads the lane's public version history, when it has one.
-  ///
-  /// Candidate inspection answers whether this release exists. History
-  /// answers the separate question "what is this lane already at?" and owns
-  /// any target-specific version refusal or first-publication claim. Null
-  /// means candidate inspection already carries the lane's current version.
-  Future<TargetHistory?> inspectHistory(
-    TargetReadContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-  ) async => null;
-
-  /// Explains one conflicting public observation in this target's terms.
-  ///
-  /// Core owns when a conflict blocks. The module owns what the provider
-  /// conflict means and the safe next action; this keeps target-specific
-  /// semantics out of generic status prose without adding lifecycle hooks.
-  Diagnostic diagnoseConflict(
-    ResolvedUnit unit,
-    TargetPlan target,
-    Inspection conflict,
-  );
-
-  ProgressActivity get publishActivity;
-
-  /// Performs this target's ambient, fail-before-staging readiness check.
-  ///
-  /// Every target must choose this explicitly. A silent inherited success
-  /// would let a new publisher omit credential checks and fail only after an
-  /// earlier target had acted.
-  Future<TargetReadinessOutcome> checkReadiness(
+  /// Whether this host can publish to the target: the ambient checks before
+  /// staging, and with [signIn], the native session, once per run after the
+  /// yes. A target with credentials of its own must override this.
+  Future<TargetReadiness> ready(
     TargetReadinessContext context,
-    ResolvedUnit unit,
-  );
-
-  /// The native publication session this target needs, acquired once per
-  /// run after the yes and before the first act that needs it.
-  TargetSessionProvider? get authentication => null;
+    ResolvedUnit unit, {
+    required bool signIn,
+  }) async => const TargetReadiness();
 
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
-    Inspection inspected,
+    Target target,
+    Inspection before,
   );
 
-  /// Reads back what [act] did, when the act did not confirm it itself.
-  Future<Inspection> confirmPublication(
+  /// Reads back what [acted] did, when the act did not confirm it itself.
+  Future<Inspection> confirm(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
-    TargetActOutcome act,
-  ) => inspectCandidate(context.reads, unit, target);
+    Target target,
+    TargetActOutcome acted,
+  ) async => (await read(
+    context.reads,
+    unit,
+    target,
+    stage: context.checkedStage,
+  )).state;
 
-  /// The code and sentence for an act that did not settle exact and carried
-  /// no diagnostic of its own, or whose result is a conflict, in this
-  /// target's terms; and the command to run next, if one helps.
-  ({String code, String message, String? next}) nameUnconfirmed(
+  /// What [state], a conflict, means in this target's terms. Core decides
+  /// when it stops the release.
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection state);
+
+  /// What [acted], an act that did not settle exact, means in this target's
+  /// terms, with [state] what the read after it found, and the command to
+  /// run next when one helps. By default, what the act or the read said.
+  ({Diagnostic diagnostic, String? next}) explainAct(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection state,
-    TargetActOutcome act,
+    TargetActOutcome acted,
   ) => (
-    code: 'RK-REL-003',
-    message:
-        '${target.step.summary}: '
-        '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+    diagnostic: Diagnostic(
+      code: 'RK-REL-003',
+      message:
+          '${target.summary}: '
+          '${acted.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+    ),
     next: null,
   );
+}
 
-  /// Whether a conflict read back after this target's act is permanent. A
-  /// moving channel's is not: the next update moves it.
-  bool get conflictIsPermanent => true;
-
-  /// Classifies a provider operation that did not settle exact.
-  Future<TargetFailure> classifyUnconfirmedPublication(
-    TargetReleaseContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-    Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    final conflict = state.verdict == Verdict.conflict;
-    // The provider refused the act because a permanent target was already
-    // something else: the conflict a fresh inspection would have found, with
-    // the same advice.
-    if (conflict && conflictIsPermanent && !act.ok && !act.mayHaveActed) {
-      final advice = diagnoseConflict(unit, target, state);
-      return TargetFailure(
-        diagnostic: Diagnostic(
-          code: advice.code,
-          message: advice.message,
-          source: advice.source,
-          remedy: [?advice.remedy, ?act.problem].join('\n'),
-          evidence: act.evidence ?? act.diagnostic?.evidence,
-        ),
-        halt: actedBefore
-            ? HaltKind.actedAndUnfixable
-            : HaltKind.unfixableByRerun,
-      );
-    }
-    final given = act.diagnostic;
-    final named = given == null || conflict
-        ? nameUnconfirmed(unit, target, state, act)
-        : (code: given.code, message: given.message, next: null);
-    final details = [
-      ?given?.remedy,
-      ?act.problem,
-      ?act.privateEffectDetail,
-      if (act.privateEffectDetail == null &&
-          act.privateEffect == TargetPrivateEffect.changed)
-        'private provider state changed; this step did not confirm a public '
-            'release.',
-      if (act.privateEffectDetail == null &&
-          act.privateEffect == TargetPrivateEffect.uncertain)
-        'private provider state may have changed; no public release was '
-            'confirmed.',
-      ?state.detail,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-    ];
-    return TargetFailure(
-      diagnostic: Diagnostic(
-        code: named.code,
-        message: named.message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                  'public target before any retry'
-            : details.join('\n'),
-        evidence: act.evidence ?? given?.evidence,
+/// [history], or an unknown one when reading it threw: an unread history is
+/// never taken for an empty one.
+Future<TargetHistory> readHistory(
+  Future<TargetHistory> Function() history,
+) async {
+  try {
+    return await history();
+  } on Object catch (error) {
+    return TargetHistory(
+      inspection: Inspection.unknown(
+        'the latest public version could not be read: $error',
       ),
-      halt: conflict
-          ? (conflictIsPermanent
-                ? HaltKind.actedAndUnfixable
-                : HaltKind.stoppedPartway)
-          : act.mayHaveActed ||
-                act.privateEffect == TargetPrivateEffect.uncertain ||
-                state.verdict == Verdict.unknown
-          ? HaltKind.lostTrack
-          : act.privateEffect == TargetPrivateEffect.changed || actedBefore
-          ? HaltKind.stoppedPartway
-          : HaltKind.beforeActing,
-      nextCommand: named.next,
     );
   }
-
-  TargetStage? stageInput({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-  }) => null;
-
-  /// Whether [inspected] carries what this target needs to publish without
-  /// its stage: authenticated public inputs a moving channel can finish
-  /// from once the local stage is gone.
-  bool recoversWithoutStage(Inspection inspected) => false;
 }
 
 /// One typed read of a target's independent public history.
@@ -238,7 +127,7 @@ final class TargetHistory {
 
   factory TargetHistory.versioned({
     required Inspection inspection,
-    required TargetPlan target,
+    required Target target,
     Diagnostic Function(Version publicVersion)? regressionDiagnostic,
     Iterable<Diagnostic> problems = const [],
     Iterable<TargetClaim> claims = const [],
@@ -281,7 +170,6 @@ final class TargetReadContext {
     required this.git,
     required this.tools,
     required this.repository,
-    required this.stageFor,
     this.shared,
   });
 
@@ -290,7 +178,6 @@ final class TargetReadContext {
   final GitState git;
   final Tools? tools;
   final String? repository;
-  final ReleaseStage Function(ResolvedUnit unit)? stageFor;
 
   /// Reads several targets share within one run, by key.
   final Map<String, Future<Object?>>? shared;
@@ -302,206 +189,65 @@ final class TargetReadContext {
     if (memo == null) return read();
     return (memo[key] ??= read()).then((value) => value as T);
   }
-
-  ReleaseStage? reusableStage(ResolvedUnit unit) {
-    final factory = stageFor;
-    if (factory == null) return null;
-    try {
-      final stage = factory(unit);
-      return stage.inspect().reusable ? stage : null;
-    } on Object {
-      return null;
-    }
-  }
 }
 
-final class TargetStageContext {
-  TargetStageContext({
-    required this.contract,
-    required this.tools,
-    required this.git,
-    required void Function(String name, String contents) attach,
+/// One piece of stage work, and what it runs with.
+final class StageRun {
+  StageRun({
+    required this.unit,
     required this.stage,
     required this.source,
-    required Iterable<StageStep> priorSteps,
-    required Map<String, ProgressHandle> progress,
+    required this.tools,
+    required this.git,
+    required this.output,
+    this.rows,
     Map<String, String> fromSource = const {},
-  }) : priorSteps = List<StageStep>.unmodifiable(priorSteps),
-       fromSource = Map.unmodifiable(fromSource),
-       _attach = attach,
-       _progress = Map.unmodifiable(progress);
+  }) : fromSource = Map.unmodifiable(fromSource);
 
-  final StageStepContract contract;
+  final ResolvedUnit unit;
+
+  /// The stage in progress: its receipt records the work done so far.
+  final Stage stage;
+
+  /// The source the stage is built from. Work that builds exports it into a
+  /// directory of its own.
+  final StageSourceSnapshot source;
   final Tools tools;
   final GitState git;
   String? get repository => git.originUrl;
-  final void Function(String name, String contents) _attach;
-  void attach(String name, String contents) => _attach(name, contents);
-  final ReleaseStage stage;
-  Workspace get workspace => stage.directory.workspace;
 
-  /// The source the stage is built from. A producer that builds exports it
-  /// into a directory of its own.
-  final StageSourceSnapshot source;
-  final List<StageStep> priorSteps;
+  /// Where the work says what went wrong, and attaches what a tool said.
+  final Output output;
+
+  /// The stage rows this work fills, when it fills any.
+  final Rows? rows;
 
   /// The repository packages a Pub package takes from this source when it
   /// is staged, by name, with each one's directory relative to the
   /// repository root: those it needs whose versions are not published yet,
   /// and those only its development needs.
   final Map<String, String> fromSource;
-  final Map<String, ProgressHandle> _progress;
 
-  ProgressHandle progress(String id) =>
-      _progress[id] ?? (throw StateError('undeclared progress row "$id"'));
+  void attach(String name, String contents) =>
+      output.report.attach(name, contents);
 }
 
-typedef TargetStageProducer =
-    Future<TargetStageOutcome> Function(TargetStageContext context);
+/// What a piece of stage work found: the evidence its receipt keeps and the
+/// warnings a reused stage says again; or that it failed, having said why,
+/// and why the stage stops.
+final class Produced {
+  const Produced({this.evidence = const {}, this.warnings = const []})
+    : halt = null;
 
-sealed class TargetStageOutcome {
-  const TargetStageOutcome();
+  const Produced.failed([Stop this.halt = Stop.partway])
+    : evidence = const {},
+      warnings = const [];
 
-  List<Diagnostic> get warnings;
-}
-
-final class TargetStageSuccess extends TargetStageOutcome {
-  TargetStageSuccess(StageStep step, {Iterable<Diagnostic> warnings = const []})
-    : warnings = List.unmodifiable(warnings),
-      step = _recordTargetStageWarnings(step, warnings);
-
-  final StageStep step;
-  @override
+  final Map<String, Object?> evidence;
   final List<Diagnostic> warnings;
-}
+  final Stop? halt;
 
-final class TargetStageFailure extends TargetStageOutcome {
-  TargetStageFailure(
-    this.diagnostic, {
-    this.unit,
-    Iterable<Diagnostic> warnings = const [],
-  }) : warnings = List.unmodifiable(warnings);
-
-  final Diagnostic diagnostic;
-  final String? unit;
-  @override
-  final List<Diagnostic> warnings;
-}
-
-const _targetStageWarningsKey = 'rk_warnings';
-
-StageStep _recordTargetStageWarnings(
-  StageStep step,
-  Iterable<Diagnostic> warnings,
-) {
-  final recorded = warnings.toList();
-  if (recorded.isEmpty) return step;
-  return StageStep(
-    name: step.name,
-    outputs: step.outputs,
-    evidence: {
-      ...step.evidence,
-      _targetStageWarningsKey: [
-        for (final warning in recorded)
-          {
-            'code': warning.code,
-            'message': warning.message,
-            if (warning.remedy != null) 'remedy': warning.remedy,
-          },
-      ],
-    },
-  );
-}
-
-/// Nonblocking target warnings preserved by a reusable stage receipt.
-List<Diagnostic> recordedTargetStageWarnings(StageStep step) {
-  final values = step.evidence[_targetStageWarningsKey];
-  if (values is! List) return const [];
-  return [
-    for (final value in values)
-      if (value is Map && value['code'] is String && value['message'] is String)
-        Diagnostic(
-          code: value['code'] as String,
-          message: value['message'] as String,
-          remedy: value['remedy'] is String ? value['remedy'] as String : null,
-        ),
-  ];
-}
-
-/// One optional, target-owned contribution to the reusable local stage.
-///
-/// Declaration, validation contract, and producer stay together so they
-/// cannot drift across two lifecycle hooks.
-final class TargetStage {
-  TargetStage({
-    required this.target,
-    required this.contract,
-    required String planLabel,
-    Iterable<TargetStageProgress> progress = const [],
-    required this.prepare,
-  }) : planLabel = _planLabel(planLabel),
-       progress = List.unmodifiable(progress) {
-    final ids = <String>{};
-    final outputs = <String>{};
-    for (final view in this.progress) {
-      if (!ids.add(view.id)) {
-        throw ArgumentError('duplicate target stage progress id ${view.id}');
-      }
-      final output = view.output;
-      if (output != null && !contract.outputs.containsKey(output)) {
-        throw ArgumentError(
-          '${contract.name} progress binds undeclared output $output',
-        );
-      }
-      if (output != null && !outputs.add(output)) {
-        throw ArgumentError(
-          '${contract.name} progress binds output $output twice',
-        );
-      }
-    }
-  }
-
-  final TargetPlan target;
-  final StageStepContract contract;
-  final String planLabel;
-  final List<TargetStageProgress> progress;
-  final TargetStageProducer prepare;
-
-  static String _planLabel(String value) {
-    final label = value.trim();
-    if (label.isEmpty || label.contains('\n')) {
-      throw ArgumentError('a target stage plan label must be one line');
-    }
-    return label;
-  }
-}
-
-/// How one target-owned stage contribution appears in the shared board.
-///
-/// [artifact] binds a declared producer output to a public artifact row already
-/// declared by the target expectation. A validation-only contribution supplies
-/// [label] instead. Unbound outputs remain receipt-validated but do not invent
-/// rows for private intermediates.
-final class TargetStageProgress {
-  const TargetStageProgress.row({required this.id, required this.label})
-    : artifact = null,
-      output = null,
-      assert(id != ''),
-      assert(label != '');
-
-  const TargetStageProgress.output({
-    required this.id,
-    required this.output,
-    required this.artifact,
-  }) : label = null,
-       assert(id != ''),
-       assert(output != ''),
-       assert(artifact != '');
-
-  final String id;
-  final String? label;
-  final String? artifact;
-  final String? output;
+  bool get ok => halt == null;
 }
 
 final class TargetClaim {
@@ -524,6 +270,7 @@ final class TargetReleaseContext {
   const TargetReleaseContext({
     required this.reads,
     required this.tools,
+    required this.release,
     required this.stage,
     required this.progress,
     this.runInteractive,
@@ -536,12 +283,26 @@ final class TargetReleaseContext {
   final Tools tools;
   GitState get git => reads.git;
   String? get repository => reads.repository;
-  final ReleaseStage stage;
-  final ProgressHandle progress;
+
+  /// The release the act is part of, which [stage] is checked against.
+  final UnitRelease release;
+
+  /// The complete stage the act publishes from; null when what is left
+  /// finishes from public inputs alone.
+  final Stage? stage;
+
+  /// [stage], checked again now: a read compares what is public with the
+  /// stage only while it still checks. One that changed is read without
+  /// it, and the check before the next act refuses it.
+  Stage? get checkedStage => switch (stage) {
+    final stage? when stage.check(release).reusable => stage,
+    _ => null,
+  };
+
+  final Rows progress;
 
   /// Native inherited-stdio access, absent for JSON and redirected output.
   final ProgressInteractiveRunner? runInteractive;
-  Workspace get workspace => stage.directory.workspace;
   final Future<void> Function(Duration duration) wait;
   final Duration confirmDeadline;
   final Duration confirmInterval;
@@ -560,25 +321,19 @@ final class TargetReadinessContext {
   final Tools tools;
   final GitState git;
   final Map<String, String> environment;
-  final ProgressHandle? progress;
+  final Rows? progress;
   final ProgressInteractiveRunner? runInteractive;
 }
 
-sealed class TargetReadinessOutcome {
-  const TargetReadinessOutcome();
-}
+/// Whether a target can be published from this host: ready, with a note
+/// for its row, or refused, with the problem that says why.
+final class TargetReadiness {
+  const TargetReadiness({this.note = 'checked'}) : problem = null;
 
-final class TargetReady extends TargetReadinessOutcome {
-  const TargetReady({this.note = 'checked'});
+  const TargetReadiness.refused(Diagnostic this.problem) : note = 'refused';
 
   final String note;
-}
-
-final class TargetNotReady extends TargetReadinessOutcome {
-  const TargetNotReady(this.diagnostic, {this.unit});
-
-  final Diagnostic diagnostic;
-  final String? unit;
+  final Diagnostic? problem;
 }
 
 typedef ProgressInteractiveRunner =
@@ -588,19 +343,6 @@ typedef ProgressInteractiveRunner =
       String? workingDirectory,
     });
 
-abstract base class TargetSessionProvider {
-  const TargetSessionProvider();
-
-  String get id;
-  ProgressActivity get activity;
-
-  Future<TargetReadinessOutcome> acquire(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetPlan> targets,
-  );
-}
-
 /// Provider-neutral facts returned by one target act.
 final class TargetActOutcome {
   const TargetActOutcome({
@@ -608,9 +350,7 @@ final class TargetActOutcome {
     this.problem,
     this.mayHaveActed = false,
     this.privateEffect = TargetPrivateEffect.none,
-    this.privateEffectDetail,
     this.diagnostic,
-    this.coordinate,
     this.successNote,
     this.includeInspectionDetail = false,
     this.reconciledNote,
@@ -622,20 +362,16 @@ final class TargetActOutcome {
   final String? problem;
   final bool mayHaveActed;
   final TargetPrivateEffect privateEffect;
-  final String? privateEffectDetail;
   final Diagnostic? diagnostic;
-  final String? coordinate;
   final String? successNote;
   final bool includeInspectionDetail;
   final String? reconciledNote;
 
   /// What the native tool said, when a tool is what failed.
   ///
-  /// [problem] is the line the operator reads. This is the rest, carried to
-  /// `classifyUnconfirmedPublication`, which builds the one diagnostic that
-  /// is reported —
-  /// so the account of a half-finished publish survives the sentence
-  /// summarizing it.
+  /// [problem] is the line the operator reads. This is the rest, carried
+  /// into the one diagnostic that is reported, so the account of a
+  /// half-finished publish survives the sentence summarizing it.
   final String? evidence;
 
   /// The public state the act itself established, when the provider's own
@@ -644,18 +380,6 @@ final class TargetActOutcome {
   final Inspection? confirmed;
 }
 
-/// A private provider-side effect that is not itself a published release.
+/// A private provider-side effect that is not itself a published release:
+/// a GitHub release's draft, the one any target has.
 enum TargetPrivateEffect { none, changed, uncertain }
-
-/// The target's final classification after an act and authoritative read-back.
-final class TargetFailure {
-  const TargetFailure({
-    required this.diagnostic,
-    required this.halt,
-    this.nextCommand,
-  });
-
-  final Diagnostic diagnostic;
-  final HaltKind halt;
-  final String? nextCommand;
-}

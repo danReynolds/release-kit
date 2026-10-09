@@ -1,18 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/engine/stage_store.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:test/test.dart';
 
 void main() {
   late Directory scratch;
   late Directory repository;
-  late StageStore store;
+  late Stages store;
 
   setUp(() {
     scratch = Directory.systemTemp.createTempSync('rk-stage-store-');
     repository = Directory('${scratch.path}/repository')..createSync();
-    store = StageStore(repository.path);
+    store = Stages(repository.path);
   });
 
   tearDown(() {
@@ -20,7 +20,7 @@ void main() {
   });
 
   test('a missing store is empty and inspection creates nothing', () {
-    final inventory = store.inventory();
+    final inventory = store.list();
 
     expect(inventory, isEmpty);
     expect(Directory('${repository.path}/.rk').existsSync(), isFalse);
@@ -33,7 +33,7 @@ void main() {
     final outside = Directory('${scratch.path}/outside')..createSync();
     Link('${stages.path}/c').createSync(outside.path);
 
-    final inventory = store.inventory();
+    final inventory = store.list();
 
     expect(inventory.map((entry) => entry.name), ['a', 'b', 'c']);
     expect(inventory.map((entry) => entry.type), [
@@ -48,10 +48,10 @@ void main() {
     Directory('${stages.path}/first')
       ..createSync()
       ..createTempSync('nested-');
-    final inventory = store.inventory();
+    final inventory = store.list();
     Directory('${stages.path}/later').createSync();
 
-    expect(inventory.where(store.deleteEntry).length, 1);
+    expect(inventory.where(store.remove).length, 1);
     expect(Directory('${stages.path}/first').existsSync(), isFalse);
     expect(Directory('${stages.path}/later').existsSync(), isTrue);
   });
@@ -62,29 +62,34 @@ void main() {
     final sentinel = File('${outside.path}/sentinel')
       ..writeAsStringSync('safe');
     final link = Link('${stages.path}/orphan')..createSync(outside.path);
-    final inventory = store.inventory();
+    final inventory = store.list();
 
-    expect(inventory.where(store.deleteEntry).length, 1);
+    expect(inventory.where(store.remove).length, 1);
     expect(link.existsSync(), isFalse);
     expect(sentinel.readAsStringSync(), 'safe');
   });
 
-  test('a fixed path link is refused rather than followed', () {
+  test('a linked .rk is the repository\'s own: stages live through it', () {
     final outside = Directory('${scratch.path}/outside')..createSync();
+    Directory('${outside.path}/work/stages/kept').createSync(recursive: true);
     Link('${repository.path}/.rk').createSync(outside.path);
 
-    expect(store.inventory, throwsA(isA<StageStoreUnsafe>()));
-    expect(outside.existsSync(), isTrue);
+    store.lock().close();
+    final listed = store.list();
+    expect(listed.map((entry) => entry.name), ['kept']);
+    expect(listed.where(store.remove).length, 1);
+    expect(Directory('${outside.path}/work/stages/kept').existsSync(), isFalse);
+    expect(Link('${repository.path}/.rk').existsSync(), isTrue);
   });
 
   test('a changed entry type shrinks rather than expands deletion', () {
     final stages = Directory(store.path)..createSync(recursive: true);
     final entry = File('${stages.path}/candidate')..writeAsStringSync('old');
-    final inventory = store.inventory();
+    final inventory = store.list();
     entry.deleteSync();
     Directory(entry.path).createSync();
 
-    expect(inventory.where(store.deleteEntry), isEmpty);
+    expect(inventory.where(store.remove), isEmpty);
     expect(Directory(entry.path).existsSync(), isTrue);
   });
 
@@ -103,7 +108,7 @@ void main() {
       process.kill();
     });
 
-    expect(store.acquireForMutation, throwsA(isA<StageStoreBusy>()));
+    expect(store.lock, throwsA(isA<StageStoreBusy>()));
 
     process.stdin.writeln('done');
     await process.stdin.close();

@@ -2,41 +2,25 @@ import 'dart:io';
 
 import 'builds/capability.dart';
 import 'builds/dart_cli.dart';
+import 'builds/macos_identity.dart';
 import 'engine/assets.dart';
-import 'engine/checklist.dart';
 import 'engine/diagnostic.dart';
 import 'output/output.dart';
-import 'output/progress.dart';
 import 'engine/resolve.dart';
-import 'engine/release_stage.dart';
+import 'engine/stage.dart';
 import 'engine/tools.dart';
+import 'engine/unit_release.dart';
 import 'engine/verdict.dart';
-import 'engine/workspace.dart';
 import 'transforms/archive.dart';
+import 'targets/target_module.dart';
 import 'transforms/macos.dart';
 
-/// The local half of shipping binaries, one checklist step at a time.
+/// The local half of shipping binaries, one step at a time: buildStep,
+/// notarizeStep and archiveStep, each run by the stage runner.
 ///
-/// It sits at the top of `lib/src` because it belongs to none of the
-/// directories below it. It is not a verb — no argument parsing, no exit
-/// codes; its API is buildStep, notarizeStep, and archiveStep, each called by
-/// `commands/release.dart`. And it is not an
-/// adapter by this codebase's own test, the one `targets/git_tag/client.dart`
-/// states: it holds an [Output] at thirty-odd sites, where every file in
-/// `builds/`, `transforms/` and `destinations/` holds one at zero.
-///
-/// It lived in `commands/` until `ls` there exposed a non-command alongside
-/// the operational verbs promised by the README and RFC.
-///
-/// This used to be one `produce()` that ran the whole chain inside the first
-/// build step and handed a `_produced` list to the steps after it — which
-/// made the checklist's ten steps a fiction: per-step verdicts were
-/// invented, a mid-chain failure was reported against the wrong step, and
-/// CI could never split what one step secretly did. Now each step is its own
-/// act: it reads what it needs from the [Workspace] by name, does one thing,
-/// and writes what it made back by name. Nothing is carried between steps
-/// in memory (CI readiness, seam 1); the workspace is the interface
-/// (seam 3).
+/// Each step is its own act: it reads what it needs from the [Stage] by
+/// name, does one thing, and writes what it made back by name. Nothing is
+/// carried between steps in memory; the stage is the interface.
 ///
 /// Reuse is the coordinator's job, not this class's: a producer runs only
 /// when the stage receipt lacks its step, and a validated receipt is the one
@@ -46,20 +30,20 @@ class BinaryChain {
   BinaryChain({
     required this.tools,
     required this.output,
-    required this.workspace,
+    required this.stage,
     required this.repositoryRoot,
     required this.capabilities,
     this.compilerExecutable = 'dart',
-    this.stage,
   });
 
   final Tools tools;
   final Output output;
-  final Workspace workspace;
+
+  /// Where each step finds what an earlier one made, and leaves its own.
+  final Stage stage;
   final String repositoryRoot;
   final HostCapabilities capabilities;
   final String compilerExecutable;
-  final ReleaseStage? stage;
 
   // ---- build ----
 
@@ -69,11 +53,11 @@ class BinaryChain {
   /// seconds, so a signing failure rebuilds rather than maintaining a
   /// transient unsigned intermediate every validator would have to know
   /// about. [signing] is present exactly when [step] is a macOS platform.
-  Future<LocalProducerOutcome> buildStep(
-    Step step,
+  Future<Produced> buildStep(
+    Work step,
     ResolvedProject project, {
-    MacSigning? signing,
-    ProgressHandle? progress,
+    MacIdentity? signing,
+    Rows? progress,
   }) async {
     // The release refused a platform this host cannot produce before any
     // work began (RK-HOST-001).
@@ -82,7 +66,7 @@ class BinaryChain {
 
     final name = ReleaseAssets.binaryPath(project, platform);
 
-    File(workspace.pathOf(name)).parent.createSync(recursive: true);
+    File(stage.pathOf(name)).parent.createSync(recursive: true);
     // Pub resolves the build in the lane's copy of the commit, through its
     // own cache and lockfile, as `dart compile` does anywhere.
     final built =
@@ -93,15 +77,13 @@ class BinaryChain {
         ).build(
           platform: platform,
           entryPoint: 'bin/$executable.dart',
-          output: workspace.pathOf(name),
+          output: stage.pathOf(name),
           workingDirectory: project.directoryIn(repositoryRoot),
           expectedVersion: project.version.canonical,
           defines: project.dartDefines,
           onProgress: (event) {
             if (event == DartBuildEvent.testing) {
-              progress?.begin(
-                ProgressActivity(running: 'testing', failed: 'test failed'),
-              );
+              progress?.begin((running: 'testing', failed: 'test failed'));
             }
           },
         );
@@ -115,7 +97,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return LocalProducerOutcome.failed(built.problem ?? 'the build failed');
+      return const Produced.failed();
     }
 
     // The proof's absence travels with the artifact. `built` alone would
@@ -127,22 +109,13 @@ class BinaryChain {
 
     if (signing == null) {
       if (built.unproven case final unproven?) {
-        output.step(
+        output.report.step(
           step,
           verdict: Verdict.exact,
           detail: 'built, not executed — $unproven',
-          note: 'built, not executed — $unproven',
-          show: false,
         );
       }
-      return LocalProducerOutcome.succeeded(
-        outputs: [
-          for (final entry in ReleaseAssets.binaryOutputs(
-            project,
-            platform,
-          ).entries)
-            LocalProducerOutput(entry.key, entry.value),
-        ],
+      return Produced(
         evidence: {
           'smoke': smoke,
           'artifact': ReleaseAssets.binaryArtifact(project, platform).toJson(),
@@ -150,9 +123,7 @@ class BinaryChain {
       );
     }
 
-    progress?.begin(
-      ProgressActivity(running: 'signing', failed: 'signing failed'),
-    );
+    progress?.begin((running: 'signing', failed: 'signing failed'));
     return _sign(step, project, smoke, signing);
   }
 
@@ -160,24 +131,20 @@ class BinaryChain {
   ///
   /// The requirement is derived from the release users already installed —
   /// asking the certificate about to sign what it will sign with is a
-  /// tautology. [MacSigning.codeId] is resolved by the caller, before
-  /// anything acts: it is read off the published binary, or declared, or the
-  /// release was refused (RK-SIGN-009).
-  Future<LocalProducerOutcome> _sign(
-    Step step,
+  /// tautology. [MacIdentity.codeId] is settled before anything acts: it is
+  /// read off the published binary, or declared, or the release was refused
+  /// (RK-SIGN-009).
+  Future<Produced> _sign(
+    Work step,
     ResolvedProject project,
     Map<String, Object?> smoke,
-    MacSigning signing,
+    MacIdentity signing,
   ) async {
     final platform = step.platform!;
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
     final published = signing.publishedRequirement;
-    LocalProducerOutcome fail(
-      String code,
-      String message, {
-      String? transcript,
-    }) {
+    Produced fail(String code, String message, {String? transcript}) {
       output.problem(
         Diagnostic(
           code: code,
@@ -187,7 +154,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return LocalProducerOutcome.failed(message);
+      return const Produced.failed();
     }
 
     final signer = MacOsSigner(tools: tools);
@@ -203,8 +170,8 @@ class BinaryChain {
           ? (shipped.toList()..sort())
           : const <String>[];
       final signed = await signer.sign(
-        binary: workspace.pathOf(name),
-        identity: signing.identity,
+        binary: stage.pathOf(name),
+        identity: signing.identity!,
         codeId: codeId,
         pinnedLibraries: pins,
       );
@@ -217,9 +184,7 @@ class BinaryChain {
       }
       final record = <String, Object?>{'code_id': codeId};
       if (file.loadedByIdentity) {
-        final reading = await signer.codeDirectoryHashes(
-          workspace.pathOf(name),
-        );
+        final reading = await signer.codeDirectoryHashes(stage.pathOf(name));
         final hashes = reading.hashes;
         if (hashes == null) {
           return fail(
@@ -239,7 +204,7 @@ class BinaryChain {
     // to: the runtime's designated requirement, which must be the one
     // already published.
     final requirement = await signer.designatedRequirement(
-      workspace.pathOf('$root/${artifact.identityFile}'),
+      stage.pathOf('$root/${artifact.identityFile}'),
     );
     if (requirement == null) {
       return fail('RK-SIGN-002', 'the signature could not be read back');
@@ -255,29 +220,30 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      output.step(
-        step,
+      // The difference itself, not the fact of one: both requirements are
+      // printed as well as recorded.
+      final evidence = {'published': published, 'produced': requirement};
+      output.report.step(step, verdict: Verdict.conflict, evidence: evidence);
+      output.line(
+        step.summary,
         mark: Mark.blocked,
-        verdict: Verdict.conflict,
-        evidence: {'published': published, 'produced': requirement},
-        show: true,
+        depth: 1,
+        state: RuntimeState.failure,
       );
-      return LocalProducerOutcome.failed(
-        'the produced signature differs from the published identity',
-        output.report.actedPublicly
-            ? HaltKind.actedAndUnfixable
-            : HaltKind.unfixableByRerun,
-      );
+      for (final MapEntry(:key, :value) in evidence.entries) {
+        output.line('$key  $value', depth: 2, role: VisualRole.secondary);
+      }
+      return const Produced.failed(Stop.unfixable);
     }
     signatures[artifact.identityFile] = {
       ...signatures[artifact.identityFile]!,
       'first_identity': published == null,
       'published_requirement': published,
       'designated_requirement': requirement,
-      'certificate': signing.identity.name,
+      'certificate': signing.certificate,
     };
     final signedSmoke = await tools.run(
-      workspace.pathOf('$root/${artifact.entryPoint}'),
+      stage.pathOf('$root/${artifact.entryPoint}'),
       const ['--version'],
       timeout: const Duration(minutes: 2),
     );
@@ -289,14 +255,7 @@ class BinaryChain {
         transcript: signedSmoke.transcript,
       );
     }
-    return LocalProducerOutcome.succeeded(
-      outputs: [
-        for (final entry in ReleaseAssets.binaryOutputs(
-          project,
-          platform,
-        ).entries)
-          LocalProducerOutput(entry.key, entry.value),
-      ],
+    return Produced(
       evidence: {
         'artifact': artifact.toJson(),
         'smoke': smoke,
@@ -308,50 +267,12 @@ class BinaryChain {
     );
   }
 
-  /// The team id inside a designated requirement, which is the one fact
-  /// needed to pick the certificate that can reproduce it.
-  ///
-  /// The quotes are optional because codesign's requirement printer only
-  /// quotes an OU that needs quoting: a team id beginning with a digit
-  /// prints as `leaf[subject.OU] = "2DC432GLL2"`, one beginning with a
-  /// letter as `leaf[subject.OU] = Q6L2SF6YDW` — confirmed against real
-  /// signed apps and a csreq round-trip. The quoted-only version of this
-  /// returned null for every letter-leading team, which misread an
-  /// established identity as "no team rk can read".
-  static String? teamOf(String requirement) => RegExp(
-    r'subject\.OU\]\s*=\s*"?([A-Z0-9]+)"?',
-  ).firstMatch(requirement)?.group(1);
-
-  /// The code identifier inside a designated requirement — always quoted by
-  /// codesign's printer, unlike the OU.
-  ///
-  /// Public because the preflight compares it against a declared one before
-  /// anything acts; it had a one-line public forwarder around it for that,
-  /// which is a module punched through for a single caller.
-  /// The program identity named by a designated requirement.
-  ///
-  /// codesign quotes an identifier only when it has to. `rk` prints bare while
-  /// `"io.github.danreynolds.keybay.cli"` is quoted, so reading only the quoted
-  /// form leaves a program unable to recognise its own published identity —
-  /// which surfaces on the second release, never the first, because the first
-  /// has no published requirement to read.
-  static String? identifierOf(String requirement) {
-    final match = RegExp(
-      r'identifier\s+(?:"([^"]+)"|([^\s"]+))',
-    ).firstMatch(requirement);
-    if (match == null) return null;
-    return match.group(1) ?? match.group(2);
-  }
-
   // ---- notarize ----
 
-  Future<LocalProducerOutcome> notarizeStep(
-    Step step,
-    ResolvedProject project,
-  ) async {
+  Future<Produced> notarizeStep(Work step, ResolvedProject project) async {
     final platform = step.platform!;
-    for (final path in ReleaseAssets.binaryOutputs(project, platform).keys) {
-      if (!workspace.exists(path)) {
+    for (final path in ReleaseAssets.binaryOutputs(project, platform)) {
+      if (!File(stage.pathOf(path)).existsSync()) {
         return _missingArtifact(step, path, 'the build step produces it');
       }
     }
@@ -369,7 +290,7 @@ class BinaryChain {
       ).files) {
         final copy = File('$payload/${file.path}')
           ..parent.createSync(recursive: true);
-        File(workspace.pathOf('$root/${file.path}')).copySync(copy.path);
+        File(stage.pathOf('$root/${file.path}')).copySync(copy.path);
       }
       final zip = '${scratch.path}/${project.executable}.zip';
       final zipped = await tools.run('ditto', ['-c', '-k', payload, zip]);
@@ -383,7 +304,7 @@ class BinaryChain {
           ),
           unit: step.unit,
         );
-        return LocalProducerOutcome.failed(zipped.summary);
+        return const Produced.failed();
       }
 
       // The wait is Apple's, and silence during it reads as a hang — this is
@@ -399,20 +320,12 @@ class BinaryChain {
           ),
           unit: step.unit,
         );
-        return LocalProducerOutcome.failed(
-          notarized.problem ?? 'Apple rejected the submission',
-        );
+        return const Produced.failed();
       }
-      output.step(
-        step,
-        verdict: Verdict.exact,
-        detail: 'notarized',
-        show: false,
-      );
+      output.report.step(step, verdict: Verdict.exact, detail: 'notarized');
       // Apple's verdict is about the signed files, which the archive step
       // packs as they are; a consumer asks Apple about the exact bytes.
-      return LocalProducerOutcome.succeeded(
-        outputs: const [],
+      return Produced(
         evidence: {
           'notary': {
             'status': 'Accepted',
@@ -427,17 +340,14 @@ class BinaryChain {
 
   // ---- archive ----
 
-  Future<LocalProducerOutcome> archiveStep(
-    Step step,
-    ResolvedProject project,
-  ) async {
+  Future<Produced> archiveStep(Work step, ResolvedProject project) async {
     final platform = step.platform!;
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
     final entries = <ArchiveEntry>[];
     for (final file in artifact.files) {
       final name = '$root/${file.path}';
-      final bytes = workspace.readBytes(name);
+      final bytes = stage.readBytes(name);
       if (bytes == null) {
         return _missingArtifact(step, name, 'the build step produces it');
       }
@@ -460,25 +370,12 @@ class BinaryChain {
     }
 
     final name = ReleaseAssets.archivePath(project, platform);
-    workspace.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
-    output.step(
-      step,
-      show: false,
-      mark: Mark.done,
-      verdict: Verdict.exact,
-      detail: name,
-      note: name,
-    );
-    return LocalProducerOutcome.succeeded(
-      outputs: [LocalProducerOutput(name, 'archive')],
-    );
+    stage.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
+    output.report.step(step, verdict: Verdict.exact, detail: name);
+    return const Produced();
   }
 
-  LocalProducerOutcome _missingArtifact(
-    Step step,
-    String name,
-    String producedBy,
-  ) {
+  Produced _missingArtifact(Work step, String name, String producedBy) {
     output.problem(
       Diagnostic(
         code: 'RK-WORK-001',
@@ -487,71 +384,6 @@ class BinaryChain {
       ),
       unit: step.unit,
     );
-    return LocalProducerOutcome.failed('the workspace has no $name');
+    return const Produced.failed();
   }
-}
-
-/// What a macOS build needs to sign what it compiled.
-///
-/// Resolved by the coordinator before anything acts, so the one step that
-/// makes an identity permanent never invents a value nothing stated.
-final class MacSigning {
-  const MacSigning({
-    required this.publishedRequirement,
-    required this.codeId,
-    required this.identity,
-  });
-
-  /// The designated requirement of the release users already installed, or
-  /// null on a first signed release.
-  final String? publishedRequirement;
-
-  final String codeId;
-
-  /// The certificate the preflight chose: the one Developer ID on a first
-  /// release, or the one for the published release's team.
-  final SigningIdentity identity;
-}
-
-/// One stage-relative file a local producer created or authoritatively reused.
-class LocalProducerOutput {
-  const LocalProducerOutput(this.path, this.type);
-
-  /// A workspace-relative path, never a host filesystem path.
-  final String path;
-  final String type;
-}
-
-/// The complete handoff from one local operation to the stage receipt writer.
-///
-/// Producers still render their established diagnostics. This value carries
-/// only the machine facts the receipt needs: whether the operation completed,
-/// which stage-relative outputs it owns, and the evidence learned while doing
-/// the work. The receipt writer therefore does not have to rediscover semantic
-/// facts from mutable workspace files after the operation returns.
-class LocalProducerOutcome {
-  LocalProducerOutcome.succeeded({
-    required Iterable<LocalProducerOutput> outputs,
-    Map<String, Object?> evidence = const {},
-  }) : ok = true,
-       problem = null,
-       halt = null,
-       outputs = List<LocalProducerOutput>.unmodifiable(outputs),
-       evidence = Map<String, Object?>.unmodifiable(evidence);
-
-  const LocalProducerOutcome.failed([this.problem, this.halt])
-    : ok = false,
-      outputs = const [],
-      evidence = const {};
-
-  final bool ok;
-  final String? problem;
-
-  /// The halt this failure asks for, when stronger than the default
-  /// stopped-partway. The producer knows what its failure means; the
-  /// coordinator speaks the halt exactly once, after the drain.
-  final HaltKind? halt;
-
-  final List<LocalProducerOutput> outputs;
-  final Map<String, Object?> evidence;
 }

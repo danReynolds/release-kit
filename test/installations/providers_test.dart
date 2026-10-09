@@ -8,6 +8,7 @@ import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
+import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/store.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
 import 'package:rk/src/targets/homebrew/installation.dart';
@@ -77,6 +78,10 @@ void main() {
           ArchiveEntry(name: 'orbit', bytes: [1]),
           ArchiveEntry(name: 'surprise', bytes: [2]),
         ],
+        // Another program's archive.
+        [
+          ArchiveEntry(name: 'comet', bytes: [1], executable: true),
+        ],
         [
           ArchiveEntry(
             name: BinaryArtifact.manifestName,
@@ -112,16 +117,22 @@ void main() {
         '${scratch.path}/store',
         const SystemTools(),
       );
-      final archive = Uint8List.fromList(
+      Uint8List orbit(String script) => Uint8List.fromList(
         ArchiveBuilder.gzip(
           ArchiveBuilder.tar([
             ArchiveEntry(
               name: 'orbit',
-              bytes: utf8.encode('#!/bin/sh\nprintf "release 1.1.0\\n"\n'),
+              bytes: utf8.encode(script),
               executable: true,
             ),
           ]),
         ),
+      );
+      final archive = orbit('#!/bin/sh\nprintf "release 1.1.0\\n"\n');
+      // What a tampered download could be: a well-formed archive of the same
+      // program, which only the release checksum refuses.
+      final tampered = orbit(
+        '#!/bin/sh\nprintf "release 1.1.0\\n"\n# not what was released\n',
       );
       final name = ReleaseAssets.archiveName('orbit', '1.1.0', 'linux-x64');
       var corrupt = false;
@@ -131,7 +142,7 @@ void main() {
         tag: 'v1.1.0',
         commit: 'a' * 40,
         artifacts: [
-          ReleaseManifestArtifact(
+          (
             name: name,
             type: 'archive',
             size: archive.length,
@@ -173,17 +184,17 @@ void main() {
           }
           expect(uri.pathSegments.last, name);
           expect(limit, archive.length);
-          return corrupt ? Uint8List(archive.length) : archive;
+          return corrupt ? tampered : archive;
         },
       );
       corrupt = true;
       await expectLater(
-        provider.install(project, (_) {}),
+        provider.install(project, null, (_) {}),
         throwsA(isA<InstallationFailure>()),
       );
       expect(Directory(store.root).existsSync(), isFalse);
       corrupt = false;
-      final installed = await provider.install(project, (_) {});
+      final installed = await provider.install(project, null, (_) {});
       expect(installed.version, '1.1.0');
       expect(
         (await Process.run(installed.commands['orbit']!.executable, [])).stdout,
@@ -193,7 +204,7 @@ void main() {
         (await provider.inspect(project)).installation!.location,
         installed.location,
       );
-      await provider.uninstall(project, installed);
+      await provider.uninstall(project);
       expect(Directory(installed.location).existsSync(), isFalse);
       expect((await provider.inspect(project)).installation, isNull);
       expect(Directory(project.directory).existsSync(), isTrue);
@@ -246,7 +257,7 @@ void main() {
         (await provider.inspect(project)).problem,
         contains('dart pub global activate --no-executables ${project.name}'),
       );
-      final installed = await provider.install(project, (_) {});
+      final installed = await provider.install(project, null, (_) {});
       expect(calls.single, contains('--no-executables'));
       expect(
         installed.commands['orbit']!.arguments.last,
@@ -272,7 +283,11 @@ void main() {
     () async {
       final project = fixture(scratch, commands: ['orbit'], binary: true);
       final brew = FakeHomebrew('${scratch.path}/brew');
-      final provider = HomebrewInstallationProvider(brew.tools, '/brew');
+      final provider = HomebrewInstallationProvider(
+        brew.tools,
+        '/brew',
+        platform: 'linux-x64',
+      );
       expect((await provider.inspect(project)).installation, isNull);
       brew.pour('someone/else/orbit', '3.0.0');
       expect(
@@ -282,7 +297,7 @@ void main() {
       );
       Directory('${brew.prefix}/Cellar').deleteSync(recursive: true);
       Link('${brew.prefix}/opt/orbit').deleteSync();
-      final result = await provider.install(project, (_) {});
+      final result = await provider.install(project, null, (_) {});
       expect(result.version, '1.2.0');
       expect(
         result.commands['orbit']!.executable,
@@ -313,14 +328,13 @@ void main() {
           InstallationSource.homebrew: HomebrewInstallationProvider(
             brew.tools,
             '/brew',
+            platform: 'linux-x64',
           ),
         },
         environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
       );
-      await manager.act(
-        project,
-        InstallationSource.homebrew,
-        InstallationAction.use,
+      await manager.apply(
+        Operation(project, InstallationSource.homebrew, InstallationAction.use),
         progress: (_) {},
       );
       Future<ProcessResult> orbit() => Process.run('${store.bin}/orbit', []);
@@ -359,26 +373,32 @@ void main() {
       );
       downloads = Directory(store.downloads(project));
     });
-    Future<String> act(InstallationSource source, InstallationAction action) =>
-        manager.act(project, source, action, progress: (_) {});
+    Future<String> apply(
+      InstallationSource source,
+      InstallationAction action, {
+      AvailableInstallation? release,
+    }) => manager.apply(
+      Operation(project, source, action, release: release),
+      progress: (_) {},
+    );
     Future<String> orbit() async =>
         (await Process.run('${store.bin}/orbit', [])).stdout as String;
 
     test(
       'an update replaces the previous download; uninstall removes every one',
       () async {
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         expect(await orbit(), 'release 1.1.0\n');
         releases.publish('1.2.0');
-        await manager.download(
-          project,
-          await manager.latest(project, github.source),
-          progress: (_) {},
+        await apply(
+          github.source,
+          InstallationAction.install,
+          release: await manager.latest(project, github.source),
         );
         expect(await orbit(), 'release 1.2.0\n');
         expect(downloads.listSync(), hasLength(1));
-        await act(local.source, InstallationAction.use);
-        await act(github.source, InstallationAction.uninstall);
+        await apply(local.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.uninstall);
         expect(downloads.existsSync(), isFalse);
       },
     );
@@ -386,14 +406,18 @@ void main() {
     test(
       'an update interrupted before routing finishes when it runs again',
       () async {
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         releases.publish('1.2.0');
         final release = await manager.latest(project, github.source);
         // The update unpacked and renamed its download, then stopped.
-        await github.download(project, release, (_) {});
+        await github.install(project, release, (_) {});
         expect(await orbit(), 'release 1.1.0\n');
         final fetched = releases.archiveFetches;
-        await manager.download(project, release, progress: (_) {});
+        await apply(
+          github.source,
+          InstallationAction.install,
+          release: release,
+        );
         expect(await orbit(), 'release 1.2.0\n');
         expect(downloads.listSync(), hasLength(1));
         expect(releases.archiveFetches, fetched);
@@ -403,7 +427,7 @@ void main() {
     test(
       'a renamed origin keeps its download, and uninstall still removes it',
       () async {
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         final renamed = ExecutableProject(
           root: project.root,
           unit: project.unit,
@@ -414,7 +438,8 @@ void main() {
         Future<String> actRenamed(
           InstallationSource source,
           InstallationAction action,
-        ) => manager.act(renamed, source, action, progress: (_) {});
+        ) =>
+            manager.apply(Operation(renamed, source, action), progress: (_) {});
         final state = await manager.inspect(renamed);
         expect(state.sources[github.source]!.installation!.version, '1.1.0');
         await actRenamed(local.source, InstallationAction.use);
@@ -428,10 +453,10 @@ void main() {
       () async {
         // Interrupted after unpacking, before rk routed anything; and an
         // earlier run that stopped while unpacking.
-        await github.install(project, (_) {});
+        await github.install(project, null, (_) {});
         Directory('${downloads.path}/preparing-interrupted').createSync();
         final fetched = releases.archiveFetches;
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         expect(releases.archiveFetches, fetched);
         expect(await orbit(), 'release 1.1.0\n');
         expect(downloads.listSync(), hasLength(1));

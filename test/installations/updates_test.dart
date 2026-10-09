@@ -7,7 +7,6 @@ import 'package:fleury/fleury.dart';
 import 'package:fleury/fleury_test_support.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/manager.dart';
-import 'package:rk/src/installations/metadata.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/store.dart';
@@ -16,32 +15,6 @@ import 'package:rk/src/targets/pub_dev/installation.dart';
 import 'package:rk/src/tui/use_picker.dart';
 import 'package:test/test.dart';
 import 'fixtures.dart';
-
-class UpdatingProvider extends StubProvider implements InstallationUpdates {
-  UpdatingProvider() : super(InstallationSource.pub);
-  @override
-  Future<AvailableInstallation> latest(
-    ExecutableProject project, {
-    InstallationCheck? check,
-  }) async => Release(project);
-  @override
-  Future<Installation> download(
-    ExecutableProject project,
-    AvailableInstallation release,
-    void Function(String) progress,
-  ) async {
-    await preparing?.call();
-    return installed = Installation(
-      source: source,
-      version: release.version,
-      commands: {
-        for (final name in project.commands)
-          name: LaunchCommand('/bin/echo', arguments: [release.version]),
-      },
-      location: '/fixture',
-    );
-  }
-}
 
 class UpdatingBrew extends HomebrewInstallationProvider {
   UpdatingBrew(
@@ -73,41 +46,39 @@ void main() {
         const SystemTools(),
       );
       final local = StubProvider(InstallationSource.local);
-      final pub = UpdatingProvider();
+      final pub = StubProvider(InstallationSource.pub);
       final manager = InstallationManager(
         store: store,
         providers: {local.source: local, pub.source: pub},
         environment: {},
       );
-      await manager.act(
-        project,
-        local.source,
-        InstallationAction.use,
+      Future<String> apply(
+        InstallationSource source,
+        InstallationAction action, {
+        AvailableInstallation? release,
+      }) => manager.apply(
+        Operation(project, source, action, release: release),
         progress: (_) {},
       );
-      await manager.download(
-        project,
-        await pub.latest(project),
-        progress: (_) {},
+      await apply(local.source, InstallationAction.use);
+      await apply(
+        pub.source,
+        InstallationAction.install,
+        release: await pub.latest(project),
       );
       expect(store.selected(project)!.source, local.source);
       expect((await pub.inspect(project)).installation!.version, '1.3.0');
-      await manager.act(
+      await apply(pub.source, InstallationAction.use);
+      final update = Operation(
         project,
         pub.source,
-        InstallationAction.use,
-        progress: (_) {},
+        InstallationAction.install,
+        release: const AvailableInstallation('1.4.0'),
       );
-      final cancel = InstallationCancellation();
       pub.preparing = () async {
-        cancel.cancel();
+        update.cancellation.cancel();
       };
-      await manager.download(
-        project,
-        Release(project, pub.source, '1.4.0'),
-        progress: (_) {},
-        cancellation: cancel,
-      );
+      await manager.apply(update, progress: (_) {});
       expect(store.selected(project)!.source, pub.source);
       for (final command in project.commands) {
         expect(
@@ -116,7 +87,11 @@ void main() {
         );
       }
       await expectLater(
-        manager.download(project, Release(project), progress: (_) {}),
+        apply(
+          pub.source,
+          InstallationAction.install,
+          release: const AvailableInstallation('1.3.0'),
+        ),
         throwsA(
           isA<InstallationFailure>().having(
             (e) => e.message,
@@ -125,19 +100,14 @@ void main() {
           ),
         ),
       );
-      final other = fixture(scratch, name: 'other');
-      await expectLater(
-        manager.download(other, Release(project), progress: (_) {}),
-        throwsA(isA<InstallationFailure>()),
-      );
     },
   );
 
   test(
     'checks are independent, preserve installations, cancel on dispose, and ignore stale replies',
     () async {
-      final pub = UpdatingProvider();
-      await pub.install(project, (_) {});
+      final pub = StubProvider(InstallationSource.pub);
+      await pub.install(project, null, (_) {});
       final states = [
         ProjectInstallations(project, {
           InstallationSource.local: const SourceInspection(),
@@ -145,25 +115,27 @@ void main() {
         }),
       ];
       final replies = <Completer<AvailableInstallation>>[];
-      final requests = <InstallationCheck>[];
+      final requests = <InstallationCancellation>[];
       final model = UsePicker(
         states: states,
         refresh: () async => states,
-        checkAvailable: (_, _, check) {
+        check: (_, _, check) {
           requests.add(check);
           final reply = Completer<AvailableInstallation>();
           replies.add(reply);
           return reply.future;
         },
-        downloadAvailable: (_, _, _, _) async => 'Downloaded',
-        use: (_, _, _, _) async => 'Used',
+        perform: perform(
+          install: (_, _, _, _, _) async => 'Downloaded',
+          use: (_, _, _, _) async => 'Used',
+        ),
         close: () {},
       );
       model.checkAll();
       expect(model.availability(states.single, pub.source).checking, isTrue);
       model.checkAll();
       expect(requests.first.cancelled, isTrue);
-      replies.first.complete(Release(project));
+      replies.first.complete(const AvailableInstallation('1.3.0'));
       replies.last.completeError(const InstallationFailure('Offline'));
       await Future<void>.delayed(Duration.zero);
       expect(model.availability(states.single, pub.source).release, isNull);
@@ -178,7 +150,7 @@ void main() {
       model.checkAll();
       model.dispose();
       expect(requests.last.cancelled, isTrue);
-      replies.last.complete(Release(project));
+      replies.last.complete(const AvailableInstallation('1.3.0'));
       await Future<void>.delayed(Duration.zero);
     },
   );
@@ -197,16 +169,18 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => states,
-        checkAvailable: (_, _, _) async => Release(project),
-        downloadAvailable: (_, _, _, _) async {
-          downloads++;
-          await gate.future;
-          return 'Downloaded';
-        },
-        use: (_, _, _, _) async {
-          uses++;
-          return 'Used';
-        },
+        check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+        perform: perform(
+          install: (_, _, _, _, _) async {
+            downloads++;
+            await gate.future;
+            return 'Downloaded';
+          },
+          use: (_, _, _, _) async {
+            uses++;
+            return 'Used';
+          },
+        ),
         close: () => closes++,
       );
       addTearDown(model.dispose);
@@ -234,9 +208,9 @@ void main() {
     'table starts unfocused, row navigation and Enter use installed sources while checks are pending',
     () async {
       final local = StubProvider(InstallationSource.local);
-      final pub = UpdatingProvider();
-      await local.install(project, (_) {});
-      await pub.install(project, (_) {});
+      final pub = StubProvider(InstallationSource.pub);
+      await local.install(project, null, (_) {});
+      await pub.install(project, null, (_) {});
       local.installed = Installation(
         source: local.source,
         version: '1.2.0',
@@ -260,13 +234,15 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => states,
-        checkAvailable: (_, _, _) => gate.future,
-        downloadAvailable: (_, _, _, _) async => 'Downloaded',
-        use: (_, s, _, _) async {
-          source = s;
-          uses++;
-          return 'Used';
-        },
+        check: (_, _, _) => gate.future,
+        perform: perform(
+          install: (_, _, _, _, _) async => 'Downloaded',
+          use: (_, s, _, _) async {
+            source = s;
+            uses++;
+            return 'Used';
+          },
+        ),
         close: () {},
       );
       addTearDown(model.dispose);
@@ -289,7 +265,7 @@ void main() {
       tester.pump();
       expect(uses, 1);
       expect(source, pub.source);
-      gate.complete(Release(project));
+      gate.complete(const AvailableInstallation('1.3.0'));
       await Future<void>.delayed(Duration.zero);
     },
   );
@@ -298,8 +274,8 @@ void main() {
     test(
       'uninstall ${broken ? 'broken owned' : 'inactive'} source requires confirmation and stays open',
       () async {
-        final pub = UpdatingProvider();
-        await pub.install(project, (_) {});
+        final pub = StubProvider(InstallationSource.pub);
+        await pub.install(project, null, (_) {});
         var removed = false, calls = 0, closes = 0;
         final gate = Completer<String>();
         List<ProjectInstallations> inspect() => [
@@ -316,15 +292,16 @@ void main() {
         final model = UsePicker(
           states: inspect(),
           refresh: () async => inspect(),
-          checkAvailable: (_, _, _) async => Release(project),
-          downloadAvailable: (_, _, _, _) async =>
-              throw StateError('No download'),
-          use: (_, _, _, _) async => throw StateError('No switch'),
-          uninstall: (_, source, _, _) {
-            expect(source, pub.source);
-            calls++;
-            return gate.future;
-          },
+          check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+          perform: perform(
+            install: (_, _, _, _, _) async => throw StateError('No download'),
+            use: (_, _, _, _) async => throw StateError('No switch'),
+            uninstall: (_, source, _, _) {
+              expect(source, pub.source);
+              calls++;
+              return gate.future;
+            },
+          ),
           close: () => closes++,
         );
         addTearDown(model.dispose);
@@ -389,16 +366,18 @@ void main() {
     final model = UsePicker(
       states: inspect(),
       refresh: () async => inspect(),
-      checkAvailable: (_, source, _) async => Release(project, source),
-      downloadAvailable: (_, release, _, _) {
-        downloads++;
-        return gate.future;
-      },
-      use: (_, source, _, _) async {
-        expect(source, InstallationSource.github);
-        uses++;
-        return 'Used';
-      },
+      check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+      perform: perform(
+        install: (_, _, _, _, _) {
+          downloads++;
+          return gate.future;
+        },
+        use: (_, source, _, _) async {
+          expect(source, InstallationSource.github);
+          uses++;
+          return 'Used';
+        },
+      ),
       close: () => closes++,
     );
     addTearDown(model.dispose);
@@ -476,10 +455,11 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => throw StateError('No rescan'),
-        checkAvailable: (_, _, _) async => Release(project),
-        downloadAvailable: (_, _, _, _) async =>
-            throw StateError('No download'),
-        use: (_, _, _, _) async => throw StateError('No reinstall'),
+        check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+        perform: perform(
+          install: (_, _, _, _, _) async => throw StateError('No download'),
+          use: (_, _, _, _) async => throw StateError('No reinstall'),
+        ),
         close: () => closed = true,
       );
       addTearDown(model.dispose);
@@ -583,7 +563,7 @@ void main() {
         final release = await provider.latest(project);
         expect(calls, isEmpty);
         expect(
-          (await provider.download(project, release, (_) {})).version,
+          (await provider.install(project, release, (_) {})).version,
           '1.3.0',
         );
         expect(calls.last, [
@@ -634,7 +614,7 @@ void main() {
       expect(release.version, '1.3.0');
       expect(calls, isEmpty);
       await expectLater(
-        provider.download(project, release, (_) {}),
+        provider.install(project, release, (_) {}),
         throwsA(
           isA<InstallationFailure>().having(
             (e) => e.message,

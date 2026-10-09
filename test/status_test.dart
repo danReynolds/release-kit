@@ -6,30 +6,25 @@ import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
-import 'package:rk/src/engine/canonical_json.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
+import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/engine/receipt.dart';
 import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/engine/release_asset.dart';
-import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
-import 'package:rk/src/engine/stage_archive.dart';
 import 'package:rk/src/transforms/digest.dart';
-import 'package:rk/src/engine/stage_receipt.dart';
-import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/targets/target_module.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 /// An origin that lists exactly the tags git holds locally.
 ///
@@ -52,6 +47,7 @@ class OriginAgreeing implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
       if (arguments.length == 3 && arguments[1] == '--tags') {
@@ -120,6 +116,7 @@ class ReleasedTagOrigin implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
       return ToolResult(
@@ -281,19 +278,28 @@ class FixedInspector extends Inspector {
   final Map<StepKind, Inspection> answers;
 
   @override
-  Future<Inspection> inspect(Step step, ResolvedUnit unit) async =>
-      answers[step.kind] ?? answer;
+  Future<Inspection> inspect(
+    Step step,
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async => answers[step.kind] ?? answer;
 
   @override
-  Future<TargetHistory?> inspectHistory(
-    TargetPlan target,
-    ResolvedUnit unit,
-  ) async {
+  Future<TargetRead> read(
+    Target target,
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async => (
+    state: answers[target.kind] ?? answer,
+    history: await _history(target, unit),
+  );
+
+  Future<TargetHistory?> _history(Target target, ResolvedUnit unit) async {
     final configured = latest;
     if (configured != null) {
       return TargetHistory.versioned(inspection: configured, target: target);
     }
-    final targetAnswer = answers[target.step.kind] ?? answer;
+    final targetAnswer = answers[target.kind] ?? answer;
     if (targetAnswer.isExact) {
       return TargetHistory.versioned(
         inspection: Inspection.exact(
@@ -303,8 +309,8 @@ class FixedInspector extends Inspector {
         target: target,
       );
     }
-    if (targetAnswer.isAbsent && target.kind == 'pubDev') {
-      return super.inspectHistory(target, unit);
+    if (targetAnswer.isAbsent && target.target == PublishTarget.pubDev) {
+      return (await super.read(target, unit)).history;
     }
     return TargetHistory.versioned(inspection: targetAnswer, target: target);
   }
@@ -312,7 +318,7 @@ class FixedInspector extends Inspector {
   @override
   List<Diagnostic> tagGuards(
     ResolvedUnit unit,
-    Checklist checklist,
+    UnitRelease release,
     Map<String, Inspection> states,
   ) => const [];
 }
@@ -329,7 +335,7 @@ class GuardInspector extends FixedInspector {
   @override
   List<Diagnostic> tagGuards(
     ResolvedUnit unit,
-    Checklist checklist,
+    UnitRelease release,
     Map<String, Inspection> states,
   ) => [
     Diagnostic(
@@ -358,15 +364,24 @@ class CoordinatedInspector extends Inspector {
   var started = 0;
 
   @override
-  Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
-    final gate = _gates.putIfAbsent(step.kind, Completer<void>.new);
+  Future<TargetRead> read(
+    Target target,
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async {
+    // The history as the target reads it; the state as the test says.
+    final history = super.read(target, unit, stage: stage);
+    final gate = _gates.putIfAbsent(target.kind, Completer<void>.new);
     started++;
     active++;
     if (active > maximumActive) maximumActive = active;
     if (started == expected && !allStarted.isCompleted) allStarted.complete();
     await gate.future;
     active--;
-    return answers[step.kind] ?? const Inspection.absent();
+    return (
+      state: answers[target.kind] ?? const Inspection.absent(),
+      history: (await history).history,
+    );
   }
 
   void finish(StepKind kind) => _gates[kind]!.complete();
@@ -374,7 +389,7 @@ class CoordinatedInspector extends Inspector {
   @override
   List<Diagnostic> tagGuards(
     ResolvedUnit unit,
-    Checklist checklist,
+    UnitRelease release,
     Map<String, Inspection> states,
   ) => const [];
 }
@@ -459,7 +474,7 @@ Future<({String text, Map<String, Object?> report})> statusRun({
   Tools? tools,
   String? repository,
   Inspector Function(GitState git, Resolution resolution)? inspectorBuilder,
-  ReleaseStage Function(ResolvedUnit unit)? stageFor,
+  Stage Function(ResolvedUnit unit)? stageFor,
   HostCapabilities? capabilities,
   bool isTerminal = false,
   bool useColor = false,
@@ -490,7 +505,6 @@ Future<({String text, Map<String, Object?> report})> statusRun({
         git: state,
         tools: tools ?? OriginAgreeing(state.tags, state.head),
         repository: repository,
-        stageFor: stageFor,
       );
   final code = await StatusCommand(
     resolution: resolution!,
@@ -579,18 +593,18 @@ publish = ["pub.dev"]
       signingConfigured: true,
       originUrl: 'danReynolds/keybay',
     );
-    final stages = ReleaseStages(
-      source: source,
-      git: state,
-      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
-    );
+    final stages = Stages(state.root);
     // A stage as `rk stage` leaves it after Pub warned.
     final unit = resolution.units.single;
-    final stage = stages(unit);
-    final path = ReleaseAssets.pubArchivePath(unit.projects.single);
-    stage.writeProgress(const []);
-    stage.directory.writeBytesAtomically(
-      path,
+    final release = UnitRelease.derive(
+      unit,
+      resolution,
+      repository: state.originUrl,
+      problems: Diagnostics(),
+    );
+    final stage = stages.of(unit, state, source)..begin();
+    stage.write(
+      ReleaseAssets.pubArchivePath(unit.projects.single),
       ArchiveBuilder.gzip(
         ArchiveBuilder.tar([
           ArchiveEntry(
@@ -600,32 +614,21 @@ publish = ["pub.dev"]
         ]),
       ),
     );
-    stage.writeProgress([
-      StageStep(
-        name: 'pub-archive:keybay',
-        outputs: [
-          StageArtifact.capture(
-            stage: stage.directory,
-            path: path,
-            type: 'pub-archive',
-          ),
-        ],
-        evidence: const {
-          'package_archive': 'staged',
-          'rk_warnings': [
-            {
-              'code': 'RK-PUB-012',
-              'message':
-                  'pub validation for keybay: Your dependency on ffi is '
-                  'pinned to an exact version.',
-              'remedy': 'rk release lists pub warnings again before it asks',
-            },
-          ],
-        },
-      ),
-    ]);
-    stage.finalize(releaseAssets: const []);
-    expect(stage.inspect().reusable, isTrue);
+    stage.record(
+      release.work.first,
+      evidence: const {'package_archive': 'staged'},
+      warnings: const [
+        Diagnostic(
+          code: 'RK-PUB-012',
+          message:
+              'pub validation for keybay: Your dependency on ffi is '
+              'pinned to an exact version.',
+          remedy: 'rk release lists pub warnings again before it asks',
+        ),
+      ],
+    );
+    stage.complete(release);
+    expect(stage.check(release).reusable, isTrue);
 
     final run = await statusRun(
       withConfig: pubOnly,
@@ -634,7 +637,7 @@ publish = ["pub.dev"]
       registry: FakeRegistry({
         'keybay': ['0.1.0'],
       }),
-      stageFor: stages.call,
+      stageFor: (unit) => stages.of(unit, state, source),
     );
 
     expect(run.text, matches(RegExp(r'^\s+Staged$', multiLine: true)));
@@ -1566,7 +1569,7 @@ publish = ["pub.dev"]
       config: binaryConfig,
       source: binaryTree,
     );
-    ReleaseStage stageFor(ResolvedUnit unit) => made;
+    Stage stageFor(ResolvedUnit unit) => made;
 
     final run = await statusRun(
       withConfig: binaryConfig,
@@ -1586,7 +1589,9 @@ publish = ["pub.dev"]
     // The report collapses a set that agrees; the document keeps every
     // name, which is where a caller reading filenames should be reading
     // them anyway.
-    final expected = ReleaseAssets.expectedForUnit(made.unit);
+    final expected = ReleaseAssets.expectedForUnit(
+      _resolve(binaryConfig, binaryTree).units.single,
+    );
     expect(run.text, matches(RegExp('${expected.length} artifacts')));
     final github = _target(run.report, 'githubRelease');
     expect(github['current_known'], isTrue);
@@ -1607,7 +1612,7 @@ publish = ["pub.dev"]
         config: binaryConfig,
         source: binaryTree,
       );
-      ReleaseStage stageFor(ResolvedUnit unit) => made;
+      Stage stageFor(ResolvedUnit unit) => made;
       final registry = FakeRegistry({
         'keybay': ['0.2.0'],
       });
@@ -1670,7 +1675,7 @@ publish = ["pub.dev"]
         config: binaryConfig,
         source: binaryTree,
       );
-      ReleaseStage stageFor(ResolvedUnit unit) => made;
+      Stage stageFor(ResolvedUnit unit) => made;
 
       final run = await statusRun(
         withConfig: binaryConfig,
@@ -1703,11 +1708,11 @@ publish = ["pub.dev"]
       config: binaryConfig,
       source: binaryTree,
     );
-    ReleaseStage stageFor(ResolvedUnit unit) => made;
-    // The stage above is created before status inspects it.
-    final stage = made;
+    Stage stageFor(ResolvedUnit unit) => made;
     final archive = ReleaseAssets.archiveName('keybay', '0.2.0', 'macos-arm64');
-    File(stage.directory.resolve(archive)).writeAsStringSync('changed');
+    File(
+      made.pathOf('producers/keybay/archives/$archive'),
+    ).writeAsStringSync('changed');
 
     final run = await statusRun(
       withConfig: binaryConfig,
@@ -1746,18 +1751,19 @@ publish = ["pub.dev"]
       config: binaryConfig,
       source: binaryTree,
     );
-    final receipt = made.requireReceipt();
-    StageReceiptStore(made.directory).write(
-      StageReceipt(
-        identity: receipt.identity,
+    // Interrupted after its first piece of work...
+    final receipt = made.receipt!;
+    final MapEntry(key: path, value: file) = receipt.files.entries.first;
+    File(made.pathOf('stage.json')).writeAsStringSync(
+      Receipt(
+        stage: receipt.stage,
         plan: receipt.plan,
-        steps: receipt.steps.take(2),
-      ),
+        producers: {file.producer: receipt.producers[file.producer]!},
+        files: {path: file},
+      ).encode(),
     );
-    // A recorded output changed since, so the progress cannot be resumed.
-    File(
-      made.directory.resolve(receipt.steps.first.outputs.first.path),
-    ).writeAsStringSync('changed');
+    // ...whose output changed since, so the progress cannot be resumed.
+    File(made.pathOf(path)).writeAsStringSync('changed');
 
     final run = await statusRun(
       withConfig: binaryConfig,
@@ -1794,20 +1800,20 @@ publish = ["pub.dev"]
         source: binaryTree,
       );
       // A completed receipt that names another stage.
-      final receipt = complete.requireReceipt();
-      final another = StageReceipt(
-        identity: StageIdentity.forPlan(
-          headCommit: testHead,
-          headTree: testTree,
-          resolvedPlan: {'unit': 'another'},
-        ),
-        plan: receipt.plan,
-        steps: receipt.steps,
+      final receipt = complete.receipt!;
+      File(complete.pathOf('stage.json')).writeAsStringSync(
+        Receipt(
+          stage: StageId.of(
+            commit: testHead,
+            tree: testTree,
+            plan: const {'unit': 'another'},
+          ),
+          plan: receipt.plan,
+          producers: receipt.producers,
+          files: receipt.files,
+        ).encode(),
       );
-      File(
-        complete.directory.resolve('stage.json'),
-      ).writeAsStringSync('${CanonicalJson.encode(another.toJson())}\n');
-      ReleaseStage stageFor(ResolvedUnit unit) => complete;
+      Stage stageFor(ResolvedUnit unit) => complete;
 
       final run = await statusRun(
         withConfig: binaryConfig,
@@ -2050,143 +2056,63 @@ publish = ["pub.dev"]
 
 /// Completes the single unit of [config] so a synchronous `stageFor` callback
 /// can hand back an already-built stage.
-Future<ReleaseStage> _completedBinaryStage({
+Future<Stage> _completedBinaryStage({
   required Directory root,
   required String config,
   required MemorySourceTree source,
 }) async {
-  final diagnostics = Diagnostics();
-  final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics)!;
-  final resolution = Resolution.resolve(parsed, source, diagnostics)!;
-  return _completedStage(
-    root: root,
-    unit: resolution.units.single,
+  final resolution = _resolve(config, source);
+  final unit = resolution.units.single;
+  final release = UnitRelease.derive(
+    unit,
+    resolution,
+    repository: 'danReynolds/keybay',
+    problems: Diagnostics(),
+  );
+  final plan = {'unit': unit.name, 'test': 'status'};
+  final stage = Stage(
+    root: root.path,
+    id: StageId.of(commit: testHead, tree: testTree, plan: plan),
+    plan: plan,
     source: source,
-  );
-}
-
-Future<ReleaseStage> _completedStage({
-  required Directory root,
-  required ResolvedUnit unit,
-  required SourceTree source,
-}) async {
-  final identity = StageIdentity.forPlan(
-    headCommit: testHead,
-    headTree: testTree,
-    resolvedPlan: {'unit': unit.name, 'test': 'status'},
-  );
-  final stage = ReleaseStage(
-    unit: unit,
-    source: source,
-    directory: StageDirectory(repositoryRoot: root.path, identity: identity),
-  );
-  final public = ReleaseAssets.expectedForUnit(unit).toSet()
-    ..remove(ReleaseAssets.manifest);
-  final steps = <StageStep>[];
-  final project = unit.binaryProject!;
-  final executable = project.executable!;
-  final archives = <StageArtifact>[];
-  for (final platform in project.binaryPlatforms) {
-    final binaryName = '$platform/$executable';
-    stage.directory.writeBytesAtomically(
-      binaryName,
-      utf8.encode('binary:$platform'),
-    );
-    final binary = StageArtifact.capture(
-      stage: stage.directory,
-      path: binaryName,
-      type: 'executable',
-    );
-    steps.add(
-      StageStep(
-        name: '${platform.startsWith('macos-') ? 'sign' : 'build'}:$platform',
-        outputs: [binary],
-        evidence: {
+  )..begin();
+  for (final work in release.work) {
+    if (work == release.barrier) continue;
+    for (final file in work.outputs) {
+      stage.write(file, utf8.encode('$file of ${unit.name}'));
+    }
+    stage.record(
+      work,
+      evidence: switch (work.kind) {
+        StepKind.build => {
           'smoke': {'status': 'passed'},
-          if (platform.startsWith('macos-'))
+          if (work.platform!.startsWith('macos-'))
             'signature': {
               'certificate': 'Developer ID Application: Test (TEAM123456)',
-              'certificate_sha256': 'c' * 64,
               'first_identity': false,
               'published_requirement':
                   'designated => identifier '
-                  '"io.example.$executable" and certificate '
+                  '"io.example.keybay" and certificate '
                   'leaf[subject.OU] = "TEAM123456"',
-              'code_id': 'io.example.$executable',
-              'unsigned_sha256': 'd' * 64,
-              'signed_sha256': binary.sha256,
+              'code_id': 'io.example.keybay',
             },
         },
-      ),
-    );
-    if (platform.startsWith('macos-')) {
-      steps.add(
-        StageStep(
-          name: 'notarize:$platform',
-          evidence: {
-            'notary': {'status': 'Accepted', 'submission_id': 'status-test'},
-          },
-        ),
-      );
-    }
-    final archiveName = ReleaseAssets.archiveName(
-      executable,
-      project.version.canonical,
-      platform,
-    );
-    final bytes = ArchiveBuilder.gzip(
-      ArchiveBuilder.tar([
-        ArchiveEntry(
-          name: executable,
-          bytes: utf8.encode('binary:$platform'),
-          executable: true,
-        ),
-      ]),
-    );
-    stage.directory.writeBytesAtomically(archiveName, bytes);
-    final archive = StageArtifact.capture(
-      stage: stage.directory,
-      path: archiveName,
-      type: 'archive',
-    );
-    archives.add(archive);
-    steps.add(
-      StageStep(
-        name: 'archive:$platform',
-        outputs: [archive],
-        evidence: {
-          'inventory': StageArchiveInventory.evidence(
-            StageArchiveInventory.parse(bytes),
-          ),
+        StepKind.notarize => {
+          'notary': {'status': 'Accepted', 'submission_id': 'status-test'},
         },
-      ),
+        _ => const {},
+      },
     );
   }
-  final formula = ReleaseAssets.formulaName(executable);
-  if (public.contains(formula)) {
-    stage.directory.writeBytesAtomically(formula, utf8.encode('formula'));
-    steps.add(
-      StageStep(
-        name: 'homebrew-formula',
-        outputs: [
-          StageArtifact.capture(
-            stage: stage.directory,
-            path: formula,
-            type: 'formula',
-          ),
-        ],
-      ),
-    );
-  }
-  stage.writeProgress(steps);
-  stage.finalize(releaseAssets: _fixtureReleaseAssets(public));
+  stage.complete(release);
   return stage;
 }
 
-List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
-  for (final path in paths)
-    ReleaseAssetSpec(stagedPath: path, publicName: path),
-];
+Resolution _resolve(String config, MemorySourceTree source) {
+  final diagnostics = Diagnostics();
+  final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics)!;
+  return Resolution.resolve(parsed, source, diagnostics)!;
+}
 
 /// Whether a unit can be released, and what status suggests doing next.
 void releaseReadiness() {

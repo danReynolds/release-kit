@@ -11,7 +11,7 @@ import 'support/compiled_rk.dart';
 /// copies a repository out of `examples/` (or builds a minimal one), makes it
 /// a repository, and runs the real executable against it.
 ///
-/// Checklist derivation itself is proved in `checklist_test.dart` and
+/// Release derivation itself is proved in `unit_release_test.dart` and
 /// `resolve_test.dart`; nothing here needs a network to answer.
 ///
 /// The examples are named for the shape they are, never for a real project —
@@ -121,7 +121,7 @@ void main() {
 
       final unknown = loose(['help', 'verify', '--json']);
       expect(unknown.code, 2, reason: unknown.all);
-      expect(unknown.problems.single['code'], 'RK-CLI-008');
+      expect(unknown.problems.single['code'], 'RK-CLI-003');
     });
 
     test('the index leads with the release loop, and says each thing once', () {
@@ -152,12 +152,12 @@ void main() {
       // file in the repository would be uncommitted, and refuse the release.
       final flag = repo(['stage', '--timings=run.json', '--json']);
       expect(flag.code, 2, reason: flag.all);
-      expect(flag.problems.map((p) => p['code']), ['RK-CLI-001']);
+      expect(flag.problems.map((p) => p['code']), ['RK-CLI-005']);
 
       // A unit name is scoped through a command, never read as one.
       final command = repo(['lib', '--json']);
       expect(command.code, 2, reason: command.all);
-      expect(command.problems.map((p) => p['code']), ['RK-CLI-008']);
+      expect(command.problems.map((p) => p['code']), ['RK-CLI-003']);
       expect(command.all, contains('rk status [unit]'));
       expect(Directory('${repo.root}/.rk').existsSync(), isFalse);
     });
@@ -428,7 +428,7 @@ publish = ["pub.dev"]
       manifestLink.commit();
 
       for (final (repo, expected) in [
-        (configLink, 'RK-CONF-034'),
+        (configLink, 'RK-SRC-003'),
         (manifestLink, 'RK-SRC-003'),
       ]) {
         final run = repo(['plan', '--json']);
@@ -436,6 +436,48 @@ publish = ["pub.dev"]
         expect(run.problems.map((problem) => problem['code']), [expected]);
         expect(run.all, contains('symbolic link'));
       }
+    });
+
+    test('a changelog rk cannot read is its own unit\'s problem', () {
+      final repo = Rk.repository(scratch, 'unreadable-changelog', {
+        'release.toml': '''
+schema = 2
+
+[release.a]
+path = "a"
+publish = ["git-tag"]
+tag = "a-v{version}"
+
+[release.b]
+path = "b"
+publish = ["git-tag"]
+tag = "b-v{version}"
+''',
+        'a/pubspec.yaml': 'name: a_pkg\nversion: 1.0.0\npublish_to: none\n',
+        'b/pubspec.yaml': 'name: b_pkg\nversion: 1.0.0\npublish_to: none\n',
+        'b/CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
+      });
+      File(
+        '${repo.root}/a/CHANGELOG.md',
+      ).writeAsBytesSync(latin1.encode('## 1.0.0\n\nCaf\u00e9.\n'));
+      repo.commit();
+
+      final plan = repo(['plan', '--json']);
+      expect(plan.code, 0, reason: plan.all);
+      expect(plan.problems, isEmpty);
+
+      final status = repo(['status', '--json']);
+      final changelogs = [
+        for (final problem in status.problems)
+          if ('${problem['code']}'.startsWith('RK-CHG')) problem,
+      ];
+      expect(changelogs.single['unit'], 'a', reason: status.all);
+      expect(changelogs.single['code'], 'RK-CHG-001');
+      expect(changelogs.single['remedy'], contains('it is not UTF-8 text'));
+      expect(
+        status.problems.map((problem) => problem['code']),
+        isNot(contains('RK-SRC-003')),
+      );
     });
 
     test(
@@ -547,7 +589,7 @@ publish = ["pub.dev"]
         final run = repo(['plan', '--json']);
 
         expect(run.code, 1, reason: '${repo.root}: ${run.all}');
-        expect(run.problems.map((problem) => problem['code']), ['RK-CONF-034']);
+        expect(run.problems.map((problem) => problem['code']), ['RK-SRC-003']);
         expect(run.json, isNot(contains('plan')));
       }
     });
@@ -700,13 +742,13 @@ publish = ["git-tag"]
       );
       expect(
         status.problems.map((problem) => problem['code']),
-        contains('RK-SRC-004'),
+        contains('RK-GIT-001'),
       );
 
       for (final command in ['stage', 'release']) {
         final run = Rk(loose.path)([command, '--json']);
         expect(run.code, 1, reason: '$command: ${run.all}');
-        expect(run.problems.map((problem) => problem['code']), ['RK-SRC-004']);
+        expect(run.problems.map((problem) => problem['code']), ['RK-GIT-001']);
         expect(run.all, contains('git init'));
       }
       expect(Directory('${loose.path}/.rk').existsSync(), isFalse);

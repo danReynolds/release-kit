@@ -1,5 +1,4 @@
 import '../builds/binary_artifact.dart';
-import 'release_asset.dart';
 import 'resolve.dart';
 
 /// The names a release publishes, written once.
@@ -10,7 +9,7 @@ import 'resolve.dart';
 /// before rk existed.
 ///
 /// They were spelled in four places: the chain that produces them, the
-/// inspector that expects them, the checklist that counts them, and literals
+/// inspector that expects them, the release that counts them, and literals
 /// for generated bundle files. That is not untidiness, it is a latent and
 /// permanently unfixable failure. `GithubRelease.inspect` returns
 /// `Verdict.conflict` for *any* difference between expected and published —
@@ -21,12 +20,8 @@ import 'resolve.dart';
 /// a release and then read it back, on the next run, as an unfixable conflict
 /// against a release it made itself.
 ///
-/// A leaf over `resolve.dart` alone, so the chain, the inspector and the
-/// checklist can all import it. The comment that used to sit on the
-/// checklist's copy claimed the two "cannot share code (checklist and
-/// inspector would import each other)" — that cycle does not exist:
-/// `checklist.dart` imports `diagnostic`, `resolve` and `version`, and
-/// `inspect.dart` imports `checklist.dart` one way.
+/// A leaf over `resolve.dart` alone, so the release model, the chain and the
+/// inspector can all import it.
 abstract final class ReleaseAssets {
   /// Public binding from release bytes back to their source and stage plan.
   static const manifest = 'release-manifest.json';
@@ -45,13 +40,11 @@ abstract final class ReleaseAssets {
   static String binaryRoot(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/$platform';
 
-  static Map<String, String> binaryOutputs(
-    ResolvedProject project,
-    String platform,
-  ) => {
-    for (final file in binaryArtifact(project, platform).files)
-      '${binaryRoot(project, platform)}/${file.path}': file.type,
-  };
+  static List<String> binaryOutputs(ResolvedProject project, String platform) =>
+      [
+        for (final file in binaryArtifact(project, platform).files)
+          '${binaryRoot(project, platform)}/${file.path}',
+      ];
 
   static String archivePath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/archives/'
@@ -67,11 +60,10 @@ abstract final class ReleaseAssets {
   static String assetPath(ResolvedProject project, String declared) =>
       '${producerRoot(project)}/assets/${assetName(declared)}';
 
-  /// Every staged path a project's own build leaves, with its artifact type.
-  static Map<String, String> assetOutputs(ResolvedProject project) => {
-    for (final declared in project.assets)
-      assetPath(project, declared): 'asset',
-  };
+  /// Every staged path a project's own build leaves.
+  static List<String> assetOutputs(ResolvedProject project) => [
+    for (final declared in project.assets) assetPath(project, declared),
+  ];
 
   /// Private native package bytes uploaded to pub.dev.
   ///
@@ -82,11 +74,13 @@ abstract final class ReleaseAssets {
       '${producerRoot(project)}/pub/'
       '${project.name}-${project.version.canonical}.tar.gz';
 
+  /// The public name of one platform's archive, frozen for releases made
+  /// before rk existed.
   static String archiveName(
     String executable,
     String version,
     String platform,
-  ) => standaloneArchiveName(executable, version, platform);
+  ) => '$executable-$version-$platform.tar.gz';
 
   /// The formula's public filename inside its Homebrew tap.
   ///
@@ -119,30 +113,38 @@ abstract final class ReleaseAssets {
         .join();
   }
 
-  /// The complete public inventory excluding the manifest itself.
-  static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) {
-    if (unit.assetProject case final built?) {
-      return validateReleaseAssetSpecs([
-        for (final declared in built.assets)
-          ReleaseAssetSpec(
-            stagedPath: assetPath(built, declared),
-            publicName: assetName(declared),
-          ),
-      ]);
-    }
+  /// The complete public inventory excluding the manifest itself, by public
+  /// name. Configuration already refuses two assets with one name, and the
+  /// manifest's (RK-CONF-043).
+  static List<ReleaseAsset> bundleFor(ResolvedUnit unit) {
     final project = unit.binaryProject;
-    if (project == null) return const [];
-    return validateReleaseAssetSpecs([
-      for (final platform in [...project.binaryPlatforms]..sort())
-        ReleaseAssetSpec(
-          stagedPath: archivePath(project, platform),
-          publicName: archiveName(
-            project.executable!,
-            project.version.canonical,
-            platform,
+    final List<ReleaseAsset> assets;
+    if (unit.assetProject case final built?) {
+      assets = [
+        for (final declared in built.assets)
+          (
+            publicName: assetName(declared),
+            stagedPath: assetPath(built, declared),
           ),
-        ),
-    ]);
+      ];
+    } else if (project != null) {
+      assets = [
+        for (final platform in project.binaryPlatforms)
+          (
+            publicName: archiveName(
+              project.executable!,
+              project.version.canonical,
+              platform,
+            ),
+            stagedPath: archivePath(project, platform),
+          ),
+      ];
+    } else {
+      return const [];
+    }
+    return List.unmodifiable(
+      assets..sort((a, b) => a.publicName.compareTo(b.publicName)),
+    );
   }
 
   static Set<String> expectedForUnit(ResolvedUnit unit) => {
@@ -150,3 +152,6 @@ abstract final class ReleaseAssets {
     manifest,
   };
 }
+
+/// One file a release publishes: its public name, and where it is staged.
+typedef ReleaseAsset = ({String publicName, String stagedPath});

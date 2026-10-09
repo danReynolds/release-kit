@@ -1,15 +1,12 @@
 import 'dart:io';
 
-import '../../engine/assets.dart';
-import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
-import '../../engine/release_bundle.dart';
 import '../../engine/resolve.dart';
-import '../../engine/targets.dart';
+import '../../engine/stage.dart';
 import '../../engine/tools.dart';
+import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 import 'release_notes_stage.dart';
@@ -20,55 +17,24 @@ final class GithubReleaseTargetModule extends TargetModule {
   @override
   PublishTarget get target => PublishTarget.githubRelease;
 
+  /// The release, compared with the staged digests when there is a stage.
+  /// A release keeps no history of its own: its tag's lane does.
   @override
-  ProgressActivity get publishActivity =>
-      ProgressActivity(running: 'drafting', failed: 'draft failed');
-
-  @override
-  TargetSessionProvider get authentication => const _GithubSession();
-
-  @override
-  Future<TargetReadinessOutcome> checkReadiness(
-    TargetReadinessContext context,
+  Future<TargetRead> read(
+    TargetReadContext reads,
     ResolvedUnit unit,
-  ) async => const TargetReady();
+    Target target, {
+    Stage? stage,
+  }) async =>
+      (state: await _inspect(reads, unit, target, stage), history: null);
 
-  @override
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
-  }) {
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
-    final artifacts = ReleaseAssets.expectedForUnit(unit).toList()..sort();
-    final coordinate = repository == null
-        ? tag
-        : '$repository/releases/tag/$tag';
-    return TargetPlan(
-      label: repository == null
-          ? 'GitHub Release'
-          : 'GitHub Release · $repository',
-      kindLabel: 'GitHub Release',
-      // Without an origin there is no repository to name, and echoing the
-      // tag here would print the Git tag row's identity twice.
-      identity: repository ?? 'no origin remote',
-      planNote:
-          '${artifacts.length} asset${artifacts.length == 1 ? '' : 's'} '
-          'to $coordinate',
-      coordinate: coordinate,
-      targetVersion: unit.version.canonical,
-      step: step,
-      artifacts: artifacts,
-    );
-  }
-
-  @override
-  Future<Inspection> inspectCandidate(
+  Future<Inspection> _inspect(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
+    Stage? stage,
   ) async {
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
+    final tag = unit.tag!;
     final tools = context.tools;
     if (tools == null) {
       return const Inspection.unknown('no tools to read the forge with');
@@ -83,7 +49,6 @@ final class GithubReleaseTargetModule extends TargetModule {
       repository: repository,
       workingDirectory: context.git.root,
     );
-    final stage = context.reusableStage(unit);
     if (stage == null) {
       return destination.inspect(
         tag,
@@ -91,54 +56,79 @@ final class GithubReleaseTargetModule extends TargetModule {
         prerelease: unit.version.isPrerelease,
       );
     }
-
-    final resolvedBundle = ReleaseBundle.resolve(stage, unit);
-    if (resolvedBundle case ReleaseBundleInvalid(
-      :final message,
-      :final evidence,
-    )) {
-      return Inspection.conflict(message, evidence: evidence);
-    }
-    final bundle = (resolvedBundle as ReleaseBundleAvailable).bundle;
+    final staged = stage.receipt!.files;
     return destination.inspectExact(
       GithubReleaseExpectation(
         tag: tag,
         prerelease: unit.version.isPrerelease,
-        assetSha256: bundle.sha256ByPublicName,
+        assetSha256: {
+          for (final file in target.files)
+            if (file.name case final name?) name: staged[file.path]!.sha256,
+        },
       ),
     );
   }
 
   @override
-  Diagnostic diagnoseConflict(
-    ResolvedUnit unit,
-    TargetPlan target,
-    Inspection conflict,
-  ) => Diagnostic(
-    code: 'RK-REL-001',
-    message:
-        '${target.label}: '
-        '${conflict.detail ?? 'the published release does not match'}',
-    remedy:
-        'compare the published release with the source named by its '
-        'tag. If they are not the intended release, bump the version '
-        'and changelog; rk will not replace conflicting public bytes',
-  );
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection state) =>
+      Diagnostic(
+        code: 'RK-REL-001',
+        message:
+            '${target.label}: '
+            '${state.detail ?? 'the published release does not match'}',
+        remedy:
+            'compare the published release with the source named by its '
+            'tag. If they are not the intended release, bump the version '
+            'and changelog; rk will not replace conflicting public bytes',
+      );
+
+  /// With [signIn], the GitHub CLI's session.
+  @override
+  Future<TargetReadiness> ready(
+    TargetReadinessContext context,
+    ResolvedUnit unit, {
+    required bool signIn,
+  }) async {
+    if (!signIn) return const TargetReadiness();
+    ToolResult status;
+    try {
+      status = await context.tools.run('gh', const [
+        'auth',
+        'status',
+        '--active',
+        '--hostname',
+        'github.com',
+      ], workingDirectory: context.git.root);
+    } on ProcessException {
+      status = ToolResult(exitCode: -1, stdout: '', stderr: '');
+    }
+    if (status.ok) return const TargetReadiness(note: 'signed in');
+    return TargetReadiness.refused(
+      Diagnostic(
+        code: 'RK-GITHUB-010',
+        message: 'the GitHub CLI has no usable session',
+        remedy:
+            'Run gh auth login from a terminal, then re-run rk release '
+            '${unit.name}. Authentication does not prove write permission; '
+            'the exact publish and read-back remain authoritative.',
+      ),
+    );
+  }
 
   @override
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
-    Inspection inspected,
+    Target target,
+    Inspection before,
   ) async {
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
+    final tag = unit.tag!;
     final repository = context.repository;
     if (repository == null) {
       return TargetActOutcome(
         ok: false,
         diagnostic: Diagnostic(
-          code: 'RK-GIT-002',
+          code: 'RK-GIT-003',
           message:
               'github-release needs an origin remote, and this '
               'repository has none',
@@ -149,43 +139,21 @@ final class GithubReleaseTargetModule extends TargetModule {
         ),
       );
     }
-    final resolvedBundle = ReleaseBundle.resolve(context.stage, unit);
-    if (resolvedBundle case ReleaseBundleInvalid(
-      :final message,
-      :final producer,
-    )) {
-      return TargetActOutcome(
-        ok: false,
-        diagnostic: Diagnostic(
-          code: 'RK-WORK-001',
-          message: message,
-          remedy: '${producer ?? 'the stage producer'} — re-running runs it',
-        ),
-      );
-    }
-    final bundle = (resolvedBundle as ReleaseBundleAvailable).bundle;
+    // The stage was checked just before this act: it holds every file the
+    // release publishes, as its receipt records them.
+    final stage = context.stage!;
+    final staged = stage.receipt!.files;
     final assets = [
-      for (final asset in bundle.assets)
-        GithubReleaseAssetUpload(
-          publicName: asset.publicName,
-          stagedPath: context.stage.directory.resolve(asset.artifact.path),
-          size: asset.artifact.size,
-          sha256: asset.artifact.sha256,
-        ),
+      for (final file in target.files)
+        if (file.name case final name?)
+          GithubReleaseAssetUpload(
+            publicName: name,
+            stagedPath: stage.pathOf(file.path),
+            size: staged[file.path]!.size,
+            sha256: staged[file.path]!.sha256,
+          ),
     ];
-    final notesPath = context.workspace.pathOf('release-notes.md');
-    if (!File(notesPath).existsSync()) {
-      return const TargetActOutcome(
-        ok: false,
-        diagnostic: Diagnostic(
-          code: 'RK-CHG-003',
-          message: 'the release body was not prepared',
-          remedy:
-              'this is a bug in rk: the preflight prepares it whenever '
-              'a github-release step remains',
-        ),
-      );
-    }
+    final notesPath = stage.pathOf(target.preparedBy!.outputs.single);
 
     final release = GithubRelease(
       tools: context.tools,
@@ -201,16 +169,20 @@ final class GithubReleaseTargetModule extends TargetModule {
       onProgress: (event, current, total) {
         switch (event) {
           case GithubPublishEvent.drafting:
-            context.progress.begin(publishActivity);
+            context.progress.begin((
+              running: 'drafting',
+              failed: 'draft failed',
+            ));
           case GithubPublishEvent.uploading:
-            context.progress.begin(
-              ProgressActivity(running: 'uploading', failed: 'upload failed'),
-              detail: '$current/$total',
-            );
+            context.progress.begin((
+              running: 'uploading',
+              failed: 'upload failed',
+            ), detail: '$current/$total');
           case GithubPublishEvent.publishing:
-            context.progress.begin(
-              ProgressActivity(running: 'publishing', failed: 'publish failed'),
-            );
+            context.progress.begin((
+              running: 'publishing',
+              failed: 'publish failed',
+            ));
         }
       },
     );
@@ -223,64 +195,11 @@ final class GithubReleaseTargetModule extends TargetModule {
         DraftEffect.changed => TargetPrivateEffect.changed,
         DraftEffect.uncertain => TargetPrivateEffect.uncertain,
       },
-      privateEffectDetail: switch (outcome.draftEffect) {
-        DraftEffect.none => null,
-        DraftEffect.changed =>
-          'GitHub private draft state changed; this step did not publish a '
-              'GitHub Release.',
-        DraftEffect.uncertain =>
-          'GitHub private draft state may have changed; no GitHub Release '
-              'was confirmed public.',
-      },
       evidence: outcome.ok ? null : outcome.transcript,
     );
   }
 
   @override
-  TargetStage stageInput({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-  }) => githubReleaseNotesStage(unit: unit, target: target);
-}
-
-final class _GithubSession extends TargetSessionProvider {
-  const _GithubSession();
-
-  @override
-  String get id => 'github-cli';
-
-  @override
-  ProgressActivity get activity => CommonProgressActivities.checkingSignIn;
-
-  @override
-  Future<TargetReadinessOutcome> acquire(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetPlan> targets,
-  ) async {
-    ToolResult status;
-    try {
-      status = await context.tools.run('gh', const [
-        'auth',
-        'status',
-        '--active',
-        '--hostname',
-        'github.com',
-      ], workingDirectory: context.git.root);
-    } on ProcessException {
-      status = ToolResult(exitCode: -1, stdout: '', stderr: '');
-    }
-    if (status.ok) return const TargetReady(note: 'signed in');
-    return TargetNotReady(
-      Diagnostic(
-        code: 'RK-GITHUB-010',
-        message: 'the GitHub CLI has no usable session',
-        remedy:
-            'Run gh auth login from a terminal, then re-run rk release '
-            '${unit.name}. Authentication does not prove write permission; '
-            'the exact publish and read-back remain authoritative.',
-      ),
-      unit: unit.name,
-    );
-  }
+  Future<Produced> prepare(StageRun run, Work work) =>
+      prepareReleaseNotes(run, work);
 }

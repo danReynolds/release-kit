@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import '../engine/assets.dart';
 import '../engine/resolve.dart';
 import '../engine/publish_target.dart';
@@ -90,16 +93,11 @@ class Installation {
     required this.version,
     required this.commands,
     required this.location,
-    this.managed = false,
     this.exportedPaths = const [],
   });
   final InstallationSource source;
   final String version, location;
   final Map<String, LaunchCommand> commands;
-
-  /// Whether rk owns the installed bytes: a download under rk's data
-  /// directory, which rk replaces on update and removes on uninstall.
-  final bool managed;
 
   /// Native package-manager entrypoints, used to detect active external installs.
   final List<String> exportedPaths;
@@ -107,7 +105,9 @@ class Installation {
     'source': source.name,
     'version': version,
     'location': location,
-    'managed': managed,
+    // Whether rk owns the installed bytes: a GitHub download under rk's data
+    // directory, which rk replaces on update and removes on uninstall.
+    'managed': source == InstallationSource.github,
     'exported_paths': exportedPaths,
     'commands': {
       for (final entry in commands.entries) entry.key: entry.value.toJson(),
@@ -171,7 +171,86 @@ class InstallationFailure implements Exception {
   String toString() => message;
 }
 
+/// What [error], from a source, the network or the file system, means for
+/// an installation: one table for the source problems inspection records,
+/// the CLI's RK-USE-001 and the picker's failures.
+InstallationFailure installationFailure(Exception error) => switch (error) {
+  InstallationFailure() => error,
+  FileSystemException() => InstallationFailure(
+    'Installation files could not be accessed.',
+    '$error',
+  ),
+  SocketException() => InstallationFailure(
+    'The installation service could not be reached.',
+    '$error',
+  ),
+  HttpException() => InstallationFailure(
+    'The installation download failed.',
+    '$error',
+  ),
+  TimeoutException() => const InstallationFailure(
+    'The installation operation timed out.',
+    'Check the provider and retry; selection has not changed.',
+  ),
+  FormatException() => InstallationFailure(
+    'The installation metadata is invalid.',
+    '$error',
+  ),
+  ProcessException(:final executable) => InstallationFailure(
+    '$executable could not start.',
+    '$error',
+  ),
+  _ => InstallationFailure('$error'),
+};
+
 bool safeCommandName(String value) =>
     RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*$').hasMatch(value);
 
 String shellQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
+
+List<ExecutableProject> executableProjects(
+  Resolution resolution,
+  String root, {
+  String? repository,
+}) {
+  final found = <ExecutableProject>[];
+  for (final unit in resolution.units) {
+    for (final project in unit.projects) {
+      final commands = project.pubspec.executableScripts;
+      if (commands.isEmpty) continue;
+      // A launcher names its project in a line of shell.
+      if (!RegExp(r'^\w+$').hasMatch(project.name)) {
+        throw InstallationFailure(
+          'Unsupported package name in ${project.directoryIn(root)}/pubspec.yaml.',
+          'A Dart package name has only letters, digits and underscores.',
+        );
+      }
+      for (final entry in commands.entries) {
+        if (!safeCommandName(entry.key) || !safeCommandName(entry.value)) {
+          throw InstallationFailure(
+            'Unsupported executable declaration in ${project.name}.',
+            'Command and bin script names must be plain filenames without directory traversal.',
+          );
+        }
+        final script = File(
+          '${project.directoryIn(root)}/bin/${entry.value}.dart',
+        );
+        if (!script.existsSync()) {
+          throw InstallationFailure(
+            '${project.name} declares ${entry.key}, but bin/${entry.value}.dart is missing.',
+          );
+        }
+      }
+      found.add(
+        ExecutableProject(
+          root: root,
+          unit: unit,
+          project: project,
+          repository: repository,
+          entrypoints: Map.unmodifiable(commands),
+        ),
+      );
+    }
+  }
+  return List.unmodifiable(found);
+}

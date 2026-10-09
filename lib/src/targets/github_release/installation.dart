@@ -1,24 +1,20 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
-import '../../builds/binary_artifact.dart';
 import '../../engine/assets.dart';
 import '../../engine/git.dart';
 import '../../engine/release_manifest.dart';
-import '../../engine/stage_archive.dart';
 import '../../engine/tools.dart';
 import '../../engine/version.dart';
 import '../../installations/model.dart';
-import '../../installations/metadata.dart';
 import '../../installations/provider.dart';
 import '../../installations/store.dart';
+import '../../transforms/archive.dart';
 import '../../transforms/digest.dart';
 
 /// Public release assets, verified against RK's release manifest before use.
 /// The checksum proves consistency with that release, not independent authorship.
-class GithubInstallationProvider
-    implements InstallationProvider, InstallationUpdates {
+class GithubInstallationProvider implements InstallationProvider {
   GithubInstallationProvider(
     this.tools,
     this.store,
@@ -70,7 +66,6 @@ class GithubInstallationProvider
       source: source,
       version: version,
       location: location,
-      managed: true,
       commands: {
         project.commands.single: LaunchCommand(
           '$location/${project.commands.single}',
@@ -82,7 +77,7 @@ class GithubInstallationProvider
   @override
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async {
     if (project.repository == null ||
         project.unit.tagPattern == null ||
@@ -158,8 +153,13 @@ class GithubInstallationProvider
         final metadata = manifest.artifacts
             .where((a) => a.name == archiveName)
             .firstOrNull;
-        if (metadata == null || metadata.size > 128 * 1024 * 1024) continue;
-        return _GithubRelease(project, version, asset(archiveName), metadata);
+        if (metadata == null) continue;
+        return AvailableInstallation(
+          version,
+          url: asset(archiveName),
+          size: metadata.size,
+          sha256: metadata.sha256,
+        );
       }
       if (list.length < 100) break;
     }
@@ -171,26 +171,17 @@ class GithubInstallationProvider
   @override
   Future<Installation> install(
     ExecutableProject project,
+    AvailableInstallation? release,
     void Function(String) progress,
   ) async {
-    progress('Finding the latest ${project.unit.name} release…');
-    return download(project, await latest(project), progress);
-  }
-
-  @override
-  Future<Installation> download(
-    ExecutableProject project,
-    AvailableInstallation release,
-    void Function(String) progress,
-  ) async {
-    if (release is! _GithubRelease) {
-      throw const InstallationFailure('Invalid GitHub release.');
+    if (release == null) {
+      progress('Finding the latest ${project.unit.name} release…');
+      release = await latest(project);
     }
     final version = release.version;
-    final metadata = release.metadata;
     progress('Downloading ${project.name} $version…');
-    final bytes = await fetch(release.archive, metadata.size);
-    if (bytes.length != metadata.size || Sha256.hex(bytes) != metadata.sha256) {
+    final bytes = await fetch(release.url!, release.size!);
+    if (bytes.length != release.size || Sha256.hex(bytes) != release.sha256) {
       throw const InstallationFailure(
         'The downloaded archive failed its release checksum.',
       );
@@ -212,24 +203,14 @@ class GithubInstallationProvider
         final file = File('${temporary.path}/${entry.key}');
         file.parent.createSync(recursive: true);
         file.writeAsBytesSync(entry.value, flush: true);
-        final mode =
-            decoded.artifact.files
-                    .where((f) => f.path == entry.key)
-                    .firstOrNull
-                    ?.executable ==
-                true
-            ? '700'
-            : '600';
-        await checked(tools, '/bin/chmod', [mode, file.path]);
-      }
-      if (platform.startsWith('macos-')) {
-        for (final file in decoded.artifact.signedFiles) {
-          await checked(tools, '/usr/bin/codesign', [
-            '--verify',
-            '--strict',
-            '${temporary.path}/${file.path}',
-          ]);
-        }
+        // The archive's own modes: 0755 for its executables, 0644 otherwise.
+        final executable = decoded.artifact.files.any(
+          (f) => f.path == entry.key && f.executable,
+        );
+        await checked(tools, '/bin/chmod', [
+          executable ? '755' : '644',
+          file.path,
+        ]);
       }
       final smoke = await tools.run(
         '${temporary.path}/${decoded.artifact.entryPoint}',
@@ -250,58 +231,29 @@ class GithubInstallationProvider
   }
 
   @override
-  Future<void> uninstall(
-    ExecutableProject project,
-    Installation installation,
-  ) async {
+  Future<void> uninstall(ExecutableProject project) async {
     final downloads = Directory(store.downloads(project));
     if (downloads.existsSync()) downloads.deleteSync(recursive: true);
   }
 }
 
-class InstallationArchive {
-  InstallationArchive(this.artifact, this.files);
-  final BinaryArtifact artifact;
-  final Map<String, List<int>> files;
-}
-
-/// Validate the whole inventory before writing any path. Never extract archive
-/// permissions, links, device nodes, arbitrary paths, or unknown bundle layouts.
-Future<InstallationArchive> decodeInstallationArchive(
+/// [compressed] as [command]'s release archive, every entry checked before
+/// any is written: no links, device nodes, arbitrary paths or unknown bundle
+/// layouts, and the program it ships the one asked for.
+Future<ArchiveReader> decodeInstallationArchive(
   List<int> compressed,
   String command,
 ) async {
-  const limit = 512 * 1024 * 1024;
-  final bytes = BytesBuilder(copy: false);
-  await for (final chunk in gzip.decoder.bind(Stream.value(compressed))) {
-    if (bytes.length + chunk.length > limit) {
-      throw const InstallationFailure(
-        'The unpacked archive exceeds the installation limit.',
-      );
-    }
-    bytes.add(chunk);
-  }
   try {
-    final decoded = StageArchiveInventory.decodeTar(bytes.takeBytes());
-    if (decoded.artifact.entryPoint != command) {
+    final archive = ArchiveReader.decode(compressed);
+    if (archive.artifact.entryPoint != command) {
       throw const FormatException('The archive exports a different command.');
     }
-    return InstallationArchive(decoded.artifact, decoded.files);
+    return archive;
   } on FormatException catch (error) {
     throw InstallationFailure(
       'The release archive does not match its executable layout.',
       error.message,
     );
   }
-}
-
-class _GithubRelease extends AvailableInstallation {
-  _GithubRelease(
-    ExecutableProject project,
-    String version,
-    this.archive,
-    this.metadata,
-  ) : super(project, InstallationSource.github, version);
-  final Uri archive;
-  final ReleaseManifestArtifact metadata;
 }

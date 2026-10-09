@@ -14,13 +14,15 @@ ReleaseConfig accepted(String source) {
   return config!;
 }
 
-/// Parses configuration rk must refuse, returning the code it refused with.
-String refusedWith(String source) {
+/// Parses configuration rk must refuse, returning its first problem as
+/// `<code> <line> <message>`: the kind of mistake, and where and what it is.
+String refusal(String source) {
   final diagnostics = Diagnostics();
   final config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
   expect(config, isNull, reason: 'should have been refused');
   expect(diagnostics.isNotEmpty, isTrue);
-  return diagnostics.found.first.code;
+  final first = diagnostics.found.first;
+  return '${first.code} ${first.source?.line} ${first.message}';
 }
 
 const keybay = '''
@@ -47,7 +49,7 @@ void main() {
         'example/..',
       ]) {
         expect(
-          refusedWith('''
+          refusal('''
 schema = 2
 
 [release.cli]
@@ -55,7 +57,7 @@ publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["macos-arm64"]
 homebrew_tap = "$tap"
 '''),
-          'RK-CONF-040',
+          'RK-CONF-005 6 homebrew_tap: must be a GitHub owner/repository',
           reason: tap,
         );
       }
@@ -80,9 +82,8 @@ binary_platforms = ["linux-x64"]
     });
 
     test('a project target on a multi-project unit is refused', () {
-      final diagnostics = Diagnostics();
-      ReleaseConfig.parse(
-        '''
+      expect(
+        refusal('''
 schema = 2
 
 [release.framework]
@@ -94,21 +95,14 @@ path = "packages/a"
 
 [[release.framework.project]]
 path = "packages/b"
-''',
-        'release.toml',
-        diagnostics,
-      );
-
-      expect(
-        diagnostics.found.map((diagnostic) => diagnostic.code),
-        contains('RK-CONF-038'),
+'''),
+        'RK-CONF-003 5 "pub.dev" belongs to a project in "framework"',
       );
     });
 
     test('a unit target on a project row is refused', () {
-      final diagnostics = Diagnostics();
-      ReleaseConfig.parse(
-        '''
+      expect(
+        refusal('''
 schema = 2
 
 [release.framework]
@@ -122,14 +116,8 @@ publish = ["github-release"]
 [[release.framework.project]]
 path = "packages/b"
 publish = ["pub.dev"]
-''',
-        'release.toml',
-        diagnostics,
-      );
-
-      expect(
-        diagnostics.found.map((diagnostic) => diagnostic.code),
-        contains('RK-CONF-038'),
+'''),
+        'RK-CONF-003 9 "github-release" belongs to the unit "framework"',
       );
     });
 
@@ -149,36 +137,24 @@ binary_platforms = ["linux-x64"]
     });
 
     test('tag and GitHub declarations require git-tag', () {
-      final tagDiagnostics = Diagnostics();
-      ReleaseConfig.parse(
-        '''
+      expect(
+        refusal('''
 schema = 2
 [release.core]
 tag = "v{version}"
 publish = ["pub.dev"]
-''',
-        'release.toml',
-        tagDiagnostics,
+'''),
+        'RK-CONF-009 3 unit "core" declares a tag but does not publish a Git '
+        'tag',
       );
       expect(
-        tagDiagnostics.found.map((diagnostic) => diagnostic.code),
-        contains('RK-CONF-039'),
-      );
-
-      final githubDiagnostics = Diagnostics();
-      ReleaseConfig.parse(
-        '''
+        refusal('''
 schema = 2
 [release.cli]
 publish = ["github-release"]
 binary_platforms = ["linux-x64"]
-''',
-        'release.toml',
-        githubDiagnostics,
-      );
-      expect(
-        githubDiagnostics.found.map((diagnostic) => diagnostic.code),
-        contains('RK-CONF-024'),
+'''),
+        'RK-CONF-009 3 github-release needs git-tag',
       );
     });
   });
@@ -261,13 +237,14 @@ homebrew_tap = "danReynolds/homebrew-tools"
   group('a setting nothing in the unit can read is refused', () {
     test('homebrew_tap on a unit that does not publish to homebrew', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.cli]\n'
           'publish = ["git-tag", "github-release"]\n'
           'binary_platforms = ["macos-arm64"]\n'
           'homebrew_tap = "danReynolds/homebrew-tools"\n',
         ),
-        'RK-CONF-036',
+        'RK-CONF-009 5 unit "cli" declares homebrew_tap but does not publish '
+        'to homebrew',
       );
     });
   });
@@ -285,95 +262,99 @@ homebrew_tap = "danReynolds/homebrew-tools"
   group('refuses', () {
     test('a missing schema', () {
       expect(
-        refusedWith('[release.core]\npublish = ["pub.dev"]'),
-        'RK-CONF-001',
+        refusal('[release.core]\npublish = ["pub.dev"]'),
+        'RK-CONF-002 1 release.toml must declare its schema version',
       );
     });
 
     test('an unsupported schema', () {
       expect(
-        refusedWith('schema = 3\n[release.core]\npublish = ["pub.dev"]'),
-        'RK-CONF-002',
+        refusal('schema = 3\n[release.core]\npublish = ["pub.dev"]'),
+        startsWith('RK-CONF-002 1 this rk understands schema 2'),
       );
     });
 
     test('an unknown top-level setting', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\ntoolchain = "3.12.2"\n'
           '[release.core]\npublish = ["pub.dev"]',
         ),
-        'RK-CONF-003',
+        'RK-CONF-003 2 unknown setting "toolchain"',
       );
     });
 
     test('no units at all', () {
-      expect(refusedWith('schema = 2'), 'RK-CONF-004');
+      expect(
+        refusal('schema = 2'),
+        'RK-CONF-005 1 release.toml declares no release units',
+      );
     });
 
     test('an unknown setting inside a unit', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.core]\n'
           'publish = ["pub.dev"]\nlinux_deps = ["libsecret"]',
         ),
-        'RK-CONF-008',
+        'RK-CONF-003 4 unknown setting "linux_deps" in unit "core"',
       );
     });
 
     test('a unit declaring a project both inline and as rows', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.core]\npath = "a"\n'
           'publish = ["pub.dev"]\n\n[[release.core.project]]\npath = "b"\n'
           'publish = ["pub.dev"]',
         ),
-        'RK-CONF-009',
+        'RK-CONF-009 2 unit "core" declares a project inline and also as rows',
       );
     });
 
     test('a multi-project unit without an explicit tag', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.framework]\n'
           'publish = ["git-tag"]\n'
           '[[release.framework.project]]\n'
           'path = "a"\npublish = ["pub.dev"]\n\n'
           '[[release.framework.project]]\npath = "b"\npublish = ["pub.dev"]',
         ),
-        'RK-CONF-012',
+        'RK-CONF-009 2 unit "framework" releases several projects, so its tag '
+        'cannot be derived',
       );
     });
 
     test('a tag pattern without {version}', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.core]\ntag = "release"\n'
           'path = "a"\npublish = ["git-tag", "pub.dev"]',
         ),
-        'RK-CONF-014',
+        'RK-CONF-005 3 tag: must contain {version} exactly once',
       );
     });
 
     test('a tag pattern with an invented placeholder', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.core]\n'
           'tag = "{unit}-v{version}"\npath = "a"\n'
           'publish = ["git-tag", "pub.dev"]',
         ),
-        'RK-CONF-015',
+        startsWith('RK-CONF-005 3 tag: uses a placeholder rk does not have'),
       );
     });
 
     test('a tag pattern git cannot create', () {
       for (final tag in ['v{version} rc', 'v{version}.lock', 'v..{version}']) {
         expect(
-          refusedWith(
+          refusal(
             'schema = 2\n[release.core]\ntag = "$tag"\n'
             'path = "a"\npublish = ["git-tag", "pub.dev"]',
           ),
-          'RK-CONF-033',
+          startsWith('RK-CONF-005 3 tag: git will not accept it'),
           reason: tag,
         );
       }
@@ -385,86 +366,89 @@ homebrew_tap = "danReynolds/homebrew-tools"
 
     test('a tag on a project row, which belongs to its unit', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.framework]\ntag = "fleury-v{version}"\n'
           'publish = ["git-tag"]\n'
           '[[release.framework.project]]\npath = "packages/a"\n'
           'publish = ["pub.dev"]\ntag = "a-v{version}"',
         ),
-        'RK-CONF-016',
+        'RK-CONF-003 8 "tag" belongs to the unit "framework", not to one of '
+        'its projects',
       );
     });
 
     test('a path escaping the repository', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.core]\npath = "../other"\n'
           'publish = ["pub.dev"]',
         ),
-        'RK-CONF-018',
+        startsWith('RK-CONF-005 3 path: "../other" leaves the repository'),
       );
     });
 
     test('a project that publishes nowhere', () {
       expect(
-        refusedWith('schema = 2\n[release.core]\npath = "a"'),
-        'RK-CONF-019',
+        refusal('schema = 2\n[release.core]\npath = "a"'),
+        'RK-CONF-009 2 unit "core" selects no release output',
       );
     });
 
     test('an empty publish list', () {
       expect(
-        refusedWith('schema = 2\n[release.core]\npublish = []'),
-        'RK-CONF-019',
+        refusal('schema = 2\n[release.core]\npublish = []'),
+        'RK-CONF-009 2 unit "core" selects no release output',
       );
     });
 
     test('an unknown channel', () {
       expect(
-        refusedWith('schema = 2\n[release.core]\npublish = ["npm"]'),
-        'RK-CONF-022',
+        refusal('schema = 2\n[release.core]\npublish = ["npm"]'),
+        'RK-CONF-005 3 publish: "npm" is not one of git-tag, pub.dev, '
+        'github-release, homebrew',
       );
     });
 
     test('a duplicated channel', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.core]\n'
           'publish = ["pub.dev", "pub.dev"]',
         ),
-        'RK-CONF-023',
+        'RK-CONF-005 3 publish: "pub.dev" is listed twice',
       );
     });
 
     test('homebrew without github-release', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.cli]\n'
           'publish = ["pub.dev", "homebrew"]\n'
           'binary_platforms = ["macos-arm64"]',
         ),
-        'RK-CONF-024',
+        'RK-CONF-009 2 homebrew needs github-release',
       );
     });
 
     test('Homebrew requested with no platforms named', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.cli]\n'
           'publish = ["git-tag", "github-release", "homebrew"]',
         ),
-        'RK-CONF-025',
+        'RK-CONF-009 2 a Homebrew project in "cli" names no binary platforms',
       );
     });
 
     test('an unknown platform', () {
       expect(
-        refusedWith(
+        refusal(
           'schema = 2\n[release.cli]\n'
           'publish = ["git-tag", "github-release"]\n'
           'binary_platforms = ["macos-x64"]',
         ),
-        'RK-CONF-028',
+        'RK-CONF-005 4 binary_platforms: "macos-x64" is not one of '
+        'linux-x64, linux-arm64, macos-arm64',
       );
     });
   });
@@ -484,8 +468,11 @@ linux_deps = ["libsecret"]
       diagnostics,
     );
     expect(
-      diagnostics.found.map((d) => d.code),
-      containsAll(['RK-CONF-003', 'RK-CONF-008']),
+      diagnostics.found.map((d) => '${d.code} ${d.source?.line} ${d.message}'),
+      [
+        'RK-CONF-003 2 unknown setting "toolchain"',
+        'RK-CONF-003 6 unknown setting "linux_deps" in unit "core"',
+      ],
       reason: 'a fix cycle should be one edit round',
     );
   });
@@ -536,25 +523,28 @@ assets = ["libparser.so"]
 
     test('names a command, not an empty one', () {
       expect(
-        refusedWith(unit('build = []\nassets = ["a.so"]\n')),
-        'RK-CONF-042',
+        refusal(unit('build = []\nassets = ["a.so"]\n')),
+        'RK-CONF-005 7 build: is empty',
       );
       expect(
-        refusedWith(unit('build = ["tool/build.sh", ""]\nassets = ["a.so"]\n')),
-        'RK-CONF-042',
+        refusal(unit('build = ["tool/build.sh", ""]\nassets = ["a.so"]\n')),
+        'RK-CONF-005 7 build: an argument is empty',
       );
       expect(
-        refusedWith(unit('build = "tool/build.sh"\nassets = ["a.so"]\n')),
-        'RK-CONF-042',
+        refusal(unit('build = "tool/build.sh"\nassets = ["a.so"]\n')),
+        'RK-CONF-005 7 build: must be a list of text',
       );
     });
 
     test('has no placeholder but {out}', () {
       expect(
-        refusedWith(
+        refusal(
           unit('build = ["tool/build.sh", "{version}"]\nassets = ["a.so"]\n'),
         ),
-        'RK-CONF-042',
+        startsWith(
+          'RK-CONF-005 7 build: "{version}" uses a placeholder rk does not '
+          'have',
+        ),
       );
     });
 
@@ -567,53 +557,71 @@ assets = ["libparser.so"]
         'x/',
       ]) {
         expect(
-          refusedWith(unit('build = ["b"]\nassets = ["$asset"]\n')),
-          'RK-CONF-043',
+          refusal(unit('build = ["b"]\nassets = ["$asset"]\n')),
+          startsWith(
+            'RK-CONF-005 8 assets: "$asset" is not a file inside the build\'s '
+            'output',
+          ),
           reason: asset,
         );
       }
-      expect(refusedWith(unit('build = ["b"]\nassets = []\n')), 'RK-CONF-043');
+      expect(
+        refusal(unit('build = ["b"]\nassets = []\n')),
+        'RK-CONF-005 8 assets: is empty',
+      );
+      expect(
+        accepted(
+          unit('build = ["b"]\nassets = ["a:b.bin"]\n'),
+        ).units.single.projects.single.assets,
+        ['a:b.bin'],
+        reason: 'on POSIX, where rk runs, a colon is part of a file name',
+      );
     });
 
     test('publishes each asset under a name of its own', () {
       expect(
-        refusedWith(unit('build = ["b"]\nassets = ["x/a.so", "y/A.so"]\n')),
-        'RK-CONF-043',
+        refusal(unit('build = ["b"]\nassets = ["x/a.so", "y/A.so"]\n')),
+        'RK-CONF-005 8 assets: "x/a.so" and "y/A.so" would be published under '
+        'one name',
         reason: 'GitHub compares asset names without case',
       );
       expect(
-        refusedWith(
-          unit('build = ["b"]\nassets = ["x/release-manifest.json"]\n'),
-        ),
-        'RK-CONF-043',
-        reason: "the manifest name is rk's own",
+        refusal(unit('build = ["b"]\nassets = ["x/release-manifest.json"]\n')),
+        'RK-CONF-005 8 assets: "x/release-manifest.json" would be published as '
+        "release-manifest.json, which is rk's own",
       );
     });
 
     test('declares the command and the assets together', () {
-      expect(refusedWith(unit('build = ["b"]\n')), 'RK-CONF-044');
-      expect(refusedWith(unit('assets = ["a.so"]\n')), 'RK-CONF-044');
+      expect(
+        refusal(unit('build = ["b"]\n')),
+        'RK-CONF-009 7 a project of "parser" declares a build without assets',
+      );
+      expect(
+        refusal(unit('assets = ["a.so"]\n')),
+        'RK-CONF-009 7 a project of "parser" declares assets without a build',
+      );
     });
 
     test('does not also ask rk for binaries', () {
       expect(
-        refusedWith(
-          unit(
-            '$declared'
-            'binary_platforms = ["linux-x64"]\n',
-          ),
-        ),
-        'RK-CONF-044',
+        refusal(unit('${declared}binary_platforms = ["linux-x64"]\n')),
+        'RK-CONF-009 7 a project of "parser" declares both a build and '
+        'binary_platforms',
       );
     });
 
     test('publishes its assets as a GitHub release', () {
-      expect(refusedWith(unit(declared, publish: '"git-tag"')), 'RK-CONF-045');
+      expect(
+        refusal(unit(declared, publish: '"git-tag"')),
+        'RK-CONF-009 3 unit "parser" builds release assets but does not '
+        'publish a GitHub release',
+      );
     });
 
     test('keeps its settings on its own row when the unit has rows', () {
       expect(
-        refusedWith('''
+        refusal('''
 schema = 2
 
 [release.parser]
@@ -625,7 +633,8 @@ build = ["b"]
 path = "native/parser"
 assets = ["a.so"]
 '''),
-        'RK-CONF-009',
+        'RK-CONF-009 3 unit "parser" declares a project inline and also as '
+        'rows',
       );
     });
   });
