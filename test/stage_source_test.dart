@@ -180,6 +180,31 @@ void main() {
     ]);
   });
 
+  test('an included options file the lane holds anyway has its own include '
+      'followed', () async {
+    // lints.yaml sits beside the root options, so the lane holds it before
+    // anything says it holds options.
+    final snapshot = await StageSourceSnapshot.capture(
+      MemorySourceTree({
+        'analysis_options.yaml': 'include: lints.yaml\n',
+        'lints.yaml': 'include: tool/strict.yaml\n',
+        'tool/strict.yaml': 'analyzer:\n  language:\n    strict-casts: true\n',
+        'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',
+      }),
+    );
+    final root = Directory.systemTemp.createTempSync('rk-source-options-');
+    addTearDown(() => root.deleteSync(recursive: true));
+
+    snapshot.export(root.path, only: snapshot.dartBuildInputs('packages/app'));
+
+    expect(_filesUnder(root), [
+      'analysis_options.yaml',
+      'lints.yaml',
+      'packages/app/pubspec.yaml',
+      'tool/strict.yaml',
+    ]);
+  });
+
   group('a submodule', () {
     const files = {
       'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',

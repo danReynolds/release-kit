@@ -314,7 +314,9 @@ final class StageSourceSnapshot implements SourceTree {
       } else if (path.split('/').last == 'analysis_options.yaml' ||
           options.contains(path)) {
         for (final included in _includes(path)) {
-          options.add(included);
+          // A file the export holds anyway may have been read before this
+          // said it holds options: it is read again, for its own includes.
+          if (options.add(included)) selected.remove(included);
           reach(included);
         }
       }
