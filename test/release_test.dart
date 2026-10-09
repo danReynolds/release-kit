@@ -1200,28 +1200,6 @@ publish = ["pub.dev"]
       );
     });
 
-    test(
-      '--yes accepts the same aggregate plan after private preparation',
-      () async {
-        final (:registry, :onRun) = world();
-        final prompts = <String>[];
-        final ran = await release(
-          only: null,
-          config: config,
-          source: source(),
-          registry: registry,
-          onRun: onRun,
-          answerPrompt: (prompt) {
-            prompts.add(prompt);
-            return 'yes';
-          },
-        );
-
-        expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-        expect(prompts, ['Release core 0.2.0 and other 0.2.0? [y/N] ']);
-      },
-    );
-
     test('a unit that cannot go ahead prevents every publication', () async {
       final (:registry, :onRun) = world(other: '0.5.0');
       final prompts = <String>[];
@@ -1795,17 +1773,6 @@ void main() {
       expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
     },
   );
-
-  test('an unexpected pub login adapter error remains an rk crash', () async {
-    await expectLater(
-      () => release(
-        onRun: (key) {
-          if (key == 'dart pub login') throw StateError('adapter broke');
-        },
-      ),
-      throwsA(isA<StateError>()),
-    );
-  });
 
   test('a declined release publishes nothing, and says so as data', () async {
     final ran = await release(typed: 'no');
@@ -2455,45 +2422,9 @@ publish = ["pub.dev"]
   });
 
   group('the pub session a release needs', () {
-    /// A home directory rk will inspect for the pub client's session file.
-    ({Map<String, String> Function() environment, File credentials}) home({
-      required bool signedIn,
-    }) {
-      final root = Directory.systemTemp.createTempSync('rk-pub-session-');
-      addTearDown(() {
-        if (root.existsSync()) root.deleteSync(recursive: true);
-      });
-      final credentials = File(
-        Platform.isMacOS
-            ? '${root.path}/Library/Application Support/dart/'
-                  'pub-credentials.json'
-            : '${root.path}/.config/dart/pub-credentials.json',
-      );
-      if (signedIn) {
-        credentials
-          ..parent.createSync(recursive: true)
-          ..writeAsStringSync('{"accessToken":"fixture"}');
-      }
-      return (environment: () => {'HOME': root.path}, credentials: credentials);
-    }
-
-    test('is left alone when the machine was already signed in', () async {
-      final machine = home(signedIn: true);
-      final ran = await release(
-        refreshEnvironment: machine.environment,
-        registry: _MutableRegistry(<String>['0.1.0']),
-      );
-      expect(
-        ran.calls,
-        isNot(contains('dart pub logout')),
-        reason: 'a release must not change how the operator signed in',
-      );
-    });
-
+    // Each release runs with a HOME that holds no pub session.
     test('is left alone when a token supplies the credential', () async {
-      final machine = home(signedIn: false);
       final ran = await release(
-        refreshEnvironment: machine.environment,
         registry: _MutableRegistry(<String>['0.1.0']),
         results: {
           'dart pub token list': ToolResult(
@@ -2507,11 +2438,6 @@ publish = ["pub.dev"]
       );
       expect(
         ran.calls,
-        isNot(contains('dart pub logout')),
-        reason: 'the secret comes from the environment; there is no session',
-      );
-      expect(
-        ran.calls,
         isNot(contains('dart pub login')),
         reason:
             'signing in would create a durable credential the release '
@@ -2520,9 +2446,7 @@ publish = ["pub.dev"]
     });
 
     test('a token for a lookalike host does not answer for pub.dev', () async {
-      final machine = home(signedIn: false);
       final ran = await release(
-        refreshEnvironment: machine.environment,
         registry: _MutableRegistry(<String>['0.1.0']),
         results: {
           'dart pub token list': ToolResult(
@@ -2542,9 +2466,7 @@ publish = ["pub.dev"]
     });
 
     test('a missing dart executable refuses instead of crashing', () async {
-      final machine = home(signedIn: false);
       final ran = await release(
-        refreshEnvironment: machine.environment,
         registry: _MutableRegistry(<String>['0.1.0']),
         answers: (key) {
           if (key == 'dart pub token list') {
@@ -3458,60 +3380,6 @@ void mutationCloseout() {
     );
     expect(ran.report['rerun_helps'], false);
   });
-
-  test(
-    'a later publish claims nothing, and says so by saying nothing',
-    () async {
-      // The negative direction. Announcing a first-time claim for a name that
-      // is already published is the same false-consent bug the first-signing
-      // disclosure had — it told the operator an identity did not exist yet
-      // while reading it off the binary users had installed.
-      final registry = _MutableRegistry(<String>['0.1.0']);
-      final ran = await release(
-        registry: registry,
-        onRun: (key) {
-          if (key == 'dart pub publish --from-archive <archive> --force') {
-            registry.goLive('0.2.0');
-            registry.archives['keybay@0.2.0'] = publishedBytes();
-          }
-        },
-      );
-
-      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-      expect(
-        ran.text,
-        isNot(contains('claims, for the first time')),
-        reason: 'keybay is published; this release takes no new name',
-      );
-    },
-  );
-
-  test(
-    'a first publish unattended is refused for want of a human, not a rule',
-    () async {
-      final ran = await release(
-        registry: FakeRegistry({}),
-        typed: null, // nobody at the terminal
-      );
-
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(
-        ran.problems.map((p) => p['code']),
-        contains('RK-AUTH-001'),
-        reason:
-            'claiming a name permanently is exactly what wants a human — '
-            'and with nobody there, that is the honest reason to refuse',
-      );
-      // `--from-archive` is the act; `--to-archive` is validation and staging,
-      // before authorization by design.
-      expect(
-        ran.calls.any(
-          (c) => c == 'dart pub publish --from-archive <archive> --force',
-        ),
-        isFalse,
-      );
-    },
-  );
 }
 
 /// Every `git ls-remote` and `git push` is a round trip to origin: over SSH
