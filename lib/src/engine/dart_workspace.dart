@@ -2,17 +2,13 @@ import 'diagnostic.dart';
 import 'pubspec.dart';
 import 'source_tree.dart';
 
-/// Dart discovery facts shared by init and unbound source staging.
-///
-/// Keeping manifest candidates and source roots together prevents the two
-/// paths from growing different workspace rules.
+/// The Dart packages `rk init` can propose: the root manifest and its
+/// workspace members, or every tracked manifest.
 final class DartWorkspaceDiscovery {
   DartWorkspaceDiscovery._({
-    required Iterable<String> sourceRoots,
     required Iterable<String> notices,
     required Iterable<DartProjectDiscovery> projects,
-  }) : sourceRoots = Set.unmodifiable(sourceRoots),
-       notices = List.unmodifiable(notices),
+  }) : notices = List.unmodifiable(notices),
        projects = List.unmodifiable(projects);
 
   factory DartWorkspaceDiscovery(
@@ -32,26 +28,19 @@ final class DartWorkspaceDiscovery {
       return _dartResult(
         tree,
         manifests: manifests,
-        sourceRoots: const [],
         missingDescription: 'tracked but not on disk',
       );
     }
     if (!tree.exists('pubspec.yaml')) {
-      return DartWorkspaceDiscovery._(
-        sourceRoots: const [],
-        notices: const [],
-        projects: const [],
-      );
+      return DartWorkspaceDiscovery._(notices: const [], projects: const []);
     }
     final manifests = <String>['pubspec.yaml'];
-    final roots = <String>{'pubspec.yaml'};
     final notices = <String>[];
     final source = tree.read('pubspec.yaml');
     if (source == null) {
       return _dartResult(
         tree,
         manifests: manifests,
-        sourceRoots: roots,
         missingDescription: 'discovered but missing',
       );
     }
@@ -61,7 +50,6 @@ final class DartWorkspaceDiscovery {
       return _dartResult(
         tree,
         manifests: manifests,
-        sourceRoots: roots,
         missingDescription: 'discovered but missing',
       );
     }
@@ -77,19 +65,16 @@ final class DartWorkspaceDiscovery {
         continue;
       }
       manifests.add(manifest);
-      roots.add(member);
     }
     manifests.sort();
     return _dartResult(
       tree,
       manifests: manifests,
-      sourceRoots: roots,
       notices: notices,
       missingDescription: 'discovered but missing',
     );
   }
 
-  final Set<String> sourceRoots;
   final List<String> notices;
   final List<DartProjectDiscovery> projects;
 }
@@ -120,7 +105,6 @@ final class DartProjectDiscovery {
 DartWorkspaceDiscovery _dartResult(
   SourceTree tree, {
   required Iterable<String> manifests,
-  required Iterable<String> sourceRoots,
   Iterable<String> notices = const [],
   required String missingDescription,
 }) {
@@ -154,11 +138,7 @@ DartWorkspaceDiscovery _dartResult(
       ),
     );
   }
-  return DartWorkspaceDiscovery._(
-    sourceRoots: sourceRoots,
-    notices: allNotices,
-    projects: projects,
-  );
+  return DartWorkspaceDiscovery._(notices: allNotices, projects: projects);
 }
 
 bool _isExampleOrFixture(String directory) {

@@ -10,10 +10,9 @@ import 'version.dart';
 /// Release intent resolved against the repository: what the author asked for,
 /// joined to what the manifests say.
 class Resolution {
-  Resolution({required this.units, required this.tree});
+  Resolution({required this.units});
 
   final List<ResolvedUnit> units;
-  final SourceTree tree;
 
   /// The one dependency graph over this resolution. Everything that orders
   /// projects, units, or prerequisites reads it from here, so a plan can
@@ -126,7 +125,7 @@ class Resolution {
     _rejectSharedTags(units, diagnostics);
 
     if (diagnostics.isNotEmpty) return null;
-    return Resolution(units: units, tree: tree);
+    return Resolution(units: units);
   }
 
   /// A sole tagged unit gets the ordinary `v{version}` convention. The

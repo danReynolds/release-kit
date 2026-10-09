@@ -511,14 +511,12 @@ class SourceUnreadable implements Exception {
   String toString() => '$path could not be read: $reason';
 }
 
-/// What this process has already read from immutable commits.
+/// The tree listings this process has already read from immutable commits.
 ///
 /// A commit named by its full object id cannot change, so neither can its
-/// tree or any blob in it. A release reads the same few manifests hundreds
-/// of times, each read a `git show` subprocess; answering repeats from memory
-/// leaves one read per file. Callers get copies, so nothing they do to a
-/// result reaches the cache. Symbolic names (HEAD, a branch) are never
-/// cached: they move.
+/// tree: the configuration read and the stage list the same commit once
+/// between them. Callers get copies, so nothing they do to a result reaches
+/// the cache. Symbolic names (HEAD, a branch) are never cached: they move.
 abstract final class _CommittedObjects {
   static final Map<String, List<GitTreeEntry>> trees = {};
 
@@ -526,7 +524,6 @@ abstract final class _CommittedObjects {
 
   static bool isObjectId(String commit) => _objectId.hasMatch(commit);
 
-  /// The key of [commit]'s tree in the repository at [root], or of the blob
-  /// at [path] in it.
+  /// The key of [commit]'s tree in the repository at [root].
   static String key(String root, String commit) => '$root\u0000$commit';
 }

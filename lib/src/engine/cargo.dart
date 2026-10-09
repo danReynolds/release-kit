@@ -76,7 +76,6 @@ Pubspec? readCargoManifest(
     version: version,
     publishTo: 'none',
     repository: null,
-    sdkConstraint: null,
     executables: const [],
     dependencies: const {},
     devDependencies: const {},

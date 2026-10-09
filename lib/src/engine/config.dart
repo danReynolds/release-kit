@@ -276,7 +276,7 @@ class _Reader {
       return null;
     }
 
-    final selected = _publish(name, value, location);
+    final selected = _publish(value);
     if (selected == null) return null;
     final unitPublish = <PublishTarget>{};
     final inlinePublish = <PublishTarget>{};
@@ -557,9 +557,7 @@ class _Reader {
     }
 
     final path = _projectPath(unit, table, location);
-    final selected = inline
-        ? inlinePublish
-        : _publish(unit, table, location, allowMissing: true);
+    final selected = inline ? inlinePublish : _publish(table);
     if (path == null || selected == null) return null;
 
     if (!inline) {
@@ -661,23 +659,9 @@ class _Reader {
     return parts.isEmpty ? '.' : parts.join('/');
   }
 
-  Set<PublishTarget>? _publish(
-    String unit,
-    TomlTable table,
-    SourceLocation location, {
-    bool allowMissing = true,
-  }) {
+  Set<PublishTarget>? _publish(TomlTable table) {
     final value = table['publish'];
-    if (value == null) {
-      if (allowMissing) return const {};
-      _diagnostics.add(
-        'RK-CONF-019',
-        'unit "$unit" does not say where to publish',
-        source: location,
-        remedy: 'add publish with at least one target',
-      );
-      return null;
-    }
+    if (value == null) return const {};
     if (value is! List<String>) {
       _diagnostics.add(
         'RK-CONF-020',
