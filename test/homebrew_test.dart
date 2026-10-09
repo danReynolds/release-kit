@@ -270,15 +270,23 @@ void main() {
       );
     });
 
-    test('a newer formula never rolls back', () async {
-      final newer = generated('1.1.0', 'sha256 "newer"');
-      final result = await target(newer).inspect(
-        formulaPath: 'Formula/tool.rb',
-        intendedVersion: Version.tryParse('1.0.0')!,
-        expectedBytes: generated('1.0.0', 'sha256 "expected"'),
-      );
-      expect(result.verdict, Verdict.conflict);
-      expect(result.detail, contains('newer version 1.1.0'));
+    test('a newer or hand-written formula is never overwritten', () async {
+      for (final (public, detail) in [
+        (generated('1.1.0', 'sha256 "newer"'), 'newer version 1.1.0'),
+        // An older-looking version in Ruby rk did not write is no authority.
+        (
+          utf8.encode('class T < Formula\n  version "0.9.0"\nend\n'),
+          'not a recognizable rk-generated formula',
+        ),
+      ]) {
+        final result = await target(public).inspect(
+          formulaPath: 'Formula/tool.rb',
+          intendedVersion: Version.tryParse('1.0.0')!,
+          expectedBytes: generated('1.0.0', 'sha256 "expected"'),
+        );
+        expect(result.verdict, Verdict.conflict, reason: detail);
+        expect(result.detail, contains(detail));
+      }
     });
 
     test(
