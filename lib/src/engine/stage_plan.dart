@@ -77,9 +77,6 @@ Map<String, Object?> stagePlanFor(ResolvedUnit unit, GitState git) => {
     'homebrew_tap': unit.homebrewTap,
     'targets': unit.publish.map((target) => target.configName).toList()..sort(),
   },
-  // Every stage is of a commit now. The key stays, so a stage staged before
-  // keeps its name.
-  'source_binding': 'git',
   'repository': git.originUrl,
   'projects': [
     for (final project in unit.projects)

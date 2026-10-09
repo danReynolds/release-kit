@@ -192,15 +192,15 @@ final class StageSourceSnapshot implements SourceTree {
             : path.substring(0, path.length - '/pubspec.yaml'.length),
   };
 
-  /// The files a Dart build of the package at [directory] reads from this
-  /// source: that package, every other package in it, since a workspace, an
-  /// override, a path dependency or an analysis options include can reach
-  /// any of them, and the files directly inside each directory above
-  /// [directory], such as a workspace's pubspec, analysis options and
-  /// ignore rules. A package that encloses [directory], such as a workspace
-  /// root, adds its `lib/` rather than everything beneath it, which is the
-  /// rest of the repository. An export adds what links and analysis
-  /// options includes lead to (see [export]).
+  /// The files Pub reads from this source when it validates and archives
+  /// the package at [directory]: that package, every other package in it,
+  /// since a workspace, an override, a path dependency or an analysis
+  /// options include can reach any of them, and the files directly inside
+  /// each directory above [directory], such as a workspace's pubspec,
+  /// analysis options and ignore rules. A package that encloses
+  /// [directory], such as a workspace root, adds its `lib/` rather than
+  /// everything beneath it, which is the rest of the repository. An export
+  /// adds what links and analysis options includes lead to (see [export]).
   bool Function(String path) dartBuildInputs(String directory) {
     final own = _path(directory);
     final above = <String>{''};
@@ -230,23 +230,17 @@ final class StageSourceSnapshot implements SourceTree {
   /// file includes by a relative path. Exporting into a directory that
   /// already holds part of this source adds the rest.
   ///
-  /// A submodule inside what the export holds refuses it with a
-  /// [StageSourceRefusal] naming the submodule and [reader], the project
-  /// built from the export: the commit records the submodule's commit and
-  /// none of its files, so leaving them out would stage, and publish, an
-  /// incomplete package.
+  /// An export that would hold what this commit does not refuses before
+  /// writing anything, with a [StageSourceRefusal] naming it and [reader],
+  /// the project built from the export: a submodule, whose commit this
+  /// commit records and none of its files, or a link that leads out of this
+  /// commit, to a file on this machine. Either would stage, and publish,
+  /// something other than the commit.
   void export(String root, {bool Function(String path)? only, String? reader}) {
-    final selected = only == null
-        ? null
-        : _closure(only, (submodule) => _refuse(submodule, reader));
-    // A submodule is a directory: an export holds it when it would hold a
-    // file inside it.
-    for (final submodule in _submodules) {
-      if (only == null || only('$submodule/.')) _refuse(submodule, reader);
-    }
+    final selected = _closure(only ?? (_) => true, reader);
     final modes = <String, String>{};
     for (final MapEntry(key: path, value: bytes) in _files.entries) {
-      if (selected != null && !selected.contains(path)) continue;
+      if (!selected.contains(path)) continue;
       final file = File(
         [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
       );
@@ -256,7 +250,7 @@ final class StageSourceSnapshot implements SourceTree {
     }
     setFileModes(modes);
     for (final MapEntry(key: path, value: target) in _links.entries) {
-      if (selected != null && !selected.contains(path)) continue;
+      if (!selected.contains(path)) continue;
       final link = Link(
         [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
       );
@@ -265,14 +259,14 @@ final class StageSourceSnapshot implements SourceTree {
     }
   }
 
-  /// The files and links [only] selects, with everything they lead to
-  /// inside this commit: what a link points to (a file, another link, or
-  /// every file and link in a directory), and what an analysis options file
-  /// includes by a relative path, as the analyzer reads it.
-  Set<String> _closure(
-    bool Function(String path) only,
-    void Function(String submodule) refuse,
-  ) {
+  /// The files, links and submodules [only] selects, a submodule being a
+  /// directory it selects when it would select a file inside it, with
+  /// everything they lead to: what a link points to (a file, another link,
+  /// a submodule, or everything in a directory), and what an analysis
+  /// options file includes by a relative path, as the analyzer reads it.
+  /// One that holds a submodule or a link out of this commit refuses (see
+  /// [export]).
+  Set<String> _closure(bool Function(String path) only, String? reader) {
     final selected = <String>{};
     final options = <String>{};
     final pending = [
@@ -280,29 +274,28 @@ final class StageSourceSnapshot implements SourceTree {
         if (only(path)) path,
       for (final path in _links.keys)
         if (only(path)) path,
+      for (final path in _submodules)
+        if (only('$path/.')) path,
     ];
     void reach(String target) {
-      // A link on the way to the target is followed too.
+      // A link or a submodule on the way to the target is reached too.
       final parts = target.split('/');
       for (var end = 1; end < parts.length; end++) {
         final prefix = parts.take(end).join('/');
-        if (_links.containsKey(prefix)) pending.add(prefix);
+        if (_links.containsKey(prefix) || _submodules.contains(prefix)) {
+          pending.add(prefix);
+        }
       }
-      if (_files.containsKey(target) || _links.containsKey(target)) {
+      if (_files.containsKey(target) ||
+          _links.containsKey(target) ||
+          _submodules.contains(target)) {
         pending.add(target);
         return;
       }
       final inside = target.isEmpty ? '' : '$target/';
-      for (final submodule in _submodules) {
-        if (submodule == target || submodule.startsWith(inside)) {
-          refuse(submodule);
-        }
-      }
       pending.addAll([
-        for (final file in _files.keys)
-          if (file.startsWith(inside)) file,
-        for (final link in _links.keys)
-          if (link.startsWith(inside)) link,
+        for (final path in [..._files.keys, ..._links.keys, ..._submodules])
+          if (path.startsWith(inside)) path,
       ]);
     }
 
@@ -314,9 +307,21 @@ final class StageSourceSnapshot implements SourceTree {
       } else if (path.split('/').last == 'analysis_options.yaml' ||
           options.contains(path)) {
         for (final included in _includes(path)) {
-          options.add(included);
+          // A file the export holds anyway may have been read before this
+          // said it holds options: it is read again, for its own includes.
+          if (options.add(included)) selected.remove(included);
           reach(included);
         }
+      }
+    }
+    for (final submodule in _submodules) {
+      if (selected.contains(submodule)) {
+        throw _withoutSubmodule(submodule, reader);
+      }
+    }
+    for (final MapEntry(key: link, value: target) in _links.entries) {
+      if (selected.contains(link) && _linkTarget(link) == null) {
+        throw _outOfCommit(link, target, reader);
       }
     }
     return selected;
@@ -341,20 +346,38 @@ final class StageSourceSnapshot implements SourceTree {
   }
 }
 
-Never _refuse(String submodule, String? reader) => throw StageSourceRefusal(
-  Diagnostic(
-    code: 'RK-STAGE-003',
-    message: reader == null
-        ? '$submodule is a Git submodule, which a stage cannot hold'
-        : '$reader would be staged without $submodule, a Git submodule',
-    remedy:
-        'a stage is made from this repository\'s commit, which records the '
-        'submodule\'s commit and none of its files. Commit the files the '
-        'build needs into this repository instead, or move the submodule '
-        'out of the Dart packages; a project\'s own build reads the whole '
-        'repository.',
-  ),
-);
+StageSourceRefusal _withoutSubmodule(String submodule, String? reader) =>
+    StageSourceRefusal(
+      Diagnostic(
+        code: 'RK-STAGE-003',
+        message: reader == null
+            ? '$submodule is a Git submodule, which a stage cannot hold'
+            : '$reader would be staged without $submodule, a Git submodule',
+        remedy:
+            'a stage is made from this repository\'s commit, which records '
+            'the submodule\'s commit and none of its files. Commit the files '
+            'the build needs into this repository instead, or move the '
+            'submodule out of the Dart packages; a binary or a project\'s own '
+            'build reads the whole repository.',
+      ),
+    );
+
+StageSourceRefusal _outOfCommit(String link, String target, String? reader) =>
+    StageSourceRefusal(
+      Diagnostic(
+        code: 'RK-STAGE-003',
+        message: reader == null
+            ? '$link leads out of the commit, to $target'
+            : '$reader would be staged with $link, which leads out of the '
+                  'commit to $target',
+        remedy:
+            'a stage is made from this repository\'s commit, which holds the '
+            'link and not what it leads to: the build would read this '
+            'machine\'s file instead. Commit the file in place of the link, '
+            'or link to a file in the repository by a relative path; a '
+            'binary or a project\'s own build reads the whole repository.',
+      ),
+    );
 
 /// A stage that cannot be made from this source as committed.
 final class StageSourceRefusal implements Exception {

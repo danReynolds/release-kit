@@ -162,14 +162,6 @@ void main() {
       expect(() => _identity({'bad': DateTime(2026)}), throwsFormatException);
       expect(() => _identity({'bad': double.nan}), throwsFormatException);
     });
-
-    test('a receipt from a stage of uncommitted source is not read', () {
-      final identity = _identity(const {'unit': 'tool'});
-      final json = {...identity.toJson(), 'run_id': 'run-a'};
-
-      expect(() => StageIdentity.fromJson(json), throwsFormatException);
-      expect(StageIdentity.fromJson(identity.toJson()).id, identity.id);
-    });
   });
 
   group('stage receipt and inspection', () {

@@ -180,6 +180,31 @@ void main() {
     ]);
   });
 
+  test('an included options file the lane holds anyway has its own include '
+      'followed', () async {
+    // lints.yaml sits beside the root options, so the lane holds it before
+    // anything says it holds options.
+    final snapshot = await StageSourceSnapshot.capture(
+      MemorySourceTree({
+        'analysis_options.yaml': 'include: lints.yaml\n',
+        'lints.yaml': 'include: tool/strict.yaml\n',
+        'tool/strict.yaml': 'analyzer:\n  language:\n    strict-casts: true\n',
+        'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',
+      }),
+    );
+    final root = Directory.systemTemp.createTempSync('rk-source-options-');
+    addTearDown(() => root.deleteSync(recursive: true));
+
+    snapshot.export(root.path, only: snapshot.dartBuildInputs('packages/app'));
+
+    expect(_filesUnder(root), [
+      'analysis_options.yaml',
+      'lints.yaml',
+      'packages/app/pubspec.yaml',
+      'tool/strict.yaml',
+    ]);
+  });
+
   group('a submodule', () {
     const files = {
       'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',
@@ -211,22 +236,28 @@ void main() {
     });
 
     test('a link leads into refuses the export too', () async {
-      final snapshot = await _committed(
-        files,
-        links: {'packages/app/native': '../../third_party'},
-        submodules: ['third_party/vendor'],
-      );
-      final root = Directory.systemTemp.createTempSync('rk-source-sub-');
-      addTearDown(() => root.deleteSync(recursive: true));
+      for (final links in [
+        {'packages/app/native': '../../third_party'},
+        {'packages/app/lib/vendor.dart': '../../../third_party/vendor/x.dart'},
+      ]) {
+        final snapshot = await _committed(
+          files,
+          links: links,
+          submodules: ['third_party/vendor'],
+        );
+        final root = Directory.systemTemp.createTempSync('rk-source-sub-');
+        addTearDown(() => root.deleteSync(recursive: true));
 
-      expect(
-        () => snapshot.export(
-          root.path,
-          only: snapshot.dartBuildInputs('packages/app'),
-          reader: 'app',
-        ),
-        throwsA(refusal('third_party/vendor')),
-      );
+        expect(
+          () => snapshot.export(
+            root.path,
+            only: snapshot.dartBuildInputs('packages/app'),
+            reader: 'app',
+          ),
+          throwsA(refusal('third_party/vendor')),
+          reason: '$links',
+        );
+      }
     });
 
     test('that no lane reads is left out', () async {
@@ -247,7 +278,66 @@ void main() {
       expect(
         () => snapshot.export(root.path, reader: 'app'),
         throwsA(refusal('third_party/vendor')),
-        reason: 'a project\'s own build reads the whole repository',
+        reason: 'a binary or a project\'s own build reads the whole repository',
+      );
+    });
+  });
+
+  group('a link out of the commit', () {
+    Matcher refusal(String link) => isA<StageSourceRefusal>().having(
+      (refusal) => refusal.diagnostic,
+      'diagnostic',
+      isA<Diagnostic>()
+          .having((diagnostic) => diagnostic.code, 'code', 'RK-STAGE-003')
+          .having(
+            (diagnostic) => diagnostic.message,
+            'message',
+            allOf(contains(link), contains('app')),
+          ),
+    );
+
+    test('inside what an export holds refuses it, naming the link', () async {
+      // Pub would follow either one to this machine's own file.
+      for (final target in ['/Users/me/shared/notes.md', '../../../notes.md']) {
+        final snapshot = await _committed(
+          {'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n'},
+          links: {'packages/app/EXTRA.md': target},
+        );
+        final root = Directory.systemTemp.createTempSync('rk-source-out-');
+        addTearDown(() => root.deleteSync(recursive: true));
+
+        expect(
+          () => snapshot.export(
+            root.path,
+            only: snapshot.dartBuildInputs('packages/app'),
+            reader: 'app',
+          ),
+          throwsA(refusal('packages/app/EXTRA.md')),
+          reason: target,
+        );
+        expect(_filesUnder(root), isEmpty, reason: 'refused before writing');
+      }
+    });
+
+    test('that no lane reads is left out', () async {
+      final snapshot = await _committed(
+        {'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n'},
+        links: {'docs/latest': '/var/www/docs'},
+      );
+      final root = Directory.systemTemp.createTempSync('rk-source-out-');
+      addTearDown(() => root.deleteSync(recursive: true));
+
+      snapshot.export(
+        root.path,
+        only: snapshot.dartBuildInputs('packages/app'),
+        reader: 'app',
+      );
+
+      expect(_filesUnder(root), ['packages/app/pubspec.yaml']);
+      expect(
+        () => snapshot.export(root.path, reader: 'app'),
+        throwsA(refusal('docs/latest')),
+        reason: 'a binary or a project\'s own build reads the whole repository',
       );
     });
   });
@@ -321,7 +411,7 @@ void main() {
     );
   });
 
-  group('a lane exports what its build reads', () {
+  group('an export holds what its build reads', () {
     const repository = {
       'README.md': '# A repository\n',
       'analysis_options.yaml': 'linter:\n',
@@ -329,18 +419,22 @@ void main() {
       'packages/README.md': '# Packages\n',
       'packages/app/pubspec.yaml':
           'name: app\nversion: 1.0.0\nexecutables:\n  app:\n',
-      'packages/app/bin/app.dart': 'void main() {}\n',
+      'packages/app/bin/app.dart':
+          "import '../../../shared/banner.dart';\n\n"
+          'void main() => print(banner);\n',
       'packages/core/pubspec.yaml': 'name: core\nversion: 1.0.0\n',
       'packages/core/lib/core.dart': 'library;\n',
       'packages/core/tool/data.txt': 'core data\n',
+      'shared/banner.dart': "const banner = 'app';\n",
       'tools/script/pubspec.yaml': 'name: script\n',
       'tools/script/bin/script.dart': 'void main() {}\n',
       'native/parser/Cargo.toml':
           '[package]\nname = "parser"\nversion = "1.0.0"\n',
       'native/parser/src/lib.rs': '',
     };
+    final everything = [...repository.keys]..sort();
 
-    Future<List<String>> exported(String unit) async {
+    Future<List<String>> lane(String unit) async {
       final tree = MemorySourceTree(repository);
       final diagnostics = Diagnostics();
       final resolution = Resolution.resolve(
@@ -376,25 +470,43 @@ assets = ["parser.so"]
       ]..sort();
     }
 
-    test('a Dart build: its packages, every pubspec, and what sits above '
-        'its own', () async {
-      expect(await exported('app'), [
-        'README.md',
-        'analysis_options.yaml',
-        'packages/README.md',
-        'packages/app/bin/app.dart',
-        'packages/app/pubspec.yaml',
-        'packages/core/lib/core.dart',
-        'packages/core/pubspec.yaml',
-        'packages/core/tool/data.txt',
-        'tools/script/bin/script.dart',
-        'tools/script/pubspec.yaml',
-      ]);
+    test(
+      'Pub: its packages, every pubspec, and what sits above its own',
+      () async {
+        final snapshot = await StageSourceSnapshot.capture(
+          MemorySourceTree(repository),
+        );
+        final root = Directory.systemTemp.createTempSync('rk-source-pub-');
+        addTearDown(() => root.deleteSync(recursive: true));
+
+        snapshot.export(
+          root.path,
+          only: snapshot.dartBuildInputs('packages/app'),
+        );
+
+        expect(_filesUnder(root), [
+          'README.md',
+          'analysis_options.yaml',
+          'packages/README.md',
+          'packages/app/bin/app.dart',
+          'packages/app/pubspec.yaml',
+          'packages/core/lib/core.dart',
+          'packages/core/pubspec.yaml',
+          'packages/core/tool/data.txt',
+          'tools/script/bin/script.dart',
+          'tools/script/pubspec.yaml',
+        ]);
+      },
+    );
+
+    test('a binary build: everything, since Dart source imports any file by '
+        'its path', () async {
+      expect(await lane('app'), everything);
     });
 
     test('a project\'s own build: everything, since rk cannot know what it '
         'reads', () async {
-      expect(await exported('parser'), [...repository.keys]..sort());
+      expect(await lane('parser'), everything);
     });
   });
 

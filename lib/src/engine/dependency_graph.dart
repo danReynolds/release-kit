@@ -35,7 +35,7 @@ final class DependencyGraph<T> {
     }
     final cycle = _cycle();
     if (cycle != null) {
-      throw StateError('dependency cycle: ${cycle.join(' -> ')}');
+      throw DependencyCycle<T>([for (final id in cycle) this[id]], cycle);
     }
   }
 
@@ -83,6 +83,9 @@ final class DependencyGraph<T> {
     return List<T>.unmodifiable(ordered);
   }
 
+  /// The ids on the first circle a depth-first walk in input order meets,
+  /// each depending on the next and the last on the first; null when there
+  /// is none.
   List<String>? _cycle() {
     final settled = <String>{};
     final visiting = <String>[];
@@ -90,10 +93,7 @@ final class DependencyGraph<T> {
 
     List<String>? visit(String id) {
       if (settled.contains(id)) return null;
-      if (!visitingSet.add(id)) {
-        final start = visiting.indexOf(id);
-        return [...visiting.sublist(start), id];
-      }
+      if (!visitingSet.add(id)) return visiting.sublist(visiting.indexOf(id));
       visiting.add(id);
       for (final dependency in _needs[id]!) {
         final found = visit(dependency);
@@ -111,4 +111,13 @@ final class DependencyGraph<T> {
     }
     return null;
   }
+}
+
+/// Values that depend on each other in a circle, which no order satisfies.
+final class DependencyCycle<T> extends StateError {
+  DependencyCycle(this.members, List<String> ids)
+    : super('dependency cycle: ${[...ids, ids.first].join(' -> ')}');
+
+  /// The circle: each value depends on the next, and the last on the first.
+  final List<T> members;
 }

@@ -76,15 +76,18 @@ published finishes with 0.1.14.
 - A stage holds only what rk publishes, and its receipt; it no longer keeps a
   copy of the source, which was 148 MB for each of Fleury's packages. Each
   producer builds in a directory of its own, with the source its build
-  reads: for a Dart package, every package in the repository, the files
-  above it, what links lead to and the analysis options they include. A
-  project's own build gets everything. rk's own memory during a fresh stage
+  reads: for a package's Pub archive, every package in the repository, the
+  files above it, what links lead to and the analysis options they include.
+  A binary, whose Dart source can import any file by its path, and a
+  project's own build get everything. rk's own memory during a fresh stage
   of Fleury peaks at about 140 MB, down from 225 MB.
 - A repository that tracks a symbolic link, such as `CLAUDE.md -> AGENTS.md`,
   or a submodule stages. A link is exported as a link, with what it leads to.
-  A submodule no build reads is left out, as `git archive` does; one inside a
-  Dart package, or in a repository whose project runs its own build, refuses
-  with `RK-STAGE-003`, naming it.
+  A submodule, whose files the commit does not hold, or a link that leads out
+  of the commit, such as to an absolute path, refuses with `RK-STAGE-003`,
+  naming it, when a Dart package holds or links to it, or anywhere in a
+  repository whose project builds binaries or runs its own build; one no
+  build reads is left out, as `git archive` leaves out a submodule.
 - Staging offline reports that Pub could not reach the registry
   (`RK-PUB-019`), not validation errors to fix.
 - A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)

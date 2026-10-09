@@ -59,20 +59,14 @@ class StageIdentity {
     );
   }
 
-  /// The identity a receipt records. `run_id` is always null: it named the
-  /// stages of uncommitted source rk no longer makes, and stays in the
-  /// record so stages staged before keep their receipts.
+  /// The identity a receipt records.
   factory StageIdentity.fromJson(Object? value) {
     final map = _strictMap(value, const {
       'id',
       'head_commit',
       'head_tree',
       'plan_sha256',
-      'run_id',
     }, 'stage identity');
-    if (map['run_id'] != null) {
-      throw const FormatException('a stage of uncommitted source');
-    }
     // The id is derived again from what it names: a receipt that names
     // another stage is that stage's (see StageIssueKind.wrongStage).
     return StageIdentity.fromDigests(
@@ -92,7 +86,6 @@ class StageIdentity {
     'head_tree': headTree,
     'id': id,
     'plan_sha256': planSha256,
-    'run_id': null,
   };
 }
 
