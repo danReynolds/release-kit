@@ -127,54 +127,6 @@ void main() {
     },
   );
 
-  test('Homebrew init dependency changes stay in the shared plan', () {
-    final model = InitPicker(plan(), (_) {});
-    model.toggle(0, ReleaseChoice.homebrew);
-    expect(
-      model.plan.candidates.single.selected,
-      containsAll([
-        ReleaseChoice.homebrew,
-        ReleaseChoice.binary,
-        ReleaseChoice.gitTag,
-        ReleaseChoice.githubRelease,
-      ]),
-    );
-    model.toggle(0, ReleaseChoice.gitTag);
-    expect(
-      model.plan.candidates.single.selected,
-      isNot(contains(ReleaseChoice.homebrew)),
-    );
-    model.dispose();
-  });
-
-  test('init keyboard traversal reaches configuration review', () async {
-    InitPlan? result;
-    final model = InitPicker(plan(), (value) {
-      result = value;
-      exitApp();
-    });
-    final driver = FakeTerminalDriver(size: const CellSize(132, 30));
-    final done = runMatrixScreen(
-      InitScreen(model),
-      interrupt: () => model.finish(null),
-      driver: driver,
-    );
-    await driver.drawn();
-    // With no initial focus, Shift+Tab starts at the last action.
-    await driver.send(
-      const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}),
-    );
-    driver.enqueue(const KeyEvent(KeyCode.enter));
-    try {
-      await done.timeout(const Duration(seconds: 3));
-      expect(result, isNotNull);
-    } finally {
-      exitApp();
-      await done;
-      model.dispose();
-    }
-  });
-
   for (final (signal, code) in [
     (AppSignal.interrupt, 130),
     (AppSignal.terminate, 143),

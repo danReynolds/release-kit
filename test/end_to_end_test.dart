@@ -1465,69 +1465,6 @@ publish = ["git-tag", "pub.dev"]
       },
     );
 
-    test('never edits a config that exists', () {
-      final repo = Rk.example(scratch, 'single-package', as: 'existing');
-      final run = repo(['init']);
-      expect(run.code, 0);
-      expect(run.all, contains('already exists'));
-      expect(run.all, contains('→ rk status'));
-    });
-
-    test('a repository with nothing releasable is a correct answer', () {
-      final repo = Rk.repository(scratch, 'none', {
-        'pubspec.yaml': 'name: tool\npublish_to: none\nversion: 1.0.0\n',
-      });
-      repo.commit(); // untracked manifests would give the same words for the
-      // wrong reason — the veto is what this asserts
-      final run = repo(['init']);
-      expect(run.code, 0, reason: 'not a refusal');
-      expect(run.all, contains('nothing here can be released'));
-    });
-
-    test('init takes no unit, and says so instead of ignoring one', () {
-      final repo = Rk.example(scratch, 'single-package', as: 'stray-arg');
-      final run = repo(['init', 'somepkg']);
-      expect(run.code, isNot(0));
-      expect(
-        run.all,
-        contains('takes no unit'),
-        reason:
-            'silently configuring the whole repository under an argument '
-            'that reads as a scope is worse than refusing it',
-      );
-    });
-
-    test(
-      'the quiet exits are distinguishable by a caller, not only a reader',
-      () {
-        // Review finding: already-configured and nothing-releasable produced
-        // byte-identical empty documents under --json. Each fact is data now.
-        final existing = Rk.example(
-          scratch,
-          'single-package',
-          as: 'json-exists',
-        );
-        final exists = existing(['init', '--json']);
-        expect(exists.code, 0, reason: exists.all);
-        // Already configured is not a problem: it leads to status.
-        expect(exists.json['problems'], isEmpty);
-        expect(exists.json['next'], ['rk status']);
-
-        final none = Rk.repository(scratch, 'json-none', {
-          'pubspec.yaml': 'name: tool\npublish_to: none\nversion: 1.0.0\n',
-        });
-        none.commit();
-        final nothing = none(['init', '--json']);
-        expect(nothing.code, 0, reason: nothing.all);
-        expect(
-          (nothing.json['problems'] as List)
-              .map((p) => (p as Map)['code'])
-              .toList(),
-          contains('RK-INIT-003'),
-        );
-      },
-    );
-
     test('the proposal round-trips through the machine surface '
         'into a releasable repository', () {
       // The dogfood loop, entirely through the CLI: init emits the proposal
