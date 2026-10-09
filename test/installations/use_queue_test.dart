@@ -52,7 +52,7 @@ void main() {
       final gates = {
         for (final source in versions.keys) source: Completer<void>(),
       };
-      final calls = <InstallationSource>[];
+      final calls = <InstallationSource>[], switched = <InstallationSource>[];
       var checks = 0, running = 0, closed = false;
       final model = UsePicker(
         states: inspect(),
@@ -74,8 +74,10 @@ void main() {
           running--;
           return '${release.source.label} installed';
         },
-        use: (_, _, _, _) async =>
-            throw StateError('No source switch expected'),
+        use: (_, source, _, _) async {
+          switched.add(source);
+          return 'Used';
+        },
         close: () => closed = true,
       );
       addTearDown(model.dispose);
@@ -135,19 +137,13 @@ void main() {
       await settle();
       tester.pump();
       expect(model.busy, isFalse);
-      final lines = tester.renderToString().split('\n');
-      final row = lines.indexWhere((line) => line.contains('Local'));
-      expect(
-        tester
-            .render()
-            .atColRow(lines[row].indexOf('Use'), row)
-            .style
-            .background,
-        const RgbColor(42, 76, 108),
-        reason: 'Finishing another source must not steal focus.',
-      );
       expect(closed, isFalse);
-      expect(tester.renderToString(), isNot(contains('[     Update')));
+      expect(switched, isEmpty);
+      key(KeyCode.enter);
+      await settle();
+      expect(switched, [
+        InstallationSource.local,
+      ], reason: 'Finishing another source must not steal focus.');
     },
   );
 
