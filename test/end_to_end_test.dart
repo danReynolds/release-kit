@@ -375,9 +375,8 @@ void main() {
   group('releasing to pub.dev', () {
     // Executed at the command layer with an evolving world: the acts change
     // the same fake registry and tag set the next inspection reads, which is
-    // what lets a re-run be the resume. Real pub.dev cannot be published to
-    // from a test, so the live half of the DONE WHEN is kept in the explicit
-    // `test/live_release_checkpoints.dart` lane.
+    // what lets a re-run be the resume. native_publication_test runs the real
+    // `dart pub` against a local pub.dev.
     List<int> archiveOfTree() => ArchiveBuilder.gzip(
       ArchiveBuilder.tar([
         ArchiveEntry(
@@ -1371,9 +1370,12 @@ publish = ["git-tag", "pub.dev"]
     });
   });
 
-  // Shared by the 7a and 7b groups: one scratch, one command-layer drive.
+  // Shared by the binary chain and destination groups: one scratch, one
+  // command-layer drive.
   late Directory scratch;
-  setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-7-'));
+  setUpAll(
+    () => scratch = Directory.systemTemp.createTempSync('rk-binary-drive-'),
+  );
   tearDownAll(() => scratch.deleteSync(recursive: true));
 
   /// Drives a full binary-unit release at the command layer, with tools
@@ -1976,9 +1978,9 @@ executables:
 
     test('a chain failure halts with its sentence — partway, not "nothing '
         'changed" and not "lost sight"', () async {
-      // Review finding: most chain failures exited 1 with no halt at all —
-      // no sentence for a person, no `halt` key for a caller. A rejected
-      // notarization is the everyday representative of the class.
+      // A failure in the chain ends with a halt, both as a sentence for a
+      // person and as the `halt` key for a caller. A rejected notarization
+      // is the everyday one.
       final run = await binaryDrive(
         stageOnly: false,
         notaryRejects: true,
@@ -2057,10 +2059,9 @@ executables:
 
     test('a platform nothing can run still ships — built, not executed, and '
         'disclosed before the release is authorized', () async {
-      // Optional evidence degrades honestly (CI-readiness constraint 6). A
-      // missing container runtime used to refuse the whole release: a
-      // daemon that is not running became a hard blocker on shipping,
-      // which is a heavier claim than the smoke test earns.
+      // Optional evidence degrades honestly. A container runtime that is not
+      // running must not block shipping: the smoke test does not earn that
+      // weight.
       final run = await binaryDrive(
         stageOnly: false,
         platforms: ['macos-arm64', 'linux-x64'],
@@ -2104,15 +2105,13 @@ executables:
     });
   });
 
-  /// Phase 7b — the destinations, driven through the same command-layer world
-  /// as 7a: the release carries the full asset shape, the body is the
+  /// The destinations, driven through the same command-layer world as the
+  /// chain: the release carries the full asset shape, the body is the
   /// changelog entry, and the tap moves only after the release is public.
   ///
-  /// This group was deleted as collateral when `--rehearse` was cut, and the
-  /// commit that did it never said so. What it guards is the one seam
-  /// `engine/assets.dart` closes: the producer and inspector consume one
-  /// derived GitHub inventory, while the formula is separately bound to its
-  /// tap through the manifest. The drive proves both destinations and the
+  /// The producer and inspector consume one derived GitHub inventory
+  /// (`engine/assets.dart`), while the formula is bound to its tap through
+  /// the manifest; the drive proves both destinations and the
   /// changelog-derived body through the command layer.
   group('binary destinations', () {
     test(
@@ -2380,9 +2379,7 @@ executables:
         expect(
           run.text,
           matches(RegExp(r'macOS code identifier\s+tool')),
-          reason:
-              'a swap of the identifier and the team survived a weaker '
-              'assertion that only looked for the value',
+          reason: 'each name on its own row, beside its label',
         );
         expect(run.text, matches(RegExp(r'Apple team\s+D \(TEAM123456\)')));
       });

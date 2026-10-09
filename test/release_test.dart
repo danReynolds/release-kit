@@ -499,9 +499,9 @@ Future<Ran> release({
       stageFor: stageFor,
     ),
     tools: recorder,
-    // Yields to the event queue rather than completing in a microtask: a
-    // mutation that unbounded the confirm poll wedged the whole test runner
-    // instead of failing, because even the framework's timeout timer starved.
+    // Yields to the event queue rather than completing in a microtask, so a
+    // confirm poll that never ends fails by timeout instead of starving the
+    // framework's own timer and wedging the runner.
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     allowInteractiveTools: allowInteractiveTools,
@@ -642,7 +642,7 @@ publish = ["git-tag", "pub.dev"]
   );
 
   test('a dependency released in the same run is staged from source and '
-      'publishes first', () async {
+      'ordered first', () async {
     final prompts = <String>[];
     final ran = await release(
       only: null,
@@ -740,6 +740,15 @@ publish = ["pub.dev"]
       );
       expect(ran.report['next'], ['rk release']);
       expect((ran.report['halt'] as Map)['kind'], 'beforeActing');
+      expect(ran.text, contains('not published yet'));
+      expect(ran.calls, isEmpty, reason: 'nothing is staged, nothing acts');
+      expect(
+        ran.steps.map((step) => step['verdict']),
+        contains('absent'),
+        reason:
+            'a --json caller gets the checklist with verdicts, not an '
+            'empty document with a halt in it',
+      );
     });
 
     test(
@@ -875,11 +884,6 @@ dependencies:
       expect(ran.calls, isEmpty);
     },
   );
-
-  // Native first-party release ordering, all-private failure/decline and
-  // cross-unit publication are exercised with real native stages in
-  // dart_stage_preparation_test.dart. A source-only destination fixture cannot
-  // substitute for the resolved private dependency handoff.
 
   group('a bare release of independent units', () {
     const config = """
@@ -1365,10 +1369,9 @@ publish = ["pub.dev"]
   );
 }
 
-/// Phase 7a closeout: `_signingBaseline` — the identity read the whole sign
-/// step depends on — had no test at all. Four of the review's surviving
-/// mutations lived in it.
-void signingBaselineRegressions() {
+/// The signing baseline: the identity a signed release must continue, read
+/// from the newest earlier release that published a signed binary.
+void signingBaseline() {
   const binaryConfig = '''
 schema = 2
 
@@ -1608,9 +1611,9 @@ executables:
 void main() {
   releaseCommandContract();
   originRoundTrips();
-  reviewRegressions();
-  mutationCloseout();
-  signingBaselineRegressions();
+  beforeActing();
+  afterActing();
+  signingBaseline();
 
   test('stage prepares every local input and nothing public', () async {
     final ran = await release(dryRun: true);
@@ -1635,8 +1638,8 @@ void main() {
       ran.calls,
       contains('dart pub publish --to-archive <archive>'),
       reason:
-          'the rehearsal rehearses: the first real run once discovered '
-          'a validation refusal only after the signed tag was public',
+          'Pub validates the package while staging, long before a signed '
+          'tag is public',
     );
   });
 
@@ -1787,9 +1790,7 @@ void main() {
     expect(
       (ran.report['repository'] as Map)['head'],
       isNotNull,
-      reason:
-          'doc/json.md promises repository on every verb, and the '
-          'production-alpha retry checkpoint reads its head',
+      reason: 'doc/json.md promises repository on every verb',
     );
     final unitDocument = (ran.report['units'] as List).cast<Map>().single;
     expect(unitDocument['version'], '0.2.0');
@@ -2636,83 +2637,8 @@ class _ReadCountingRegistry extends FakeRegistry {
   }
 }
 
-/// Regressions for the phase 3 independent reviews: every halting rule was
-/// documentation, protected by zero tests in either direction, and a halted
-/// release was prose-only under --json.
-void reviewRegressions() {
-  const twoUnits = '''
-schema = 2
-
-[release.core]
-tag = "keybay-v{version}"
-path = "packages/keybay"
-publish = ["git-tag", "pub.dev"]
-
-[release.cli]
-tag = "keybay_cli-v{version}"
-path = "packages/cli"
-publish = ["git-tag", "pub.dev"]
-''';
-
-  MemorySourceTree twoUnitTree() => MemorySourceTree({
-    'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-    'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-    'packages/cli/pubspec.yaml': '''
-name: keybay_cli
-version: 0.2.0
-dependencies:
-  keybay: 0.2.0
-''',
-    'packages/cli/CHANGELOG.md': '## 0.2.0\n',
-  }, description: '/repo/keybay');
-
-  test('a prerequisite that is not live halts before acting', () async {
-    final ran = await release(
-      config: twoUnits,
-      source: twoUnitTree(),
-      only: 'cli',
-      registry: FakeRegistry({
-        'keybay': ['0.1.0'], // 0.2.0 is not out
-        'keybay_cli': ['0.1.0'], // exists, so first-publish is not the issue
-      }),
-    );
-
-    expect(ran.exitCode, ExitCodes.refused);
-    expect(
-      ran.calls,
-      everyElement(startsWith('git ls-remote')),
-      reason: 'only the read-only tag observation ran',
-    );
-    expect(
-      ran.text,
-      contains('no public target changed'),
-      reason: 'beforeActing',
-    );
-    expect(ran.text, contains('not published yet'));
-  });
-
-  test('and the halt is data, not only prose', () async {
-    final ran = await release(
-      config: twoUnits,
-      source: twoUnitTree(),
-      only: 'cli',
-      registry: FakeRegistry({
-        'keybay': ['0.1.0'],
-        'keybay_cli': ['0.1.0'],
-      }),
-    );
-
-    expect(
-      ran.steps,
-      isNotEmpty,
-      reason:
-          'a --json caller gets the checklist with verdicts, not an '
-          'empty document with a halt in it',
-    );
-    expect(ran.steps.map((s) => s['verdict']), contains('absent'));
-    expect(ran.problems.map((p) => p['code']), contains('RK-REL-001'));
-  });
-
+/// What a release checks before it acts, and what it says when it stops.
+void beforeActing() {
   test('only the name that is new is marked a first claim', () async {
     // A unit publishing several packages has one row each, all labelled
     // pub.dev. Marking by destination marked them all — telling the
@@ -3075,16 +3001,14 @@ publish = ["pub.dev"]
   }
 }
 
-/// Closeout for the phase 5 mutation review: nine survivors, clustered on
-/// interruption and reporting.
-void mutationCloseout() {
+/// What a release reads back after it acts, and how it finishes an act a
+/// stopped run began.
+void afterActing() {
   test('a local tag origin lacks is pushed, not skipped', () async {
-    // The reviewer's top finding, reproduced with real git: a push that died
-    // mid-process left a local tag, the next run inspected it as done from
-    // `git tag --list` alone, skipped the step — push included — and
-    // completed the release with the authorizing tag absent from origin,
-    // silently. The inspection now asks origin, and the act pushes what
-    // exists.
+    // A push that died mid-process leaves a local tag. Read from
+    // `git tag --list` alone it looks done, and the release would finish
+    // with its tag absent from origin. The inspection asks origin, and the
+    // act pushes what exists.
     final ran = await release(
       state: _git(tags: const ['v0.2.0']), // local tag, no onRemote
     );
