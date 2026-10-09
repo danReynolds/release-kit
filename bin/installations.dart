@@ -279,7 +279,6 @@ Future<int> _run(
     },
   );
   final commandAction = InstallationAction.values.byName(command);
-  final action = commandAction;
   final outcomes = <String>[];
   Future<List<ProjectInstallations>> refresh() async {
     final states = [
@@ -436,7 +435,7 @@ Future<int> _run(
       }
     }
   } else {
-    if (action == InstallationAction.uninstall && !yes) {
+    if (commandAction == InstallationAction.uninstall && !yes) {
       if (!interactive) {
         throw const InstallationFailure(
           'Removal needs confirmation.',

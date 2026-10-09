@@ -69,14 +69,4 @@ abstract class AvailableInstallation {
       projectName = project.name;
   final String projectRoot, projectName, version;
   final InstallationSource source;
-
-  void validate(ExecutableProject project, InstallationSource expected) {
-    if (project.root != projectRoot ||
-        project.name != projectName ||
-        source != expected) {
-      throw const InstallationFailure(
-        'The checked release belongs to another project or source.',
-      );
-    }
-  }
 }

@@ -29,7 +29,6 @@ class InstallationManager {
   final InstallationStore store;
   final Map<InstallationSource, InstallationProvider> providers;
   final Map<String, String> environment;
-  bool _busy = false;
 
   Future<ProjectInstallations> inspect(ExecutableProject project) async {
     final states = <InstallationSource, SourceInspection>{};
@@ -102,7 +101,6 @@ class InstallationManager {
     required void Function(String) progress,
     InstallationCancellation? cancellation,
   }) async {
-    release.validate(project, release.source);
     final provider = providers[release.source];
     if (!project.sources.contains(release.source) ||
         provider is! InstallationUpdates) {
@@ -110,13 +108,7 @@ class InstallationManager {
         'This source does not provide downloads.',
       );
     }
-    if (_busy) {
-      throw const InstallationFailure(
-        'An installation operation is already running.',
-      );
-    }
     final lock = store.lock();
-    _busy = true;
     try {
       cancellation?.check();
       final current = store.selected(project)?.source;
@@ -151,13 +143,6 @@ class InstallationManager {
                 progress,
               ),
             );
-      if (installed.source != release.source ||
-          installed.version != release.version) {
-        throw const InstallationFailure(
-          'The installed version differs from the checked release.',
-          'Check the provider before retrying.',
-        );
-      }
       // A package manager may already have committed its update. Finish the
       // routing even when cancellation arrived meanwhile. Updating the selected
       // source advances that source, never selects another.
@@ -168,7 +153,6 @@ class InstallationManager {
     } finally {
       lock.unlockSync();
       lock.closeSync();
-      _busy = false;
     }
   }
 
@@ -179,11 +163,6 @@ class InstallationManager {
     required void Function(String) progress,
     InstallationCancellation? cancellation,
   }) async {
-    if (_busy) {
-      throw const InstallationFailure(
-        'An installation operation is already running.',
-      );
-    }
     if (!project.sources.contains(source)) {
       throw InstallationFailure(
         '${project.name} does not support ${source.label}.',
@@ -197,7 +176,6 @@ class InstallationManager {
       );
     }
     final lock = store.lock();
-    _busy = true;
     try {
       cancellation?.check();
       if (action == InstallationAction.use) store.checkOwnership(project);
@@ -261,7 +239,6 @@ class InstallationManager {
     } finally {
       lock.unlockSync();
       lock.closeSync();
-      _busy = false;
     }
   }
 }

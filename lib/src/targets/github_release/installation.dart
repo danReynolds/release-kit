@@ -70,7 +70,6 @@ class GithubInstallationProvider
       source: source,
       version: version,
       location: location,
-      managed: true,
       commands: {
         project.commands.single: LaunchCommand(
           '$location/${project.commands.single}',

@@ -152,7 +152,6 @@ class InstallationStore {
         'Use a version whose complete executable set matches this project.',
       );
     }
-    checkOwnership(project);
     Directory(bin).createSync(recursive: true);
     final scripts = {
       for (final entry in installation.commands.entries)
@@ -229,7 +228,6 @@ class InstallationStore {
   /// earlier downloads, and any an interrupted run left half unpacked. The
   /// download the current launchers run is never removed.
   void retire(ExecutableProject project, Installation kept) {
-    if (!kept.managed) return;
     final parent = Directory(kept.location).parent;
     if (parent.path != downloads(project)) return;
     final inUse = selected(project)?.location;

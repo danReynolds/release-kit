@@ -2,8 +2,6 @@ import 'package:fleury/fleury_core.dart';
 import '../output/output.dart' show terminalSafeText;
 
 const commandTableWidth = 104;
-const positiveText = CellStyle(foreground: RgbColor(160, 230, 185));
-const attentionText = CellStyle(foreground: warning);
 
 const mutedText = CellStyle(dim: true);
 const accent = AnsiColor(6);

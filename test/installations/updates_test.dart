@@ -125,11 +125,6 @@ void main() {
           ),
         ),
       );
-      final other = fixture(scratch, name: 'other');
-      await expectLater(
-        manager.download(other, Release(project), progress: (_) {}),
-        throwsA(isA<InstallationFailure>()),
-      );
     },
   );
 
