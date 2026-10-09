@@ -20,7 +20,7 @@ Future<Produced> preparePubArchive(StageRun context, Work work) async {
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
     context.output.problem(diagnostic, unit: project.unitName);
-    return const Produced.failed(HaltKind.beforeActing);
+    return const Produced.failed(Stop.refused);
   }
   return Produced(warnings: validation.warnings);
 }

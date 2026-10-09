@@ -135,7 +135,7 @@ final class StageRunner {
             evidence: '$error',
           ),
         );
-        output.halt(HaltKind.beforeActing);
+        output.halt(Stop.refused);
         return false;
       }
     }
@@ -165,17 +165,17 @@ final class StageRunner {
             evidence: '$error',
           ),
         );
-        output.halt(HaltKind.beforeActing);
+        output.halt(Stop.refused);
         return false;
       }
     }
     final lanes = <String, BinaryChain>{};
-    final failures = <HaltKind>[];
+    final failures = <Stop>[];
 
     /// Records what [work] produced, and fills the rows it completes; null
-    /// when it is recorded, and otherwise how the stage stopped. Work that
+    /// when it is recorded, and otherwise why the stage stopped. Work that
     /// failed has said why.
-    HaltKind? settle(Work work, Produced produced) {
+    Stop? settle(Work work, Produced produced) {
       if (produced.halt case final halt?) {
         _discardUnrecorded(stage, work.outputs);
         stageProgress.fail(work.name);
@@ -194,13 +194,13 @@ final class StageRunner {
       } on Object catch (error) {
         stageProgress.fail(work.name);
         _stageProgressProblem(error);
-        return HaltKind.beforeActing;
+        return Stop.refused;
       }
     }
 
     /// Runs [work], a target's input; null when it is recorded, and
-    /// otherwise how the stage stopped.
-    Future<HaltKind?> runTargetStage(Work work) async {
+    /// otherwise why the stage stopped.
+    Future<Stop?> runTargetStage(Work work) async {
       final receiptName = work.name;
       final target = release.preparing(work)!;
       try {
@@ -234,9 +234,9 @@ final class StageRunner {
       }
     }
 
-    /// Runs [step], local work; null when it is recorded, and otherwise how
+    /// Runs [step], local work; null when it is recorded, and otherwise why
     /// the stage stopped.
-    Future<HaltKind?> runProducer(Work step) async {
+    Future<Stop?> runProducer(Work step) async {
       final receiptName = step.name;
       // A project's own build has no platform; it is one lane of its own.
       final laneName = step.platform == null
@@ -262,7 +262,7 @@ final class StageRunner {
           _discardUnrecorded(stage, step.outputs);
           stageProgress.fail(receiptName);
           _stageOperationProblem(step.summary, error);
-          return HaltKind.stoppedPartway;
+          return Stop.partway;
         }
         return settle(step, produced);
       } on Object catch (error) {
@@ -320,18 +320,12 @@ final class StageRunner {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       } on Object catch (error) {
         _stageOperationProblem('the ${unit.name} producer lane cleanup', error);
-        failures.add(HaltKind.stoppedPartway);
+        failures.add(Stop.partway);
       }
     }
     if (failures.isNotEmpty) {
       stageProgress.concludeStopped();
-      if (!output.report.halted) {
-        output.halt(
-          failures.reduce(
-            (left, right) => left.index >= right.index ? left : right,
-          ),
-        );
-      }
+      if (!output.report.halted) output.halt(Stop.worst(failures));
       return false;
     }
 
@@ -353,7 +347,7 @@ final class StageRunner {
           evidence: '$error',
         ),
       );
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       return false;
     }
 
@@ -422,13 +416,13 @@ final class StageRunner {
     );
   }
 
-  /// Reports [error] from [operation], and says how the stage stopped.
-  HaltKind _stageOperationProblem(String operation, Object error) {
+  /// Reports [error] from [operation], and says why the stage stopped.
+  Stop _stageOperationProblem(String operation, Object error) {
     // The source cannot be staged as committed, which is known before any
     // of it is built, and says why itself.
     if (error is StageSourceRefusal) {
       output.problem(error.diagnostic);
-      return HaltKind.beforeActing;
+      return Stop.refused;
     }
     output.problem(
       Diagnostic(
@@ -440,7 +434,7 @@ final class StageRunner {
         evidence: '$error',
       ),
     );
-    return HaltKind.stoppedPartway;
+    return Stop.partway;
   }
 
   Future<Produced> _actProducer(

@@ -413,9 +413,7 @@ Future<void> runRk(
     // reached the write — which teaches a reader to discount the sentence
     // everywhere it is true.
     output.halt(
-      output.report.changedWhatHaltsSpeakOf
-          ? HaltKind.lostTrack
-          : HaltKind.beforeActing,
+      output.report.changedWhatHaltsSpeakOf ? Stop.lostTrack : Stop.refused,
     );
     final recordsDiagnosis = Diagnosis.shouldWrite(
       command: command,
@@ -740,7 +738,7 @@ Future<int> _release(
   if (!source.inRepository) {
     _showRepository(output, source);
     output.problem(source.git.stagingProblem()!);
-    output.halt(HaltKind.beforeActing);
+    output.halt(Stop.refused);
     return ExitCodes.refused;
   }
   final resolution = prepared.resolution!;

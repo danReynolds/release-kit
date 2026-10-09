@@ -321,7 +321,7 @@ executables:
     expect(buffer.toString(), contains('leaf "OLD"'));
     expect(
       ok.halt,
-      HaltKind.unfixableByRerun,
+      Stop.unfixable,
       reason:
           'the producer states the verdict; the coordinator speaks the '
           'halt once, after every lane has rested',

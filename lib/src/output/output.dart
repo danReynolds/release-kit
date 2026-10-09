@@ -220,11 +220,6 @@ class Output {
   /// What a caller is told, recorded by the same calls that print.
   final Report report;
 
-  /// Whether an earlier unit in this repository command changed public
-  /// truth. Set by the release command at unit boundaries so a later local
-  /// refusal cannot claim the whole invocation changed nothing.
-  bool previousUnitActed = false;
-
   final Elapsed Function() _clock;
 
   /// This run's phases, rows and waits on a person, for the closing summary
@@ -762,57 +757,32 @@ class Output {
       return await body();
     } finally {
       if (--_holdingHalts == 0) {
-        final held = _heldHalt;
-        _heldHalt = null;
+        final held = _heldStop;
+        _heldStop = null;
         if (held != null) halt(held);
       }
     }
   }
 
   var _holdingHalts = 0;
-  HaltKind? _heldHalt;
+  Stop? _heldStop;
 
-  /// The plain sentence that opens every halt, before any verdict noun.
-  void halt(HaltKind kind) {
+  /// Says how the run stopped, in the plain sentence that opens every halt.
+  ///
+  /// A site says why it stops; what that means for the whole run is decided
+  /// here, once, from whether anything public has changed by now. A lane
+  /// that stops while another publishes beside it is told so, whichever
+  /// finished first.
+  void halt(Stop stop) {
     if (_holdingHalts > 0) {
-      final held = _heldHalt;
-      // The kinds are declared in order of seriousness.
-      if (held == null || kind.index > held.index) _heldHalt = kind;
+      _heldStop = Stop.worst([?_heldStop, stop]);
       return;
     }
     flushWarnings();
-    // A later unit can fail before its own first act after an earlier unit in
-    // the same repository command already published. The report is for the
-    // whole invocation, so "nothing changed" would be false.
-    if (kind == HaltKind.beforeActing && previousUnitActed) {
-      kind = HaltKind.stoppedPartway;
-    }
-    if (kind == HaltKind.unfixableByRerun && previousUnitActed) {
-      kind = HaltKind.actedAndUnfixable;
-    }
-    final sentence = switch (kind) {
-      HaltKind.beforeActing =>
-        'rk stopped. no public target changed. safe to re-run.',
-      HaltKind.stoppedPartway =>
-        'rk stopped partway. everything already '
-            'done is real and stays done; re-running resumes after it.',
-      HaltKind.lostTrack =>
-        'rk acted, then lost sight of the result. '
-            'an effect may exist. still safe to re-run.',
-      HaltKind.unfixableByRerun =>
-        'No public targets changed. Resolve the conflict before retrying.',
-      HaltKind.actedAndUnfixable =>
-        'rk acted, and what it read back cannot be fixed by re-running.',
-    };
-    report.halt(
-      kind.name,
-      sentence,
-      helps:
-          kind != HaltKind.unfixableByRerun &&
-          kind != HaltKind.actedAndUnfixable,
-    );
+    final kind = HaltKind.of(stop, changed: report.publicChanged);
+    report.halt(kind.name, kind.sentence, helps: kind.rerunHelps);
     blank();
-    say(sentence);
+    say(kind.sentence);
     blank();
   }
 
@@ -1527,10 +1497,30 @@ final class TargetChecks {
   }
 }
 
+/// Why a site stops, in order of seriousness. What that means for the whole
+/// run is [HaltKind.of] it, once the run knows whether anything public
+/// changed.
+enum Stop {
+  /// Refused before acting on what it stopped at.
+  refused,
+
+  /// Stopped between acts: what completed was read back and stays done.
+  partway,
+
+  /// Acted, then lost sight of the result.
+  lostTrack,
+
+  /// Something re-running will not resolve.
+  unfixable;
+
+  static Stop worst(Iterable<Stop> stops) =>
+      stops.reduce((left, right) => left.index >= right.index ? left : right);
+}
+
 /// Which of the two questions an operator has a halt is answering.
 enum HaltKind {
   /// No public target changed. Private preparation or native login may have.
-  beforeActing,
+  beforeActing('rk stopped. no public target changed. safe to re-run.'),
 
   /// The run stopped between acts; what completed stays done, nothing was
   /// lost sight of, and the next run continues from what it finds.
@@ -1540,20 +1530,46 @@ enum HaltKind {
   /// have acted (a pushed tag). "nothing changed" would be false there, and
   /// "lost sight of the result" would be too: the result was read, and it
   /// was a refusal.
-  stoppedPartway,
+  stoppedPartway(
+    'rk stopped partway. everything already done is real and stays done; '
+    're-running resumes after it.',
+  ),
 
   /// Something may have happened; the next run classifies what it finds.
-  lostTrack,
+  lostTrack(
+    'rk acted, then lost sight of the result. an effect may exist. still '
+    'safe to re-run.',
+  ),
 
   /// Something is wrong that re-running will not resolve.
-  unfixableByRerun,
+  unfixableByRerun(
+    'No public targets changed. Resolve the conflict before retrying.',
+  ),
 
   /// rk acted, read the result back, and the result is permanently wrong.
   ///
   /// The pre-act sentence said "rk did not act" about the worst path rk has
   /// — a mismatch read back one step after a real publish — which answered
   /// the halt's own first question falsely.
-  actedAndUnfixable,
+  actedAndUnfixable(
+    'rk acted, and what it read back cannot be fixed by re-running.',
+  );
+
+  const HaltKind(this.sentence);
+
+  final String sentence;
+
+  bool get rerunHelps => this != unfixableByRerun && this != actedAndUnfixable;
+
+  /// What [stop] means for a run that has, or has not, [changed] a public
+  /// target. [Stop] is in order for each answer, so the worst of several
+  /// stops means the worst of what each would.
+  static HaltKind of(Stop stop, {required bool changed}) => switch (stop) {
+    Stop.refused => changed ? stoppedPartway : beforeActing,
+    Stop.partway => stoppedPartway,
+    Stop.lostTrack => lostTrack,
+    Stop.unfixable => changed ? actedAndUnfixable : unfixableByRerun,
+  };
 }
 
 /// Process exit codes, from the RFC's output contract.

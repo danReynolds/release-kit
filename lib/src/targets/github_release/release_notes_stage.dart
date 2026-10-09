@@ -30,7 +30,7 @@ Future<Produced> prepareReleaseNotes(StageRun run, Work work) async {
             'or this is a bug in rk',
       ),
     );
-    return const Produced.failed(HaltKind.beforeActing);
+    return const Produced.failed(Stop.refused);
   }
   if (notes.isEmpty) {
     run.output.problem(
@@ -45,7 +45,7 @@ Future<Produced> prepareReleaseNotes(StageRun run, Work work) async {
             'under each ${unit.version} heading',
       ),
     );
-    return const Produced.failed(HaltKind.beforeActing);
+    return const Produced.failed(Stop.refused);
   }
 
   run.stage.write(work.outputs.single, utf8.encode(notes));

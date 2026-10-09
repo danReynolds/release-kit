@@ -86,7 +86,7 @@ final class MacIdentity {
         ),
         unit: unit.name,
       );
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       return null;
     }
     row.handle.begin(
@@ -123,7 +123,7 @@ final class MacIdentity {
           remedy: 'declare one executable in the native project manifest',
         ),
       );
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       return null;
     }
     row.complete(note: 'checked');
@@ -247,7 +247,7 @@ final class MacIdentity {
 
     if (refusal != null) {
       output.problem(refusal, unit: unit.name);
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       return null;
     }
     return publishedRequirement == null
@@ -302,7 +302,7 @@ final class MacIdentity {
         ),
         unit: unit.name,
       );
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       return (ok: false, requirement: null);
     }
 
@@ -340,7 +340,7 @@ final class MacIdentity {
             ),
             unit: unit.name,
           );
-          output.halt(HaltKind.beforeActing);
+          output.halt(Stop.refused);
           return (ok: false, requirement: null);
       }
     }

@@ -236,18 +236,18 @@ final class StageRun {
 
 /// What a piece of stage work found: the evidence its receipt keeps and the
 /// warnings a reused stage says again; or that it failed, having said why,
-/// and how the stage stops.
+/// and why the stage stops.
 final class Produced {
   const Produced({this.evidence = const {}, this.warnings = const []})
     : halt = null;
 
-  const Produced.failed([HaltKind this.halt = HaltKind.stoppedPartway])
+  const Produced.failed([Stop this.halt = Stop.partway])
     : evidence = const {},
       warnings = const [];
 
   final Map<String, Object?> evidence;
   final List<Diagnostic> warnings;
-  final HaltKind? halt;
+  final Stop? halt;
 
   bool get ok => halt == null;
 }

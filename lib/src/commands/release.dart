@@ -216,7 +216,7 @@ class ReleaseCommand {
     final ordered = resolution.dependencyPlan.units(problems);
     if (problems.isNotEmpty) {
       output.problems(problems.found);
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       return ExitCodes.refused;
     }
     return _runRepository(ordered);
@@ -245,7 +245,6 @@ class ReleaseCommand {
     for (final run in runs) {
       final code = await _publication.publish(run);
       if (code != ExitCodes.ok) return code;
-      output.previousUnitActed = output.report.actedPublicly;
     }
     return ExitCodes.ok;
   }
@@ -362,7 +361,7 @@ class ReleaseCommand {
   bool _admit(UnitSnapshot read) {
     if (read.stageReadProblem case final problem?) {
       output.problem(problem, unit: read.unit.name);
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       return false;
     }
     final partialStageLoss = read.partialStageLoss;
@@ -400,7 +399,7 @@ class ReleaseCommand {
         ),
         unit: read.unit.name,
       );
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       output.next('rk release');
       return false;
     }
@@ -430,7 +429,7 @@ class ReleaseCommand {
       }
     }
     if (unique.isEmpty) return true;
-    output.halt(HaltKind.beforeActing);
+    output.halt(Stop.refused);
     output.problems(unique.values.toList());
     return false;
   }
@@ -487,7 +486,7 @@ class ReleaseCommand {
     read.tagProblems.forEach(problems.report);
     progress.discard();
     if (problems.isEmpty) return true;
-    output.halt(HaltKind.beforeActing);
+    output.halt(Stop.refused);
     output.problems(problems.found);
     return false;
   }
@@ -500,8 +499,8 @@ class ReleaseCommand {
     if (read.released) return true;
     final check = read.stageCheck!;
 
-    bool refuse(Diagnostic problem, HaltKind halt) {
-      output.halt(halt);
+    bool refuse(Diagnostic problem, Stop stop) {
+      output.halt(stop);
       output.problem(problem, unit: unit.name);
       if (!stageOnly) _publication.showActions(run);
       return false;
@@ -511,12 +510,12 @@ class ReleaseCommand {
     // stage is gone. Staging alone never does: it builds the stage.
     run.recovering = !stageOnly && read.recoversWithoutStage;
     if (read.needsLostStage(recovering: !stageOnly)) {
-      return refuse(read.lostStageProblem, HaltKind.unfixableByRerun);
+      return refuse(read.lostStageProblem, Stop.unfixable);
     }
     if (run.recovering) return true;
     if (!check.reusable) {
       if (_refuseIfUnfinishable(unit) case final refusal?) {
-        return refuse(refusal, HaltKind.beforeActing);
+        return refuse(refusal, Stop.refused);
       }
     }
     // Stage-only mode keeps its explicit ability to replace
@@ -524,7 +523,7 @@ class ReleaseCommand {
     // before any local preparation.
     if (_stages.preparationProblem(unit, check, mayReplaceReviewed: stageOnly)
         case final problem?) {
-      return refuse(problem, HaltKind.beforeActing);
+      return refuse(problem, Stop.refused);
     }
 
     run.fromSource = await _fromSource(unit);

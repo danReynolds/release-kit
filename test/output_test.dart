@@ -443,20 +443,20 @@ void main() {
   group('halts open with the sentence, not the noun', () {
     test('no public target changed', () {
       final (out, captured) = make();
-      out.halt(HaltKind.beforeActing);
+      out.halt(Stop.refused);
       expect(captured.text, contains('no public target changed'));
       expect(captured.text, contains('safe to re-run'));
     });
 
     test('something may have happened', () {
       final (out, captured) = make();
-      out.halt(HaltKind.lostTrack);
+      out.halt(Stop.lostTrack);
       expect(captured.text, contains('an effect may exist'));
     });
 
     test('re-running will not help', () {
       final (out, captured) = make();
-      out.halt(HaltKind.unfixableByRerun);
+      out.halt(Stop.unfixable);
       expect(captured.text, contains('No public targets changed'));
       expect(captured.text, contains('Resolve the conflict before retrying'));
       expect(out.report.rerunHelps, isFalse);
@@ -466,8 +466,8 @@ void main() {
       'a conflict after an earlier unit published acknowledges that act',
       () {
         final (out, captured) = make();
-        out.previousUnitActed = true;
-        out.halt(HaltKind.unfixableByRerun);
+        out.report.publicChanged = true;
+        out.halt(Stop.unfixable);
         expect(captured.text, isNot(contains('No public targets changed')));
         expect(captured.text, contains('rk acted'));
         final report = jsonDecode(out.report.encode(exit: 1)) as Map;

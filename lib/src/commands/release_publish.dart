@@ -127,7 +127,7 @@ final class Publication {
           ..notAttemptedPending()
           ..settle();
         output.problem(problem, unit: unit.name);
-        output.halt(HaltKind.beforeActing);
+        output.halt(Stop.refused);
         return false;
       }
       for (final target in grouped) {
@@ -168,9 +168,9 @@ final class Publication {
 
   /// Stops before anything acts on [step], whose snapshot read refuses it.
   void haltForState(ResolvedUnit unit, Step step, Inspection state) {
-    final refusal = _refusal(step, unit, state, acted: false);
+    final refusal = _refusal(step, unit, state);
     output.problem(refusal.diagnostics.single, unit: unit.name);
-    output.halt(refusal.halt);
+    output.halt(refusal.stop);
   }
 
   /// Asks once, for every unit, whether to publish what the snapshot found
@@ -234,7 +234,7 @@ final class Publication {
               'answer yes at the prompt, or pass --yes for an unattended release',
         ),
       );
-      output.halt(HaltKind.beforeActing);
+      output.halt(Stop.refused);
       output.next(
         runs.length == 1
             ? 'rk release ${runs.single.read.unit.name}'
@@ -412,7 +412,7 @@ final class Publication {
           ..notAttemptedPending()
           ..settle();
         output.problem(problem, unit: unit.name);
-        output.halt(HaltKind.beforeActing);
+        output.halt(Stop.refused);
         return false;
       }
       _signedIn.add(kind);
@@ -457,7 +457,7 @@ final class Publication {
     }
     if (!state.isAbsent) {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
-      return _refusal(target, unit, state, acted: output.report.actedPublicly);
+      return _refusal(target, unit, state);
     }
     // What the act publishes must still be what was reviewed: public
     // inputs a lost stage can finish from, or the stage's recorded bytes,
@@ -492,13 +492,10 @@ final class Publication {
       return _PublicationFailure(
         step: target,
         diagnostics: [unpublishable],
-        halt: output.report.actedPublicly
-            ? HaltKind.stoppedPartway
-            : HaltKind.beforeActing,
+        stop: Stop.refused,
       );
     }
 
-    final actedBefore = output.report.actedPublicly;
     output.report
       ..acted = true
       ..actedPublicly = true;
@@ -542,6 +539,12 @@ final class Publication {
         '${target.kindLabel} verification threw: $error',
       );
     }
+    // What a halt says changed is what was read back, decided here for
+    // every lane: an act that may have landed counts, and one that reported
+    // success counts unless the read found nothing.
+    if (state.isExact || act.mayHaveActed || (act.ok && !state.isAbsent)) {
+      output.report.publicChanged = true;
+    }
     actions[target] = state.isExact
         ? ReleaseAction.completed
         : ReleaseAction.failed;
@@ -573,7 +576,7 @@ final class Publication {
             ? lastMutationActivity
             : CommonProgressActivities.verifying,
       );
-      return _unconfirmed(unit, target, state, act, actedBefore: actedBefore);
+      return _unconfirmed(unit, target, state, act);
     }
 
     final note = [
@@ -584,15 +587,14 @@ final class Publication {
     return null;
   }
 
-  /// What an act that did not settle exact means: the halt and the
-  /// diagnostic, in [target]'s words.
+  /// What an act that did not settle exact means: why the release stops,
+  /// and the diagnostic, in [target]'s words.
   _PublicationFailure _unconfirmed(
     ResolvedUnit unit,
     Target target,
     Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) {
+    TargetActOutcome act,
+  ) {
     final module = inspector.targets.moduleFor(target.target);
     final conflict = state.verdict == Verdict.conflict;
     // The provider refused the act because a permanent target was already
@@ -611,9 +613,7 @@ final class Publication {
             evidence: act.evidence ?? act.diagnostic?.evidence,
           ),
         ],
-        halt: actedBefore
-            ? HaltKind.actedAndUnfixable
-            : HaltKind.unfixableByRerun,
+        stop: Stop.unfixable,
       );
     }
     final given = act.diagnostic;
@@ -648,17 +648,15 @@ final class Publication {
           evidence: act.evidence ?? given?.evidence,
         ),
       ],
-      halt: conflict
-          ? (target.moving
-                ? HaltKind.stoppedPartway
-                : HaltKind.actedAndUnfixable)
+      stop: conflict
+          ? (target.moving ? Stop.partway : Stop.unfixable)
           : act.mayHaveActed ||
                 act.privateEffect == TargetPrivateEffect.uncertain ||
                 state.verdict == Verdict.unknown
-          ? HaltKind.lostTrack
-          : act.privateEffect == TargetPrivateEffect.changed || actedBefore
-          ? HaltKind.stoppedPartway
-          : HaltKind.beforeActing,
+          ? Stop.lostTrack
+          : act.privateEffect == TargetPrivateEffect.changed
+          ? Stop.partway
+          : Stop.refused,
       nextCommand: named.next,
     );
   }
@@ -700,13 +698,8 @@ final class Publication {
 
   /// A read that found something other than the release missing: a
   /// conflict carries the target's own advice; anything else says what was
-  /// read. [acted] is whether this run has already changed something public.
-  _PublicationFailure _refusal(
-    Step step,
-    ResolvedUnit unit,
-    Inspection state, {
-    required bool acted,
-  }) {
+  /// read.
+  _PublicationFailure _refusal(Step step, ResolvedUnit unit, Inspection state) {
     final conflict = state.verdict == Verdict.conflict;
     return _PublicationFailure(
       step: step,
@@ -729,9 +722,7 @@ final class Publication {
                       .join('\n'),
           ),
       ],
-      halt: conflict
-          ? (acted ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
-          : (acted ? HaltKind.stoppedPartway : HaltKind.beforeActing),
+      stop: conflict ? Stop.unfixable : Stop.refused,
     );
   }
 
@@ -741,14 +732,10 @@ final class Publication {
         output.problem(diagnostic, unit: failure.step.unit);
       }
       if (failure.nextCommand case final next?) output.next(next);
-      if (!failure.rerunHelps) output.report.rerunHelps = false;
     }
     if (output.report.halted || failures.isEmpty) return;
-    output.halt(failures.map((failure) => failure.halt).reduce(_strongerHalt));
+    output.halt(Stop.worst(failures.map((failure) => failure.stop)));
   }
-
-  HaltKind _strongerHalt(HaltKind left, HaltKind right) =>
-      left.index >= right.index ? left : right;
 
   /// The platforms [run]'s stage built and could not run, from what its
   /// receipt records: a reused stage may have been smoke-tested elsewhere.
@@ -925,7 +912,7 @@ final class Publication {
       ),
       unit: unit.name,
     );
-    output.halt(HaltKind.beforeActing);
+    output.halt(Stop.refused);
     return false;
   }
 
@@ -959,15 +946,12 @@ final class _PublicationFailure {
   const _PublicationFailure({
     required this.step,
     required this.diagnostics,
-    required this.halt,
+    required this.stop,
     this.nextCommand,
   });
 
   final Step step;
   final List<Diagnostic> diagnostics;
-  final HaltKind halt;
+  final Stop stop;
   final String? nextCommand;
-
-  bool get rerunHelps =>
-      halt != HaltKind.unfixableByRerun && halt != HaltKind.actedAndUnfixable;
 }

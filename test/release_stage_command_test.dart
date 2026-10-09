@@ -1381,6 +1381,52 @@ void main() {
     },
   );
 
+  test('a lane refused while another publishes beside it does not say no '
+      'public target changed', () async {
+    // The tag is on origin already, so pub.dev and GitHub publish side by
+    // side. pub.dev reaches its upload first, and this SDK refuses it
+    // outright; GitHub publishes after.
+    await harness.runStage();
+    harness.tools
+      ..remoteTags.add('v1.2.3')
+      ..failPubArchiveCapability = true;
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    var publishing = false;
+    final pubUploaded = Completer<void>();
+    harness.tools.gate = (call) async {
+      if (!publishing) return;
+      if (call.publicKind == 'pub.dev' && !pubUploaded.isCompleted) {
+        pubUploaded.complete();
+      }
+      // GitHub's read before its act waits for pub.dev's upload.
+      if (call.executable == 'gh' &&
+          _starts(call.arguments, ['api', 'repos/example/tool/releases/'])) {
+        await pubUploaded.future;
+      }
+    };
+
+    final released = await harness.run(
+      stageOnly: false,
+      confirm: (_) async {
+        publishing = true;
+        return 'yes';
+      },
+    );
+
+    expect(released.code, ExitCodes.refused, reason: released.text);
+    expect(released.problemCodes, contains('RK-PUB-011'));
+    expect(
+      released.publicMutations.map((call) => call.publicKind),
+      contains('github-release'),
+    );
+    expect((released.report['halt'] as Map?)?['kind'], 'stoppedPartway');
+    expect(released.text, isNot(contains('no public target changed')));
+  });
+
   test(
     'retry after a middle-target failure skips exact lanes and resumes',
     () async {
@@ -1586,20 +1632,38 @@ void main() {
     ]);
   });
 
-  test('an immutable GitHub conflict is terminal', () async {
-    await harness.runStage();
-    harness.tools.conflictGithubAfterPublish = true;
+  // Alone: the tag and package are already out, so GitHub's act, which it
+  // reported done, is the only thing this run changed.
+  for (final alone in [false, true]) {
+    test(
+      'an immutable GitHub conflict is terminal${alone ? ' (alone)' : ''}',
+      () async {
+        await harness.runStage();
+        if (alone) {
+          harness.tools.remoteTags.add('v1.2.3');
+          harness.registry.published['tool']!.add('1.2.3');
+          harness.registry.archives['tool@1.2.3'] = _publishedPackage();
+          harness.registry.forget('tool');
+          harness.git = harness.gitAt(
+            tags: const ['v1.2.3'],
+            tagObjects: const {'v1.2.3': _tagObject},
+            tagTargets: const {'v1.2.3': _head},
+          );
+        }
+        harness.tools.conflictGithubAfterPublish = true;
 
-    final released = await harness.run(
-      stageOnly: false,
-      confirm: (_) async => 'yes',
+        final released = await harness.run(
+          stageOnly: false,
+          confirm: (_) async => 'yes',
+        );
+
+        expect(released.code, ExitCodes.refused);
+        expect(released.problemCodes, contains('RK-REL-003'));
+        expect((released.report['halt'] as Map?)?['kind'], 'actedAndUnfixable');
+        expect(released.report['rerun_helps'], isFalse);
+      },
     );
-
-    expect(released.code, ExitCodes.refused);
-    expect(released.problemCodes, contains('RK-REL-003'));
-    expect((released.report['halt'] as Map?)?['kind'], 'actedAndUnfixable');
-    expect(released.report['rerun_helps'], isFalse);
-  });
+  }
 
   for (final scenario in [
     (

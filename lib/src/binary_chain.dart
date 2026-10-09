@@ -238,11 +238,7 @@ class BinaryChain {
       for (final MapEntry(:key, :value) in evidence.entries) {
         output.line('$key  $value', depth: 2, role: VisualRole.secondary);
       }
-      return Produced.failed(
-        output.report.actedPublicly
-            ? HaltKind.actedAndUnfixable
-            : HaltKind.unfixableByRerun,
-      );
+      return const Produced.failed(Stop.unfixable);
     }
     signatures[artifact.identityFile] = {
       ...signatures[artifact.identityFile]!,
