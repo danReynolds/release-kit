@@ -281,6 +281,12 @@ class HomebrewUpdateAuthority {
   HomebrewUpdateAuthority.existing(List<int> bytes, {this.replacement})
     : sha256 = Sha256.hex(bytes);
 
+  const HomebrewUpdateAuthority._(this.sha256, this.replacement);
+
+  /// The same observed tap base, with the bytes recovered from GitHub.
+  HomebrewUpdateAuthority replacingWith(List<int> bytes) =>
+      HomebrewUpdateAuthority._(sha256, bytes);
+
   final String? sha256;
 
   /// Intended bytes recovered from an authenticated public release when the
@@ -377,7 +383,11 @@ class HomebrewTarget {
       );
     }
 
-    final publicSha256 = Sha256.hex(publicBytes);
+    final authority = HomebrewUpdateAuthority.existing(
+      publicBytes,
+      replacement: expectedBytes,
+    );
+    final publicSha256 = authority.sha256!;
     final version = HomebrewFormula.versionIn(publicBytes);
     return PublicReconciliation.movingChannel(
       label: 'the Homebrew formula',
@@ -389,10 +399,7 @@ class HomebrewTarget {
       publishedIdentity: 'sha256:$publicSha256',
       unrecognizedDetail:
           'the Homebrew formula is not a recognizable rk-generated formula',
-      advanceAuthority: HomebrewUpdateAuthority.existing(
-        publicBytes,
-        replacement: expectedBytes,
-      ),
+      advanceAuthority: authority,
     );
   }
 

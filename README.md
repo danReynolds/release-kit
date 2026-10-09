@@ -140,7 +140,7 @@ rebuilds a completed stage that no longer verifies, and says so; `rk release`
 refuses one (`RK-STAGE-002`).
 
 Bare `rk stage` prepares all configured units: each is checked, and its signing
-settled, in dependency order; then every unit that needs a stage builds at once,
+settled, in dependency order; then independent units build together,
 on one board. Packages keep
 independent versions, and Pub resolves their dependencies through its own cache.
 A package that depends on another package in this repository, at a version that

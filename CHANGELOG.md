@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Staging shares four build and package-validation slots across the
+  repository, preventing larger runs from starting a compiler for every
+  package at once. Notarization waits remain concurrent.
+- Recording and verifying staged files hashes them in bounded chunks,
+  without loading an entire artifact into memory.
+- Homebrew recovery keeps the tap state it already read while rendering the
+  replacement formula. The fresh clone still checks that exact state before
+  an update; recovery no longer reads the same formula twice.
+
 rk now stages and releases a commit, reads each destination once, and asks
 one question for the whole run. A fresh stage of Fleury's four packages takes
 about 10s (2m 9s with 0.1.14), reusing it under a second (about 30s), and

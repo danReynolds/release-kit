@@ -274,11 +274,11 @@ final class Stage {
   StagedFile _capture(String file, String producer) {
     final handle = File(pathOf(file));
     final stat = handle.statSync();
-    final bytes = handle.readAsBytesSync();
+    final digest = Sha256.file(handle);
     final captured = StagedFile(
       producer: producer,
-      size: bytes.length,
-      sha256: Sha256.hex(bytes),
+      size: digest.size,
+      sha256: digest.sha256,
     );
     _noteDigested(handle.path, stat, captured.sha256);
     return captured;
@@ -295,10 +295,10 @@ final class Stage {
     if (!handle.existsSync()) return 'receipt artifact is missing';
     try {
       final stat = handle.statSync();
-      final bytes = handle.readAsBytesSync();
-      final sha256 = Sha256.hex(bytes);
+      final digest = Sha256.file(handle);
+      final sha256 = digest.sha256;
       final differences = [
-        if (bytes.length != recorded.size) 'size',
+        if (digest.size != recorded.size) 'size',
         if (sha256 != recorded.sha256) 'sha256',
       ];
       if (differences.isEmpty) {

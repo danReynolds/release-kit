@@ -93,6 +93,12 @@ archive is recorded; then the barrier. Each lane that builds works in its
 own export of the commit, outside the repository. A failed lane starts
 nothing new, and work already running drains into the resumable receipt.
 
+Builds, Pub validation and archiving share four slots across the repository.
+A queued piece checks whether its unit has failed before starting; a slot is
+returned even when work fails. Release notes, formulas and notarization waits
+do not occupy these slots. This is a bound inside the existing fixed lanes,
+not another graph or scheduler.
+
 Publication publishes the tag alone, first. Then two lanes run at once: the
 pub.dev packages in dependency order, and the GitHub release followed by the
 Homebrew formula. A failure starts nothing new, and every act already under
@@ -188,3 +194,51 @@ executables and macOS Dart bundles. Companion files are build outputs and
 explicit inputs to notarization and archiving, so stage reuse cannot adopt an
 unrecorded runtime or module. The process identity stays on the Dart runtime
 when upgrading from a single macOS executable.
+
+## Performance tradeoffs tested in October 2026
+
+The next changes were selected against merged `56cedaa`, with Dart 3.12.2 on
+macOS arm64. These are local measurements, not provider latency guarantees.
+
+- **Keep bounded file hashing.** The existing Keybay and rk archives tested
+  were 3.1 and 4.0 MB: whole-file, chunked and asynchronous hashing all took
+  about 27 and 35 ms respectively. For a synthetic 256 MiB file, whole-file
+  hashing peaked at 270 MiB of process RSS; the chunked implementation at
+  14 MiB, with similar elapsed time (2.35 vs 2.32 seconds). A 64 KiB buffer
+  keeps the existing synchronous stage API and the same digests. Hashing
+  still blocks the event loop; an asynchronous stage model was not adopted
+  for the tens of milliseconds seen on the real artifacts.
+- **Keep a small build bound.** A workload of sixteen archive preparations,
+  repeating Fleury's four actual packages four times, took 55–68 seconds
+  unbounded and 24–25 seconds with four workers. Sampled process-tree RSS
+  fell from 3.4–3.8 GiB to 2.3 GiB. Fleury's normal four-package workload
+  remained about 9–10 seconds; limiting it to two workers took 10.3 seconds.
+  Eight workers took 21–24 seconds but used 3.2–3.5 GiB; four retains most
+  of the throughput gain at a lower memory cost.
+  These ran the real `dart pub publish --to-archive` through rk's package
+  preparer, in temporary source exports; nothing was uploaded. The shipping
+  bound also covers binary and custom builds; their mixed-workload optimum
+  has not been measured.
+- **Keep the Homebrew read simplification.** Rendering recovered formula
+  bytes now retains the exact tap base already read. The fresh clone still
+  checks that base before writing. A scripted recovery with a published
+  GitHub release and missing formula makes four reads instead of six. The
+  duplicate GitHub read remains: sharing it across targets would need a
+  separate snapshot lifetime, because publication reads must remain fresh.
+- **Defer selective source capture.** An optimistic probe supplied the
+  already-known export file list, excluding the cost of discovering link
+  and analysis-option dependencies. Fleury's capture fell from 492 to
+  368 ms, and Keybay's from 168 to 109 ms. The existing export already limits
+  what each package writes. Moving that selection before blob loading would
+  add dependency-discovery machinery for a small measured gain.
+- **Discard export directory memoization.** Five alternating trials on
+  Fleury found no improvement: median export, inventory and cleanup time was
+  832 ms before and 857 ms with a set of already-created parent directories.
+  No such cache was retained.
+
+Source trials used Fleury commit `21db5f66808b48d0cbb3848de1e93628f8dcfb96`
+and Keybay commit `26ffd27a856a448c84885495898cc7c53afef3c1`. Source-capture
+figures are medians of three runs; the sixteen-job worker comparisons used
+two runs per bound. Existing archive samples predate this rk change and were
+only read. Receipt shape, stage identity, publication ordering and recovery
+checks are unchanged.

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import '../asset_build.dart';
@@ -23,7 +24,7 @@ import 'release_publish.dart' show UnitRun;
 
 /// Builds, resumes or reuses the stage a unit's release publishes from.
 final class StageRunner {
-  const StageRunner({
+  StageRunner({
     required this.initialGit,
     required this.output,
     required this.tools,
@@ -38,6 +39,31 @@ final class StageRunner {
 
   /// The modules that prepare each target's work.
   final TargetCatalog targets;
+
+  // One bound across the repository, not four more builds for every unit.
+  // Pub validation and compilation compete for the same CPU and memory.
+  // Notarization waits on Apple and does not occupy a build slot.
+  var _building = 0;
+  final _waiting = <Completer<void>>[];
+
+  Future<Stop?> _buildSlot(Future<Stop?> Function() work) async {
+    if (_building < 4) {
+      _building++;
+    } else {
+      final turn = Completer<void>();
+      _waiting.add(turn);
+      await turn.future;
+    }
+    try {
+      return await work();
+    } finally {
+      if (_waiting.isEmpty) {
+        _building--;
+      } else {
+        _waiting.removeAt(0).complete();
+      }
+    }
+  }
 
   /// Why a release must not replace [check]'s stage: one that completed
   /// and no longer validates, or whose receipt cannot be read, holds bytes
@@ -268,13 +294,25 @@ final class StageRunner {
       for (final piece in work) {
         if (failures.isNotEmpty) return;
         if (completed.contains(piece.name)) continue;
-        final halt = piece.kind == StepKind.targetStage
-            ? await runTargetStage(piece)
-            : await runProducer(piece);
-        if (halt != null) {
-          failures.add(halt);
-          return;
+        Future<Stop?> perform() async {
+          // Another lane can fail while this piece waits for a build slot.
+          if (failures.isNotEmpty) return failures.first;
+          final halt = piece.kind == StepKind.targetStage
+              ? await runTargetStage(piece)
+              : await runProducer(piece);
+          if (halt != null) failures.add(halt);
+          return halt;
         }
+
+        final usesBuildSlot = switch (piece.kind) {
+          StepKind.build || StepKind.buildAssets || StepKind.archive => true,
+          StepKind.targetStage => piece.target == PublishTarget.pubDev,
+          _ => false,
+        };
+        final halt = usesBuildSlot
+            ? await _buildSlot(perform)
+            : await perform();
+        if (halt != null) return;
         completed.add(piece.name);
       }
     }

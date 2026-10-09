@@ -874,6 +874,125 @@ dependencies:
     },
   );
 
+  for (final failOne in [false, true]) {
+    test(
+      'repository builds share four slots${failOne ? ', including after a failure' : ''}',
+      () async {
+        final names = [for (var i = 0; i < 9; i++) 'package_$i'];
+        final stages = Directory.systemTemp.createTempSync('rk-build-slots-');
+        final source = MemorySourceTree({
+          for (final name in names) ...{
+            'packages/$name/pubspec.yaml': 'name: $name\nversion: 0.2.0\n',
+            'packages/$name/CHANGELOG.md': '## 0.2.0\n',
+          },
+        }, description: '/repo/build-slots');
+        final config = [
+          'schema = 2',
+          for (final name in names)
+            '[release.$name]\npath = "packages/$name"\npublish = ["pub.dev"]',
+        ].join('\n');
+        var active = 0, peak = 0, started = 0;
+        final four = Completer<void>();
+        final result = await release(
+          only: null,
+          source: source,
+          config: config,
+          stages: stages,
+          pubDev: {
+            for (final name in names) name: ['0.1.0'],
+          },
+          dryRun: true,
+          gate: (key, directory) async {
+            if (key != 'dart pub publish --to-archive <archive>') return;
+            started++;
+            active++;
+            if (active > peak) peak = active;
+            if (started == 4) four.complete();
+            try {
+              await four.future.timeout(const Duration(seconds: 5));
+              await Future<void>.delayed(const Duration(milliseconds: 5));
+              if (failOne && directory!.endsWith('/package_0')) {
+                throw const ProcessException('dart', [], 'fixture failure');
+              }
+            } finally {
+              active--;
+            }
+          },
+        );
+        expect(peak, 4);
+        expect(
+          started,
+          9,
+          reason: 'a failure releases its slot for other units',
+        );
+        expect(active, 0);
+        expect(
+          result.exitCode,
+          failOne ? ExitCodes.refused : ExitCodes.ok,
+          reason: result.text,
+        );
+        expect(
+          result.calls.any((call) => call.contains('--from-archive')),
+          isFalse,
+        );
+
+        // The next invocation reuses every completed stage, retrying only
+        // the failed unit, without leaving a stuck slot or losing a receipt.
+        final again = await release(
+          only: null,
+          source: source,
+          config: config,
+          stages: stages,
+          pubDev: {
+            for (final name in names) name: ['0.1.0'],
+          },
+          dryRun: true,
+        );
+        expect(again.exitCode, ExitCodes.ok, reason: again.text);
+        expect(
+          again.calls.where((call) => call.contains('--to-archive')),
+          hasLength(failOne ? 1 : 0),
+        );
+      },
+    );
+  }
+
+  test('a failed unit starts none of its queued package work', () async {
+    final names = [for (var i = 0; i < 7; i++) 'package_$i'];
+    var started = 0;
+    final four = Completer<void>();
+    final result = await release(
+      only: null,
+      dryRun: true,
+      config: [
+        'schema = 2\n[release.core]',
+        for (final name in names)
+          '[[release.core.project]]\npath = "packages/$name"\npublish = ["pub.dev"]',
+      ].join('\n'),
+      source: MemorySourceTree({
+        for (final name in names) ...{
+          'packages/$name/pubspec.yaml': 'name: $name\nversion: 0.2.0\n',
+          'packages/$name/CHANGELOG.md': '## 0.2.0\n',
+        },
+      }),
+      pubDev: {
+        for (final name in names) name: ['0.1.0'],
+      },
+      gate: (key, directory) async {
+        if (key != 'dart pub publish --to-archive <archive>') return;
+        started++;
+        if (started == 4) four.complete();
+        await four.future.timeout(const Duration(seconds: 5));
+        if (directory!.endsWith('/package_0')) {
+          throw const ProcessException('dart', [], 'fixture failure');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      },
+    );
+    expect(result.exitCode, ExitCodes.refused);
+    expect(started, 4, reason: 'pending packages do not start after failure');
+  });
+
   group('a bare release of independent units', () {
     const config = """
 schema = 2
