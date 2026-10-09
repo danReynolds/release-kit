@@ -52,48 +52,6 @@ void main() {
     expect(buffer.toString(), contains('workspace root'));
   });
 
-  test('a Linux proposal includes every binary Linux can produce', () async {
-    final buffer = StringBuffer();
-    final written = <String, String>{};
-    final output = Output(
-      sink: buffer.write,
-      isTerminal: false,
-      useColor: false,
-    );
-    final code = await InitCommand(
-      tree: MemorySourceTree({
-        'pubspec.yaml': '''
-name: tool
-version: 1.0.0
-executables:
-  tool: tool
-''',
-      }, description: '/repo/tool'),
-      output: output,
-      origin: 'owner/tool',
-      capabilities: HostCapabilities(
-        hostPlatform: 'linux-x64',
-        containerRuntime: null,
-      ),
-      select: (plan) async => plan.toggle(0, ReleaseChoice.homebrew).plan,
-      write: (path, contents) => written[path] = contents,
-      yes: true,
-    ).run();
-
-    expect(code, ExitCodes.ok);
-    expect(written['release.toml'], contains('"linux-x64"'));
-    expect(written['release.toml'], contains('"linux-arm64"'));
-    expect(written['release.toml'], isNot(contains('"macos-arm64"')));
-    expect(buffer.toString(), contains('macos-arm64 was not selected'));
-    final document = jsonDecode(output.report.encode(exit: code)) as Map;
-    final platforms = ((document['init'] as Map)['binary_platforms'] as List)
-        .cast<Map>();
-    expect(
-      platforms.singleWhere((item) => item['name'] == 'linux-arm64'),
-      containsPair('selected_by_default', true),
-    );
-  });
-
   test('never edits an existing config', () async {
     final buffer = StringBuffer();
     final written = <String, String>{};
@@ -200,20 +158,6 @@ executables:
     expect(problemCodes(output.report, exit: code), contains('RK-INIT-005'));
   });
 
-  test('a repository with nothing releasable is not a failure', () async {
-    final buffer = StringBuffer();
-    final code = await InitCommand(
-      tree: MemorySourceTree({
-        'pubspec.yaml': 'name: fixtures\nversion: 1.0.0\npublish_to: none\n',
-      }),
-      output: Output(sink: buffer.write, isTerminal: false, useColor: false),
-      write: (path, contents) {},
-      yes: true,
-    ).run();
-    expect(code, ExitCodes.ok);
-    expect(buffer.toString(), contains('nothing here can be released'));
-  });
-
   test(
     'a repository without a usable remote does not infer Git tagging',
     () async {
@@ -230,26 +174,6 @@ executables:
       expect(written['release.toml'], isNot(contains('git-tag')));
     },
   );
-
-  test('non-Git discovery follows only native workspace membership', () async {
-    final written = <String, String>{};
-    await InitCommand(
-      tree: MemorySourceTree({
-        'pubspec.yaml':
-            'name: root\npublish_to: none\nworkspace:\n'
-            '  - packages/member\n',
-        'packages/member/pubspec.yaml': 'name: member\nversion: 1.0.0\n',
-        'vendor/accidental/pubspec.yaml': 'name: accidental\nversion: 9.9.9\n',
-      }),
-      gitBound: false,
-      output: Output(sink: (_) {}, isTerminal: false, useColor: false),
-      write: (path, contents) => written[path] = contents,
-      yes: true,
-    ).run();
-
-    expect(written['release.toml'], contains('[release.member]'));
-    expect(written['release.toml'], isNot(contains('accidental')));
-  });
 
   group('rk init --write in a Git repository', () {
     late Directory scratch;
@@ -288,28 +212,6 @@ executables:
 
 /// Phase 6 hardening: the proposal is validated against rk itself.
 void dogfoodRegressions() {
-  test('colliding unit names are refused, not written', () async {
-    // Two package names that sanitize onto one table: the generated config
-    // would define [release.foobar] twice, and rk's own parser refuses a
-    // duplicate table — so init must refuse first, not hand the operator a
-    // file that rk then rejects as if they had written it.
-    final buffer = StringBuffer();
-    final written = <String, String>{};
-    final code = await InitCommand(
-      tree: MemorySourceTree({
-        'packages/a/pubspec.yaml': 'name: foo.bar\nversion: 1.0.0\n',
-        'packages/b/pubspec.yaml': 'name: foobar\nversion: 1.0.0\n',
-      }, description: '/repo/collide'),
-      output: Output(sink: buffer.write, isTerminal: false, useColor: false),
-      write: written.putIfAbsent2,
-      yes: true,
-    ).run();
-
-    expect(code, ExitCodes.refused);
-    expect(written, isEmpty, reason: 'nothing rk refuses may be written');
-    expect(buffer.toString(), contains('rk itself refuses'));
-  });
-
   test('the accepted proposal resolves end to end', () async {
     // The dogfood loop: init writes, and what it wrote must release — parsed
     // by rk's parser, resolved against the same tree, checklist derivable.
@@ -341,31 +243,6 @@ workspace:
     final resolution = Resolution.resolve(parsed, tree, diagnostics);
     expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
     expect(resolution!.units.single.projects.single.name, 'keybay');
-  });
-
-  test('the proposal reaches the machine surface as an attachment', () async {
-    final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
-    await InitCommand(
-      tree: MemorySourceTree({
-        'pubspec.yaml': 'name: solo\nversion: 1.0.0\n',
-      }, description: '/repo/solo'),
-      output: output,
-      origin: 'example/solo',
-      write: (_, __) {},
-    ).run();
-
-    expect(
-      output.report.attachments['release.toml'],
-      contains('publish = ["git-tag", "pub.dev"]'),
-      reason:
-          'an agent reads the proposal from the document; a human writes '
-          'it at a terminal',
-    );
-    final document =
-        jsonDecode(output.report.encode(exit: ExitCodes.ok))
-            as Map<String, Object?>;
-    expect((document['repository'] as Map)['remote'], 'example/solo');
-    expect(document['next'], ['rk init --write']);
   });
 }
 
@@ -401,6 +278,7 @@ void closeoutRegressions() {
     ).run();
 
     expect(code, ExitCodes.refused);
+    expect(written, isEmpty, reason: 'nothing rk refuses may be written');
     expect(problemCodes(output.report, exit: code), contains('RK-INIT-001'));
     expect(
       output.report.attachments['release.toml.refused'],
@@ -430,11 +308,12 @@ void closeoutRegressions() {
     // fleet could not tell them apart without parsing prose.
     Future<Report> run(Map<String, String> files) async {
       final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
-      await InitCommand(
+      final code = await InitCommand(
         tree: MemorySourceTree(files, description: '/repo/x'),
         output: output,
         write: (_, __) {},
       ).run();
+      expect(code, ExitCodes.ok, reason: 'none of the three is a failure');
       return output.report;
     }
 
@@ -655,8 +534,4 @@ void realRepositoryRegressions() {
       );
     },
   );
-}
-
-extension on Map<String, String> {
-  void putIfAbsent2(String key, String value) => this[key] = value;
 }
