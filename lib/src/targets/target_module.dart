@@ -65,8 +65,12 @@ abstract base class TargetModule {
     ResolvedUnit unit,
     Target target,
     TargetActOutcome acted,
-  ) async =>
-      (await read(context.reads, unit, target, stage: context.stage)).state;
+  ) async => (await read(
+    context.reads,
+    unit,
+    target,
+    stage: context.checkedStage,
+  )).state;
 
   /// What [state] means in this target's terms: a conflict found before
   /// acting, or, with [acted], an act that did not settle exact — and the
@@ -271,6 +275,7 @@ final class TargetReleaseContext {
   const TargetReleaseContext({
     required this.reads,
     required this.tools,
+    required this.release,
     required this.stage,
     required this.progress,
     this.runInteractive,
@@ -284,9 +289,21 @@ final class TargetReleaseContext {
   GitState get git => reads.git;
   String? get repository => reads.repository;
 
+  /// The release the act is part of, which [stage] is checked against.
+  final UnitRelease release;
+
   /// The complete stage the act publishes from; null when what is left
   /// finishes from public inputs alone.
   final Stage? stage;
+
+  /// [stage], checked again now: a read compares what is public with the
+  /// stage only while it still checks. One that changed is read without
+  /// it, and the check before the next act refuses it.
+  Stage? get checkedStage => switch (stage) {
+    final stage? when stage.check(release).reusable => stage,
+    _ => null,
+  };
+
   final Rows progress;
 
   /// Native inherited-stdio access, absent for JSON and redirected output.

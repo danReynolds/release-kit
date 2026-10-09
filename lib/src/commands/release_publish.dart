@@ -433,14 +433,28 @@ final class Publication {
     final unit = run.read.unit;
     final actions = run.actions;
     final stage = run.read.stage!;
-    // What the act publishes from: the complete stage, or nothing when
-    // what is left finishes from public inputs alone.
-    final staged = run.recovering ? null : stage;
     final module = inspector.targets.moduleFor(target.target);
     final row = board[target.id]..begin(Activities.checking);
+    final releaseContext = TargetReleaseContext(
+      reads: inspector.targetReads,
+      tools: tools,
+      release: run.read.release,
+      // What the act publishes from: the complete stage, or nothing when
+      // what is left finishes from public inputs alone.
+      stage: run.recovering ? null : stage,
+      progress: row.rows,
+      runInteractive: allowInteractiveTools ? interactive(board, tools) : null,
+      wait: wait,
+      confirmDeadline: confirmDeadline,
+      confirmInterval: confirmInterval,
+    );
     // The target is read again right before its act: another run or person
     // may have published it since the snapshot.
-    var state = await inspector.inspect(target, unit, stage: staged);
+    var state = await inspector.inspect(
+      target,
+      unit,
+      stage: releaseContext.checkedStage,
+    );
     output.report.step(
       target,
       verdict: state.verdict,
@@ -502,16 +516,6 @@ final class Publication {
     output.report
       ..acted = true
       ..actedPublicly = true;
-    final releaseContext = TargetReleaseContext(
-      reads: inspector.targetReads,
-      tools: tools,
-      stage: staged,
-      progress: row.rows,
-      runInteractive: allowInteractiveTools ? interactive(board, tools) : null,
-      wait: wait,
-      confirmDeadline: confirmDeadline,
-      confirmInterval: confirmInterval,
-    );
     final mutationActivity = _acting(target.target);
     row.begin(mutationActivity);
     late final TargetActOutcome act;

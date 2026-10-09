@@ -2268,6 +2268,71 @@ void main() {
       isNot(contains('dart pub publish --from-archive <archive> --force')),
     );
   });
+
+  // The tag and the package are out already; the staged formula goes while
+  // the GitHub release publishes. The formula's read is of what is public,
+  // and the check before its act refuses it.
+  test('a stage that changes during one act refuses the next before it '
+      'acts', () async {
+    await harness.runStage();
+    harness.tools.remoteTags.add('v1.2.3');
+    harness.registry.published['tool']!.add('1.2.3');
+    harness.registry.archives['tool@1.2.3'] = _publishedPackage();
+    harness.registry.forget('tool');
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    final formula = File(
+      harness.stage.pathOf(
+        ReleaseAssets.formulaPath(harness.unit.binaryProject!),
+      ),
+    );
+
+    final refused = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => 'yes',
+      onInvocation: (call) {
+        if (call.publicKind == 'github-release' && formula.existsSync()) {
+          formula.deleteSync();
+        }
+      },
+    );
+
+    expect(refused.code, ExitCodes.refused, reason: refused.text);
+    expect(refused.problemCodes, ['RK-STAGE-002']);
+    expect((refused.report['halt'] as Map?)?['kind'], 'stoppedPartway');
+    expect(refused.publicMutations.map((call) => call.publicKind).toSet(), {
+      'github-release',
+    });
+  });
+
+  test(
+    'a stage that changes during an act is read past to confirm it',
+    () async {
+      await harness.runStage();
+      final formula = File(
+        harness.stage.pathOf(
+          ReleaseAssets.formulaPath(harness.unit.binaryProject!),
+        ),
+      );
+
+      final released = await harness.run(
+        stageOnly: false,
+        confirm: (_) async => 'yes',
+        onInvocation: (call) {
+          if (call.publicKind == 'homebrew' && formula.existsSync()) {
+            formula.deleteSync();
+          }
+        },
+      );
+
+      expect(released.code, ExitCodes.ok, reason: released.text);
+      expect(harness.tools.publicFormula, isNotNull);
+      expect(released.problemCodes, isEmpty);
+    },
+  );
 }
 
 /// Cuts [harness]'s completed stage back to its work through [stepName],
