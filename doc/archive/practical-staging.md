@@ -1,7 +1,7 @@
 # Practical staging
 
 Status: implemented. Supersedes the dependency-staging design in
-[`archive/dependency-staging-plan.md`](archive/dependency-staging-plan.md).
+[`dependency-staging-plan.md`](dependency-staging-plan.md).
 
 ## Why
 

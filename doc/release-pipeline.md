@@ -4,8 +4,8 @@ How rk works, and the commitments it keeps, are in
 [AGENTS.md](../AGENTS.md#how-rk-works); this document maps them onto the code.
 
 `ReleaseCommand` is the decision ladder for the units a run selects. It resolves the
-shared plan, observes current truth, refuses unsafe starting states, and hands
-work to two coordinators. Targets supply destination semantics through
+shared plan, reads each unit through the same `UnitSnapshot` that `rk status`
+renders, refuses unsafe starting states, and hands work to two coordinators. Targets supply destination semantics through
 `TargetModule`; they do not acquire control of the pipeline.
 
 ```text
@@ -33,7 +33,7 @@ ReleaseCommand  ----->  initial observation and refusal
      |
      +----> ReleasePublicationCoordinator.publish, unit by unit
                 sessions once per provider, after the yes
-                per target: read again + check staged bytes + act + read back
+                per target: check staged bytes + act + confirm
                                 |
                                 +---- TargetModule.publish/confirm
 ```
@@ -113,14 +113,45 @@ The split preserves the safety properties that make a release resumable:
 4. Target readiness is checked before any private work. Native sessions are
    acquired once per provider, after the yes.
 5. Public state is read once, before staging, and that snapshot is what the yes
-   covers. Right before each act rk reads that target again and checks the
-   staged bytes it publishes.
+   covers. Right before an upload rk reads the registry again, and before any
+   act it checks the staged bytes it publishes. Origin's tags are listed once
+   a run: git refuses to replace a tag, so the push is its own check.
 6. Authorization may lose work to another actor, but it cannot gain a new
    target after the operator says yes.
-7. A publish command result is never treated as proof. The target performs an
-   authoritative read-back and core decides from that state.
+7. A publish command's answer is proof only where the native tool makes it
+   definite: a git push that exits 0. Otherwise, and after any act that
+   fails, the target reads the destination back and core decides from that
+   state.
 8. A failed lane prevents new work from starting; work already in flight is
    drained and reconciled before the final halt is reported.
+
+## Dependencies while staging
+
+A package is staged the way its consumers will resolve it. Pub resolves it in
+a scratch mirror of the commit, as a root of its own, with no lockfile and
+through its normal cache. rk writes the mirror's `pubspec_overrides.yaml`,
+which overrides only this repository's packages that cannot come from pub.dev
+yet: one it needs at runtime whose version here satisfies the constraint and
+is not published, and one only its development needs. Everything else comes
+from pub.dev, as it does for consumers, and Pub leaves overrides files out of
+archives, so they never change what is published.
+
+A named command prepares exactly that unit and never builds or publishes a
+sibling: a package whose prerequisite no unit in the run publishes waits for
+it, and rk says which command releases them together.
+
+## Recovery
+
+Public acts are not a transaction: a failure keeps what is already public,
+and a re-run resumes after it. A version on pub.dev is published; rk does not
+compare it with an archive already there.
+
+A partial release needs its original stage only while a unit's built release
+assets are partly public (`RK-STAGE-005`): assets on a GitHub release, or a
+Homebrew formula that names their hashes. Otherwise a fresh stage from the
+same commit publishes what remains, even after the tag is pushed. When only a
+Homebrew formula remains, rk renders it from the archives the GitHub release
+serves, so a lost stage does not stop the release.
 
 ## Extending the system
 

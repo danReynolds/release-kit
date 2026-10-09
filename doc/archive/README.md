@@ -13,7 +13,10 @@ other documents in [`doc/`](..).
 - [Dependency-aware repository staging](dependency-staging-plan.md) and its
   [native evidence](dependency-staging-native-proof.md): rk's own dependency
   resolution and archive staging, replaced by
-  [practical staging](../practical-staging.md).
+  [practical staging](practical-staging.md), which let Pub resolve.
+- The [repository release contract](repository-release-plan.md) and
+  [step timings](step-timings.md): designs since built, and described now in
+  [the release pipeline](../release-pipeline.md) and the README.
 - The [development plan](plan.md) rk was built against, phase by phase.
 - Plans and qualification records for work since finished:
   [target progress](target-progress-plan.md),

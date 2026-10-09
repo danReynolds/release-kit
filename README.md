@@ -22,8 +22,8 @@ it finishes a release that stopped anywhere, and publishes nothing twice.
   fields are errors.
 - **Reality first.** A target that is already public is recorded, not
   published again.
-- **Fail-closed.** The complete plan is validated before the first step
-  acts, and every refusal names the problem and the fix
+- **Refuses before acting.** The complete plan is checked before the first
+  step acts, and every refusal names the problem and the fix
   ([doc/codes.md](doc/codes.md)).
 - **No secrets.** Publication sessions belong to `dart pub`, `gh` and `git`;
   signing and notarization credentials to `codesign` and `notarytool`. rk
@@ -31,13 +31,10 @@ it finishes a release that stopped anywhere, and publishes nothing twice.
   `status` and `stage` never do. A `dart pub login` rk runs leaves its
   session in place, as one you ran yourself would.
 - **Signed when you say so.** rk signs a release tag when `tag.gpgSign` is
-  set or earlier release tags are signed, as git does; a signing key alone
-  does not sign it. rk reads the signature back off the tag it created
-  instead of trusting the config, and refuses one it cannot verify rather
-  than reporting it as signed.
+  set, as git does; a signing key alone does not sign it.
 - **Final bytes checked.** Linux executables and macOS Dart bundles use one
-  artifact contract. Every macOS code file is signed; the installed command
-  is tested before and after archiving. See [CLI artifacts](doc/cli-artifacts.md)
+  artifact contract. Every macOS code file is signed, and the installed
+  command is run before it is archived. See [CLI artifacts](doc/cli-artifacts.md)
   for layouts, signing and compile-time metadata.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
@@ -276,8 +273,8 @@ dependencies never become publication prerequisites.
 
 Public releases are not atomic. If a later publication fails, earlier completed
 targets remain public; rerunning rechecks them and resumes with the recorded
-stage. See the [repository release contract](doc/repository-release-plan.md)
-for recovery.
+stage. See [recovery](doc/release-pipeline.md#recovery) for when a release
+needs the stage it started from.
 
 ## Release assets your own build makes
 

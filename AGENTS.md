@@ -20,10 +20,13 @@ fails if the example stops being true.
 - **Fast.** rk does independent work at once, and nothing twice. Staging
   Fleury's four packages reads all their destinations at once and builds all
   four at the same time, from one read of the commit: a fresh stage takes
-  about 11s, roughly what its largest package takes alone, and running it
-  again reuses all four in about half a second.
-  Kept by `reads every unit's destinations at once` and
-  `stages its units side by side` in `test/release_test.dart`.
+  about 9s, roughly what its largest package takes alone, and running it
+  again reuses all four in about half a second. A run asks origin for its
+  tags once, however many it checks, so releasing those four packages and
+  their two tags takes three trips to origin.
+  Kept by `reads every unit's destinations at once`,
+  `stages its units side by side` and `a repository release reads origin's
+  tags once and pushes each tag once` in `test/release_test.dart`.
 - **Reliable.** A release can stop anywhere, and running it again finishes it
   without publishing anything twice. When pub.dev accepts an upload but
   `dart pub publish` loses the response, rk reads pub.dev back, finds the
@@ -55,11 +58,17 @@ A release is one loop over the repository's units:
 3. **Ask once.** Show every unit's remaining targets in release order. The
    yes covers exactly those.
 4. **Publish in order.** Providers go before the packages that need them.
-   For each target, rk reads it again, publishes it if it is still absent,
-   and reads it back. The read-back decides what happened.
+   Each target is published only if it is still absent, and rk confirms
+   what happened: a registry is read again just before an upload and read
+   back after it, and a tag push is confirmed by git, which refuses to
+   replace a tag origin already has. When an act fails, rk reads the target
+   before saying what happened.
 
 The principles behind the loop:
 
+- **A release is of a commit.** `rk stage` and `rk release` refuse
+  uncommitted changes. `rk status` and `rk plan` read the working tree, and
+  say what needs committing.
 - **Re-running is the recovery.** A re-run skips what is published, resumes
   an interrupted stage from its recorded outputs, and finishes a half-done
   release. The stage is the only state one run leaves for the next.
@@ -68,7 +77,8 @@ The principles behind the loop:
   from its commit.
 - **Native tools do native work.** Pub resolves, validates and packages; git
   tags and signs as its config says; `gh` and the tap publish. rk sequences
-  them and reads back the result.
+  them and confirms the result, trusting a native answer where it is
+  definite.
 - **Trust the cheap, verify the published.** rk trusts Pub, Git, the
   registries and its own writes within a run. It hashes what will be published
   when it is produced, checks it before upload, and reads it back after. It is
@@ -77,9 +87,9 @@ The principles behind the loop:
 - **Refuse before acting, and name the fix.** Validation, readiness and
   conflicts found in the snapshot stop the run before any public act, with a
   code and a remedy. Once publishing, a failure starts no new work, and every
-  act already started is read back before rk stops.
+  act already started is confirmed before rk stops.
 - **New work fits the loop.** A target contributes an inspection, an act and
-  a read-back. A check belongs where rk reads reality: in the snapshot, or in
+  a confirmation. A check belongs where rk reads reality: in the snapshot, or in
   the read before an act.
 
 ## Changing rk
@@ -108,7 +118,7 @@ The principles behind the loop:
 dart format --output=none --set-exit-if-changed .  # what CI runs
 dart analyze
 dart test --exclude-tags publication -j 6          # about a minute
-dart test --tags publication --concurrency=1       # loopback pub.dev, about 4
+dart test --tags publication --concurrency=1       # loopback pub.dev, about a minute
 ```
 
 Tests that run rk as a process share one compiled binary

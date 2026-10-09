@@ -2,226 +2,148 @@
 
 ## Unreleased
 
-- `rk stage` and `rk release` of several units say what they stage once:
-  one heading for the run, one Warnings section where warnings that share a
-  remedy share one line of it, "already staged" for a board whose stages
-  were all reused, one "First release" block, and one closing line for
-  every unit. "Release order" reads `a › b`, as elsewhere.
-- Piped output is the same from one run to the next. A pipe hears of a step
-  only after it has run ten seconds, not 80 milliseconds, and that line names
-  its unit and carries no time.
-- `rk status` lists the warnings the stage recorded, such as Pub's
-  validation warnings, which `rk release` asks about; `warnings[]` carries
-  them too. A staged pub.dev package reads "package archive", and a
-  repository without a commit reads "no commit yet · commit to stage or
-  release".
-- `rk help [command]` prints the help `rk --help` and `rk <command> --help`
-  do. The index lists the release loop first and `--version` once, and the
-  status help no longer describes the removed interactive report. A flag a
-  command does not take is refused in two lines, naming the flags it does
-  take, instead of the whole usage. `rk target` without a name lists the
-  targets, as `rk target list` does.
-- `--json` drops keys that never carried anything: a step's `took_ms`, which
-  rk never filled; the plan's constant `source_only` and
-  `destinations_inspected`; and each status target's `source_binding` and
-  `source_comparison`, which always repeated the repository's.
+rk now stages and releases a commit, reads each destination once, and asks
+one question for the whole run. A fresh stage of Fleury's four packages takes
+about 9s (2m 9s with 0.1.14), reusing it about half a second (about 30s), and
+releasing them and their two tags takes three trips to origin.
 
-- A release reads origin's tags once, for every tag target, and takes git's
-  answer to a tag push as its read-back: git accepts a push only as the
-  exact object it was given and refuses to replace a tag origin has. A
-  release of Fleury's four units and two tags makes three round trips to
-  origin, down from ten. A push git refuses reads origin's tag and reports
-  the conflict a fresh inspection would have, with the same advice
-  (`RK-TAG-003` and `RK-TAG-004` are gone).
-- A tag on origin that matches the release pattern without naming a
-  semantic version, such as `v1.0` under `v{version}`, no longer refuses
-  every release after it.
-- After an upload pub.dev refused, rk reads pub.dev back for ten seconds, not
-  ten minutes. rk no longer downloads each published package into a fresh
-  Pub cache to check it (`RK-PUB-013`, `RK-REL-004`).
-- A package pub.dev lists under another repository is a warning, not a
-  refusal (`RK-PUB-010`): a repository that moved or was renamed could never
-  be released again.
+Stages saved by 0.1.14 are not reused: a release 0.1.14 left partly
+published finishes with 0.1.14.
+
+### Releasing
+
+- A release is of a commit. `rk stage` and `rk release` refuse uncommitted
+  changes for every unit (`RK-GIT-001`, "commit first") and a directory
+  outside Git (`RK-SRC-004`); `RK-SRC-001` and `RK-SRC-002` are gone.
+  `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
+  does.
+- A release reads public state once and asks one question for every unit's
+  remaining targets; the yes covers exactly those. rk signs in to pub.dev and
+  GitHub once a run, after the yes, and no longer logs out of a pub session
+  it created. The re-checks it made at a dozen boundaries are gone, with
+  `RK-DEST-001`, `RK-AUTH-003`, `RK-SIGN-013` and `RK-STAGE-004`.
+- Right before an upload rk reads the registry again and checks the staged
+  bytes. A run lists origin's tags once, and a tag push is confirmed by git,
+  which refuses to replace a tag origin has; a refused push reads origin's
+  tag and reports the conflict with the usual advice (`RK-TAG-003` and
+  `RK-TAG-004` are gone).
+- The release tag is made on the staged commit. rk signs it when
+  `tag.gpgSign` asks, as git does: a signing key alone, or an earlier signed
+  tag, no longer signs tags, and rk no longer verifies the signature git
+  made, so an expired or absent key no longer makes a published tag a
+  conflict (`RK-TAG-006`, `RK-TAG-007`).
+- A version on pub.dev counts as published: rk no longer compares a fresh
+  stage's archive with one already there. After its own upload it still
+  reads the archive back. After an upload pub.dev refused, it reads back for
+  ten seconds, not ten minutes, and it no longer downloads each published
+  package into a fresh Pub cache (`RK-PUB-013`, `RK-REL-004`).
+- A stage is needed only while public bytes must match it: assets on a
+  GitHub release, or a Homebrew formula that names their hashes
+  (`RK-STAGE-005`). A published package no longer requires its original
+  stage. Without its stage, a Homebrew formula is rendered from the digests
+  GitHub reports for the published archives, and a formula already at the
+  release's version counts as published.
+- `rk release` publishes a package's dependencies from this repository before
+  it. A named release whose package needs a sibling not on pub.dev yet says
+  to release them together (`rk release`) or the sibling first.
+- A GitHub release whose title or notes were edited after publishing is still
+  the release. A package pub.dev lists under another repository is a
+  warning, not a refusal (`RK-PUB-010`).
+- A tag on origin that matches the release pattern without naming a version,
+  such as `v1.0` under `v{version}`, no longer refuses every release.
+- With no pub session stored, `dart pub login` runs at once, not after
+  twenty silent seconds.
+
+### Staging
+
+- A stage is named by what it is built from: commit, tree, configuration and
+  origin. Updating rk, Dart or Xcode, or setting up a signing key, no longer
+  orphans a stage a partly published release needs. Reuse checks the
+  receipt and the size and digest of every published file; files the receipt
+  does not name are ignored.
+- Units stage side by side, from one read of the commit, and `rk stage` and
+  `rk release` read every unit's destinations at once.
+- Pub resolves each package once, the way its consumers will, through its
+  normal cache, in one `dart pub publish --to-archive`. A sibling whose
+  version is not on pub.dev yet comes from the same commit, through a path
+  override Pub leaves out of the archive; everything else, including a
+  published sibling, comes from pub.dev. rk no longer downloads dependencies
+  itself or freezes their choices in a stage. A tracked dependency override
+  no longer refuses a package (`RK-PUB-008`, `RK-PUB-016`, `RK-PUB-018`), and
+  a Dart package in a workspace with Flutter packages stages with a
+  standalone Dart.
+- A stage holds only what rk publishes, and its receipt; it no longer keeps a
+  copy of the source, which was 148 MB for each of Fleury's packages. Each
+  producer builds in a directory of its own, with the source its build
+  reads: for a Dart package, every package in the repository, the files
+  above it, what links lead to and the analysis options they include. A
+  project's own build gets everything. rk's own memory during a fresh stage
+  of Fleury peaks at about 140 MB, down from 225 MB.
+- A repository that tracks a symbolic link, such as `CLAUDE.md -> AGENTS.md`,
+  or a submodule stages. A link is exported as a link, with what it leads to.
+  A submodule no build reads is left out, as `git archive` does; one inside a
+  Dart package, or in a repository whose project runs its own build, refuses
+  with `RK-STAGE-003`, naming it.
 - Staging offline reports that Pub could not reach the registry
   (`RK-PUB-019`), not validation errors to fix.
-- With no pub session stored, `dart pub login` runs at the terminal at once,
-  not after twenty silent seconds.
-- A GitHub Release whose title or notes were edited after publishing is
-  still the release; only its tag, maturity and assets are compared. A
-  GitHub publish makes two fewer API calls, and a release no longer lists
-  every GitHub release to read the lane's history: the tag's history covers
-  it.
+- A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)
+  allows any version, as Pub reads it (`RK-DEP-002` is gone). A comma inside
+  a quoted list item in `release.toml` no longer breaks the list. Pubspecs
+  are read with package:yaml, as Pub reads them.
+- macOS signing uses the certificate the preflight chose and trusts
+  codesign's exit status (`RK-SIGN-012`, `RK-SIGN-015`, `RK-SIGN-016`,
+  `RK-SIGN-018` and `RK-SIGN-019` are gone). An accepted notarization no
+  longer fails when Apple's log cannot be fetched afterwards
+  (`RK-NOTARY-003`), and only the artifact's files are submitted. A
+  container runtime is asked for only when a smoke test needs one.
 
-- A stage is named by what it is built from: its commit, tree, configuration
-  and origin. Updating rk, Dart or Xcode, or setting up a signing key, no
-  longer orphans the stage a partly published release still needs. Reusing a
-  stage checks what it publishes: its receipt, and the recorded size and
-  digest of every published file. Files the receipt does not name are
-  ignored. Stages saved by earlier versions are not reused.
-- A release reads public state once, and asks one question for every unit's
-  remaining targets; the yes covers exactly those. Right before publishing a
-  target, rk reads it again (skipping one another run published since),
-  checks the staged bytes it publishes, publishes, and reads the result back.
-  The re-checks of public state, the signing baseline, the repository and
-  destination settings at a dozen boundaries are gone, with `RK-DEST-001`,
-  `RK-AUTH-003`, `RK-SIGN-013` and `RK-STAGE-004`.
-  - The release tag is made on the staged commit, not on whatever HEAD is by
-    then.
-  - rk signs a release tag when `tag.gpgSign` asks it to, as git does. A
-    signing key alone, or an earlier signed tag, no longer signs tags, and rk
-    no longer verifies the signature git made: a key that has expired, or
-    lives on another machine, no longer makes a published tag a conflict
-    (`RK-TAG-006`, `RK-TAG-007`).
-  - rk signs in to pub.dev and GitHub once a run, after the yes, and no
-    longer logs out of a pub session it created.
-  - A Homebrew formula already at the release's version is published: only
-    the tap is read. Without its stage, a formula is rendered from the
-    digests GitHub reports for the published archives.
-- A repository's units stage side by side, from one read of the commit, and
-  each Pub package resolves and archives in one `pub publish --to-archive`.
-  `rk stage` and `rk release` read every unit's destinations at once. A fresh
-  stage of Fleury's four packages takes about 12s, down from 28s, and reusing
-  their stages about half a second, down from 4s.
-- `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
-  does.
+### Status, plan and output
+
 - `rk status` and `rk release` read a unit through one shared snapshot, so
-  they agree on it. `rk status` no longer asks for a lost stage that `rk
-  release` does not need (a Homebrew formula finished from the public
-  release), and no longer reports a GitHub Release's current version as
-  unreadable when it was never read.
-- `rk status` lists units in the order they release, dependencies first, and
-  reports a circle between units as the release does. For a unit that
-  releases after a sibling not on pub.dev yet, it suggests the repository's
-  `rk stage` or `rk release` rather than the unit's, which would wait for
-  the sibling; `rk release <unit>` refused that way now says to release them
-  together (`rk release`) or the sibling first.
-- `rk stage` says once how to publish what it staged: `rk release` for
-  several units, or for a unit that releases after a sibling.
-- `rk status` shows a package another unit in the repository releases first
-  as "Releases after", not as an issue that prevents release. With several
-  units unfinished it suggests the repository-wide `rk stage` or `rk release`.
-- rk reads YAML with package:yaml, as Pub does: anchors, aliases and tags in a
-  pubspec are read rather than refused.
-- A release is of a commit. `rk stage` and `rk release` refuse uncommitted
-  changes for every unit (`RK-GIT-001`, "commit first"), and refuse a
-  directory outside Git (`RK-SRC-004`). Registry-only and local releases no
-  longer snapshot a dirty tree, and `RK-SRC-001` and `RK-SRC-002` are gone.
-  `rk status` and `rk plan` still read a dirty tree, a repository with no
-  commit yet, or a directory outside Git, once and as it is, and say what
-  staging needs: `rk status` with one edited README takes about 0.2s and 32MB,
-  down from 1.5s and 440MB.
+  they agree on it. `rk status` lists units in release order, shows another
+  unit's package that releases first as "Releases after", lists the warnings
+  a stage recorded, and suggests the repository's `rk stage` or `rk release`
+  when that is the command that works. With one edited file it reads the
+  working tree once: about 0.2s and 32 MB on Fleury.
+- `rk stage` and `rk release` of several units say what they stage once: one
+  heading, one Warnings section, one summary and one next step. Piped output
+  is the same from one run to the next. A long unit name is shortened rather
+  than stopping the run, and a release says it acted only once something
+  public changed.
+- `rk help [command]` prints a command's help. A flag a command does not take
+  is refused in two lines, and `rk target` without a name lists the targets.
+  A closed pipe, as in `rk --help | head -1`, ends rk quietly.
+- `rk init` with a release.toml already there points to `rk status` instead
+  of reporting a problem (`RK-INIT-002` is gone).
+- `--json` drops keys that never carried anything: `took_ms`, the plan's
+  constant `source_only` and `destinations_inspected`, and each status
+  target's `source_binding` and `source_comparison`. `rk plan --json` drops
+  `dependency_candidates`; `requires_units` and the node graph carry the
+  order.
 - `rk clean` removes what it showed, and leaves alone an entry that changed
   while you answered.
-- A stage holds only what rk publishes, and its receipt. It no longer keeps a
-  copy of the repository's source, which rk hashed file by file several times
-  a run: 148 MB for each of Fleury's packages. Producers build from the
-  commit, read once into memory, each in a directory of its own outside the
-  repository, and `pub publish` uploads the staged archive from outside the
-  stage. Within a run rk no longer hashes again what it just wrote; a later
-  run that reuses a stage hashes its outputs once. Stages saved by earlier
-  versions are not reused. With the change to staging through Pub below, a
-  fresh stage of Fleury's four packages takes about 28s, down from 2m 9s,
-  and reusing their stages 4s, down from about 30s.
-- A version on pub.dev counts as published. rk no longer compares a fresh
-  stage's archive with one already there, which refused a partly published
-  release whenever a re-packed archive's timestamps differed. After its own
-  upload, rk still reads the archive back and requires the one it staged.
-  - A published package no longer makes a unit's original stage required
-    (`RK-STAGE-005`). A stage is needed only while public bytes must match the
-    ones it holds: assets on a GitHub release, a Homebrew formula that names
-    their hashes, or a release manifest that names them.
-- Stage packages with Pub's own dependency resolution. Pub resolves each
-  package once, the way its consumers will, through its normal cache. A
-  package from this repository whose version is not on pub.dev yet comes from
-  the same commit's source, through a path override in the scratch mirror; Pub
-  leaves that file out of the archive. Everything else comes from pub.dev,
-  including a published version of a sibling, even when this source has
-  unreleased changes at that version. A fresh stage of Fleury's four packages
-  took 2m 9s with 0.1.14 and about 50s now.
-  - rk no longer downloads each dependency's archive itself, or keeps frozen
-    dependency choices in a stage. A later stage resolves again, as `pub get`
-    does.
-  - `rk release` publishes a package's dependencies from this repository
-    before it. A named release asks for a dependency it does not publish to
-    be published first. Before an upload, rk no longer checks staged
-    provider archives against the registry or resolves a trial consumer
-    (`RK-PUB-018`).
-  - A tracked dependency override no longer refuses a package
-    (`RK-PUB-008`), and the resolution of the whole workspace that looked
-    for one is gone (`RK-PUB-016`). rk's own overrides file replaces tracked
-    ones where Pub validates, so none can reach what is published. A Dart
-    package in a workspace with Flutter packages stages with a standalone
-    Dart.
-  - Stages saved by 0.1.14 are not reused. A release that 0.1.14 left partly
-    published finishes with 0.1.14.
-- `rk use local` runs Dart commands whose dependencies have build hooks
-  (native assets) from any directory. Started elsewhere, `dart run` (Dart
-  3.12, at least) did not build those hooks, so a command that calls a native
-  library failed with `No available native assets`. For such a project the local
-  launcher now runs a small bootstrap from the project's directory, which
-  builds the hooks and starts the command's entrypoint with the caller's
-  working directory, arguments, standard input, defines and exit status. A
-  project without hooks keeps the direct launcher. Select Local again to
-  prepare the new launcher.
-- `rk use` finds local commands in projects that depend on path or Git
-  packages. Releasing such a project still refuses those sources.
-- A repository that tracks a symbolic link, such as `CLAUDE.md -> AGENTS.md`,
-  or a submodule stages. Every stage refused it with "the committed source
-  could not be read". A link is exported as a link, with what it leads to
-  inside the commit, and reading the source follows it, so a `CHANGELOG.md`
-  that links to the repository's own is the release notes' source too. A
-  submodule no build reads is left out, as `git archive` does; one inside a
-  Dart package, or anywhere in a repository whose project runs its own
-  build, refuses the stage (`RK-STAGE-003`), naming the submodule and the
-  project: the commit holds none of its files.
-- A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)
-  allows any version, as Pub reads it. It refused the release (`RK-DEP-002`).
-- A comma inside a quoted list item in `release.toml`, as in
-  `build = ["tool/build.sh", "--targets=a,b", "{out}"]`, no longer breaks the
-  list.
-- Each producer gets only the source its build reads: for a Dart package,
-  every package in the repository, the files directly above its own
-  directory, what links in them lead to, and the analysis options they
-  include. A project's own declared build still gets everything. On the
-  Fleury bench rk's own memory during a fresh stage peaks at about 140 MB,
-  down from 225 MB; the stage takes about as long, 9s.
-- A container runtime is asked for only when a binary for another platform
-  needs its smoke test; `docker info` no longer runs on every stage of a unit
-  that ships binaries.
-- An accepted notarization no longer fails when Apple's log cannot be
-  fetched afterwards (`RK-NOTARY-003`); rk fetches the log only to explain a
-  rejection. The stage records Apple's verdict and submission id, and no
-  longer keeps the submitted zip, the result or the log. Stages saved by
-  earlier versions are not reused.
-- macOS signing uses the certificate the preflight chose and trusts
-  codesign's exit status: rk no longer reads the keychain again for every
-  file, re-verifies what it just signed, or re-runs the archived program.
-  `RK-SIGN-012`, `RK-SIGN-015`, `RK-SIGN-016`, `RK-SIGN-018` and
-  `RK-SIGN-019` are retired.
-- `rk plan --json` no longer has `dependency_candidates`; `requires_units`
-  and the node graph carry the order.
+
+### rk use
+
 - `rk use` opens and lists in about 0.1s, down from about 1s with a Homebrew
-  installation: rk reads Homebrew's `opt` link and keg receipt instead of
-  running `brew list` and `brew info`. Switching a source takes about 0.2s.
-  `RK_TIMINGS=1` traces the installation commands.
+  installation, and switching a source takes about 0.2s.
 - A Homebrew selection keeps running after `brew upgrade`: launchers go
-  through Homebrew's `opt` link instead of a versioned keg that the upgrade
-  removes.
-- Switching rk's own source no longer copies the running rk first (and, from
-  a source checkout, no longer compiles it), and no longer keeps those copies.
-- A GitHub update replaces the previous download, and uninstall removes every
-  download. A run interrupted after unpacking a download finishes on the next
-  run instead of refusing with "A previous download already occupies".
-- Each launcher records its project and source, and rk reads the selection
-  back from the launchers; the selection pointer, its generations and the
-  per-source receipts are gone. Adding or renaming a project's GitHub remote
-  no longer makes rk refuse its own commands. A selection made by 0.1.14
-  keeps running; run `rk use` once to move it to the new launchers. What
-  0.1.14 kept under `~/.local/share/rk` (`managers`, and each project's
-  `current`, `generations` and receipts) is no longer read and can be
-  deleted.
-- Bare `rk install` and `rk uninstall` open the `rk use` table, which already
-  installs, updates and removes.
+  through Homebrew's `opt` link instead of a versioned keg.
+- Switching rk's own source no longer copies, or compiles, the running rk
+  first.
+- A GitHub update replaces the previous download, uninstall removes every
+  download, and a run interrupted after unpacking finishes on the next run.
+- rk reads the selection back from the launchers, and adding or renaming a
+  project's GitHub remote no longer makes rk refuse its own commands. A
+  selection made by 0.1.14 keeps running; run `rk use` once to move it to the
+  new launchers. What 0.1.14 kept under `~/.local/share/rk` (`managers`, and
+  each project's `current`, `generations` and receipts) can be deleted.
+- Bare `rk install` and `rk uninstall` open the `rk use` table.
+- `rk use local` runs Dart commands whose dependencies have build hooks
+  (native assets) from any directory, through a small bootstrap. Select
+  Local again to prepare it.
+- `rk use` finds local commands in projects that depend on path or Git
+  packages.
 
 ## 0.1.14
 
