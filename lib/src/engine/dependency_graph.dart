@@ -1,8 +1,5 @@
-/// A small, deterministic dependency graph over RK's stable string IDs.
-///
-/// The graph owns structure and readiness only. Callers retain execution
-/// policy: staging can isolate scratch by lane, while publication can preserve
-/// and reconcile public operations that were already started.
+/// A small, deterministic dependency graph over RK's stable string IDs: what
+/// orders a repository's units and a unit's packages.
 final class DependencyGraph<T> {
   DependencyGraph(
     Iterable<T> values, {
@@ -35,7 +32,7 @@ final class DependencyGraph<T> {
     }
     final cycle = _cycle();
     if (cycle != null) {
-      throw DependencyCycle<T>([for (final id in cycle) this[id]], cycle);
+      throw DependencyCycle<T>([for (final id in cycle) _byId[id] as T], cycle);
     }
   }
 
@@ -44,39 +41,17 @@ final class DependencyGraph<T> {
   final Map<String, T> _byId = {};
   final Map<String, Set<String>> _needs = {};
 
-  List<T> get values => _values;
-
-  T operator [](String id) =>
-      _byId[id] ?? (throw StateError('the dependency graph has no node "$id"'));
-
-  Set<String> dependenciesOf(T value) => _needs[_idOf(value)]!;
-
-  /// Pending nodes whose complete dependency set is settled.
-  ///
-  /// Input order is preserved so concurrency never makes plans or reports
-  /// nondeterministic.
-  List<T> ready({
-    required Set<String> completed,
-    Set<String> active = const {},
-  }) => [
-    for (final value in _values)
-      if (!completed.contains(_idOf(value)) &&
-          !active.contains(_idOf(value)) &&
-          _needs[_idOf(value)]!.every(completed.contains))
-        value,
-  ];
-
-  /// The direct prerequisites still preventing [value] from starting.
-  Set<String> unmet(T value, Set<String> completed) => Set.unmodifiable(
-    _needs[_idOf(value)]!.where((id) => !completed.contains(id)).toSet(),
-  );
-
-  /// One canonical dependencies-first order.
+  /// One canonical dependencies-first order: at each step, the first value
+  /// in input order whose dependencies are all placed.
   List<T> ordered() {
     final ordered = <T>[];
     final completed = <String>{};
     while (ordered.length < _values.length) {
-      final next = ready(completed: completed).first;
+      final next = _values.firstWhere(
+        (value) =>
+            !completed.contains(_idOf(value)) &&
+            _needs[_idOf(value)]!.every(completed.contains),
+      );
       ordered.add(next);
       completed.add(_idOf(next));
     }

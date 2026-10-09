@@ -27,7 +27,6 @@ Future<TargetActOutcome> publishGitTag(
   if (signed && !git.signingConfigured) {
     return TargetActOutcome(
       ok: false,
-      coordinate: tag,
       diagnostic: Diagnostic(
         code: 'RK-TAG-005',
         message:
@@ -62,7 +61,6 @@ Future<TargetActOutcome> publishGitTag(
     if (!made.ok) {
       return TargetActOutcome(
         ok: false,
-        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-001',
           message: 'the tag $tag could not be created',
@@ -75,7 +73,6 @@ Future<TargetActOutcome> publishGitTag(
     if (resolved.object == null) {
       return TargetActOutcome(
         ok: false,
-        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-001',
           message: 'the new tag $tag could not be identified',
@@ -89,7 +86,6 @@ Future<TargetActOutcome> publishGitTag(
     if (existing == null) {
       return TargetActOutcome(
         ok: false,
-        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-002',
           message: 'the tag $tag could not be pushed',
@@ -117,7 +113,6 @@ Future<TargetActOutcome> publishGitTag(
   if (pushed.ok) {
     return TargetActOutcome(
       ok: true,
-      coordinate: tag,
       mayHaveActed: true,
       successNote: created
           ? '${signed ? 'signed' : 'unsigned'}, pushed'
@@ -165,7 +160,6 @@ Future<TargetActOutcome> publishGitTag(
   }
   return TargetActOutcome(
     ok: false,
-    coordinate: tag,
     problem: cleanup,
     // An unread origin may hold the push that lost its answer.
     mayHaveActed: state.verdict == Verdict.unknown,

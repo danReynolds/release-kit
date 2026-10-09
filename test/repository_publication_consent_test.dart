@@ -210,7 +210,7 @@ final class _Fixture {
   PublicationPlan published(PublicationPlan plan) => PublicationPlan(
     release: plan.release,
     states: {
-      for (final step in plan.steps)
+      for (final step in plan.release.steps)
         step.id: const Inspection.exact(detail: 'live'),
     },
     actions: {

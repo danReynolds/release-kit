@@ -339,9 +339,7 @@ final class TargetActOutcome {
     this.problem,
     this.mayHaveActed = false,
     this.privateEffect = TargetPrivateEffect.none,
-    this.privateEffectDetail,
     this.diagnostic,
-    this.coordinate,
     this.successNote,
     this.includeInspectionDetail = false,
     this.reconciledNote,
@@ -353,9 +351,7 @@ final class TargetActOutcome {
   final String? problem;
   final bool mayHaveActed;
   final TargetPrivateEffect privateEffect;
-  final String? privateEffectDetail;
   final Diagnostic? diagnostic;
-  final String? coordinate;
   final String? successNote;
   final bool includeInspectionDetail;
   final String? reconciledNote;
@@ -373,5 +369,6 @@ final class TargetActOutcome {
   final Inspection? confirmed;
 }
 
-/// A private provider-side effect that is not itself a published release.
+/// A private provider-side effect that is not itself a published release:
+/// a GitHub release's draft, the one any target has.
 enum TargetPrivateEffect { none, changed, uncertain }

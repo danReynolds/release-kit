@@ -203,15 +203,6 @@ final class GithubReleaseTargetModule extends TargetModule {
         DraftEffect.changed => TargetPrivateEffect.changed,
         DraftEffect.uncertain => TargetPrivateEffect.uncertain,
       },
-      privateEffectDetail: switch (outcome.draftEffect) {
-        DraftEffect.none => null,
-        DraftEffect.changed =>
-          'GitHub private draft state changed; this step did not publish a '
-              'GitHub Release.',
-        DraftEffect.uncertain =>
-          'GitHub private draft state may have changed; no GitHub Release '
-              'was confirmed public.',
-      },
       evidence: outcome.ok ? null : outcome.transcript,
     );
   }

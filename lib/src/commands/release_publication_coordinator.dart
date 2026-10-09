@@ -1,5 +1,4 @@
 import '../engine/canonical_json.dart';
-import '../engine/dependency_graph.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
@@ -41,7 +40,6 @@ final class PublicationPlan {
 
   final UnitRelease release;
   ResolvedUnit get unit => release.unit;
-  late final List<Step> steps = release.steps.toList();
   List<Target> get targets => release.targets;
   final Map<String, Inspection> states;
   final Map<String, ReleaseAction> actions;
@@ -261,8 +259,8 @@ final class ReleasePublicationCoordinator {
     return true;
   }
 
-  /// Publishes what [authorize] accepted for [plan]'s unit, in dependency
-  /// order, and nothing else.
+  /// Publishes what [authorize] accepted for [plan]'s unit, and nothing
+  /// else, in fixed lanes.
   Future<int> publish(PublicationPlan plan) async {
     final authorized = _authorized;
     if (authorized == null) {
@@ -305,62 +303,68 @@ final class ReleasePublicationCoordinator {
         restore: true,
       );
     }
-    final graph = DependencyGraph<Step>(
-      plan.steps,
-      idOf: (step) => step.id,
-      dependenciesOf: (step) => [for (final need in step.needs) need.id],
-    );
-    final completed = <String>{
-      for (final step in plan.steps)
-        if (!step.isPublic || !accepted.contains(step.id)) step.id,
+    final done = {
+      for (final target in targets)
+        if (!accepted.contains(target.id)) target.id,
     };
-    final active = <String, Future<_PublicTargetCompletion>>{};
-    final activeTargets = <PublishTarget>{};
+    final acting = <Target>{};
     final failures = <_PublicationFailure>[];
 
-    while (completed.length < plan.steps.length || active.isNotEmpty) {
-      if (failures.isEmpty) {
-        final ready = graph.ready(
-          completed: completed,
-          active: active.keys.toSet(),
-        );
-        for (final target in ready.whereType<Target>()) {
-          if (!activeTargets.add(target.target)) continue;
-          active[target.id] = _publishPublicTarget(
-            target: target,
-            plan: plan,
-            releaseProgress: releaseProgress,
-          );
-        }
-      }
-
-      _describePublicationWaits(
-        graph: graph,
-        completed: completed,
-        active: active.keys.toSet(),
-        activeTargets: activeTargets,
-        authorizedStepIds: accepted,
-        progress: releaseProgress,
-      );
-
-      if (active.isEmpty) {
-        if (failures.isNotEmpty) break;
-        final unresolved = targets
-            .where((target) => !completed.contains(target.id))
-            .map((target) => target.id)
-            .join(', ');
-        throw StateError('publication graph made no progress: $unresolved');
-      }
-
-      final completion = await Future.any(active.values);
-      active.remove(completion.target.id);
-      activeTargets.remove(completion.target.target);
-      if (completion.failure case final failure?) {
-        failures.add(failure);
-      } else {
-        completed.add(completion.target.id);
+    // Each pending row says what it waits for: a target it needs, or its
+    // turn at a destination another act is under way at.
+    void describeWaits() {
+      for (final target in targets) {
+        if (done.contains(target.id) || acting.contains(target)) continue;
+        final blockers = {
+          for (final need in target.needs)
+            if (need is Target && !done.contains(need.id)) need.label,
+        };
+        final note = blockers.isNotEmpty
+            ? 'waiting for ${blockers.join(', ')}'
+            : acting.any((other) => other.target == target.target)
+            ? 'waiting its turn at ${target.kindLabel}'
+            : null;
+        if (note != null) releaseProgress.waiting(target, note: note);
       }
     }
+
+    // One lane publishes its targets in order, one at a time. Once any
+    // lane has failed, or crashed, it starts nothing new; an act already
+    // under way is confirmed.
+    var crashed = false;
+    Future<void> lane(List<Target?> lane) async {
+      for (final target in lane.nonNulls) {
+        if (failures.isNotEmpty || crashed) return;
+        if (done.contains(target.id)) continue;
+        acting.add(target);
+        describeWaits();
+        final _PublicationFailure? failure;
+        try {
+          failure = await _publishTarget(target, plan, releaseProgress);
+        } on Object {
+          crashed = true;
+          rethrow;
+        } finally {
+          acting.remove(target);
+        }
+        if (failure != null) {
+          failures.add(failure);
+          return;
+        }
+        done.add(target.id);
+        describeWaits();
+      }
+    }
+
+    // The tag first: everything else is published under it. Then the
+    // packages, in dependency order, beside the GitHub release and the
+    // formula that points at its archives.
+    final release = plan.release;
+    await lane([release.tag]);
+    await Future.wait([
+      lane(release.packages),
+      lane([release.github, release.homebrew]),
+    ]);
 
     if (failures.isNotEmpty || output.report.halted) {
       releaseProgress
@@ -433,41 +437,15 @@ final class ReleasePublicationCoordinator {
     return true;
   }
 
-  void _describePublicationWaits({
-    required DependencyGraph<Step> graph,
-    required Set<String> completed,
-    required Set<String> active,
-    required Set<PublishTarget> activeTargets,
-    required Set<String> authorizedStepIds,
-    required TargetReleaseProgress progress,
-  }) {
-    for (final target in graph.values.whereType<Target>().where(
-      (target) =>
-          authorizedStepIds.contains(target.id) &&
-          !completed.contains(target.id) &&
-          !active.contains(target.id),
-    )) {
-      final blockers = graph
-          .unmet(target, completed)
-          .map((id) => graph[id])
-          .whereType<Target>()
-          .map((dependency) => dependency.label)
-          .toSet();
-      final note = blockers.isNotEmpty
-          ? 'waiting for ${blockers.join(', ')}'
-          : activeTargets.contains(target.target)
-          // One publish at a time to a destination: another is under way.
-          ? 'waiting its turn at ${target.kindLabel}'
-          : null;
-      if (note != null) progress.waiting(target, note: note);
-    }
-  }
-
-  Future<_PublicTargetCompletion> _publishPublicTarget({
-    required Target target,
-    required PublicationPlan plan,
-    required TargetReleaseProgress releaseProgress,
-  }) async {
+  /// The release loop for one target: read it fresh; done if it is already
+  /// there, refused if something else is; check what it publishes; act;
+  /// confirm. Null when the target is published, and otherwise why the
+  /// release stops.
+  Future<_PublicationFailure?> _publishTarget(
+    Target target,
+    PublicationPlan plan,
+    TargetReleaseProgress releaseProgress,
+  ) async {
     final PublicationPlan(
       :unit,
       actions: publicActions,
@@ -492,68 +470,49 @@ final class ReleasePublicationCoordinator {
     );
     if (state.isExact) {
       _completeExistingTarget(target, state, publicActions, releaseProgress);
-      return _PublicTargetCompletion.completed(target);
+      return null;
     }
     if (!state.isAbsent) {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
-      return _PublicTargetCompletion.failed(
-        target,
-        _refusal(target, unit, state, acted: output.report.actedPublicly),
-      );
+      return _refusal(target, unit, state, acted: output.report.actedPublicly);
     }
-    final halt = output.report.actedPublicly
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
-    if (recoversWithoutStage && !state.recoversWithoutStage) {
-      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
-      return _PublicTargetCompletion.failed(
-        target,
-        _PublicationFailure(
-          step: target,
-          diagnostics: [
-            Diagnostic(
-              code: 'RK-STAGE-005',
+    // What the act publishes must still be what was reviewed: public
+    // inputs a lost stage can finish from, or the stage's recorded bytes,
+    // checked again. Within a run this costs a stat per file.
+    final unpublishable = recoversWithoutStage
+        ? (state.recoversWithoutStage
+              ? null
+              : Diagnostic(
+                  code: 'RK-STAGE-005',
+                  message:
+                      '${target.summary} can no longer recover without its '
+                      'stage',
+                  remedy:
+                      'its public inputs changed. Re-run so rk can inspect '
+                      'the release again; restore ${stage.path} if the '
+                      'target still needs the original bytes.',
+                ))
+        : switch (stage.check(plan.release)) {
+            final checked when !checked.reusable => Diagnostic(
+              code: 'RK-STAGE-002',
               message:
-                  '${target.summary} can no longer recover without its '
-                  'stage',
+                  'the reviewed release stage changed before '
+                  '${target.summary}',
               remedy:
-                  'its public inputs changed. Re-run so rk can inspect the '
-                  'release again; restore ${stage.path} if the '
-                  'target still needs the original bytes.',
+                  '${checked.lines.join('\n')}\n'
+                  'rebuild it explicitly: rk stage ${unit.name}',
             ),
-          ],
-          halt: halt,
-        ),
+            _ => null,
+          };
+    if (unpublishable != null) {
+      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
+      return _PublicationFailure(
+        step: target,
+        diagnostics: [unpublishable],
+        halt: output.report.actedPublicly
+            ? HaltKind.stoppedPartway
+            : HaltKind.beforeActing,
       );
-    }
-    // What the act publishes is read from the stage, so its recorded bytes
-    // are checked again first. Within a run this costs a stat per file.
-    if (!recoversWithoutStage) {
-      final checked = stage.check(plan.release);
-      if (!checked.reusable) {
-        releaseProgress.fail(
-          target,
-          activity: CommonProgressActivities.checking,
-        );
-        return _PublicTargetCompletion.failed(
-          target,
-          _PublicationFailure(
-            step: target,
-            diagnostics: [
-              Diagnostic(
-                code: 'RK-STAGE-002',
-                message:
-                    'the reviewed release stage changed before '
-                    '${target.summary}',
-                remedy:
-                    '${checked.lines.join('\n')}\n'
-                    'rebuild it explicitly: rk stage ${unit.name}',
-              ),
-            ],
-            halt: halt,
-          ),
-        );
-      }
     }
 
     final actedBefore = output.report.actedPublicly;
@@ -618,7 +577,7 @@ final class ReleasePublicationCoordinator {
       final note =
           '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
       releaseProgress.complete(target, note: note);
-      return _PublicTargetCompletion.completed(target);
+      return null;
     }
     if (!act.ok || !state.isExact) {
       releaseProgress.fail(
@@ -632,10 +591,7 @@ final class ReleasePublicationCoordinator {
             ? lastMutationActivity
             : CommonProgressActivities.verifying,
       );
-      return _PublicTargetCompletion.failed(
-        target,
-        _unconfirmed(unit, target, state, act, actedBefore: actedBefore),
-      );
+      return _unconfirmed(unit, target, state, act, actedBefore: actedBefore);
     }
 
     final note = [
@@ -643,7 +599,7 @@ final class ReleasePublicationCoordinator {
       if (act.includeInspectionDetail) ?state.detail,
     ].join(' · ');
     releaseProgress.complete(target, note: note.isEmpty ? 'published' : note);
-    return _PublicTargetCompletion.completed(target);
+    return null;
   }
 
   /// What an act that did not settle exact means: the halt and the
@@ -685,15 +641,15 @@ final class ReleasePublicationCoordinator {
     final details = [
       ?given?.remedy,
       ?act.problem,
-      ?act.privateEffectDetail,
-      if (act.privateEffectDetail == null &&
-          act.privateEffect == TargetPrivateEffect.changed)
-        'private provider state changed; this step did not confirm a public '
-            'release.',
-      if (act.privateEffectDetail == null &&
-          act.privateEffect == TargetPrivateEffect.uncertain)
-        'private provider state may have changed; no public release was '
-            'confirmed.',
+      switch (act.privateEffect) {
+        TargetPrivateEffect.none => null,
+        TargetPrivateEffect.changed =>
+          'GitHub private draft state changed; this step did not publish a '
+              'GitHub Release.',
+        TargetPrivateEffect.uncertain =>
+          'GitHub private draft state may have changed; no GitHub Release '
+              'was confirmed public.',
+      },
       ?state.detail,
       ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
     ];
@@ -1021,15 +977,6 @@ final class ReleasePublicationCoordinator {
   /// team it names.
   static String _shortCertificate(String certificate) =>
       certificate.replaceFirst('Developer ID Application: ', '');
-}
-
-final class _PublicTargetCompletion {
-  const _PublicTargetCompletion.completed(this.target) : failure = null;
-
-  const _PublicTargetCompletion.failed(this.target, this.failure);
-
-  final Target target;
-  final _PublicationFailure? failure;
 }
 
 final class _PublicationFailure {

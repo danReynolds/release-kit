@@ -189,7 +189,7 @@ final class PubDevTargetModule extends TargetModule {
       diagnostic: Diagnostic(
         code: 'RK-PUB-006',
         message:
-            '${acted.coordinate ?? target.project?.name}: '
+            '${target.project!.name} ${target.project!.version}: '
             '${state.detail ?? 'the public archive differs'}',
       ),
       next: null,
@@ -198,8 +198,8 @@ final class PubDevTargetModule extends TargetModule {
       diagnostic: Diagnostic(
         code: 'RK-PUB-005',
         message:
-            '${acted.coordinate ?? target.project?.name}: the exact public '
-            'archive could not be confirmed',
+            '${target.project!.name} ${target.project!.version}: the exact '
+            'public archive could not be confirmed',
       ),
       next: 'rk status ${unit.name}',
     ),
@@ -271,7 +271,6 @@ final class PubDevTargetModule extends TargetModule {
       if (result.exitCode == 64) {
         return TargetActOutcome(
           ok: false,
-          coordinate: '${project.name} ${project.version}',
           mayHaveActed: false,
           diagnostic: const Diagnostic(
             code: 'RK-PUB-011',
@@ -285,7 +284,6 @@ final class PubDevTargetModule extends TargetModule {
       }
       return TargetActOutcome(
         ok: false,
-        coordinate: '${project.name} ${project.version}',
         mayHaveActed: true,
         problem: result.summary,
         evidence: result.transcript,
@@ -305,7 +303,6 @@ final class PubDevTargetModule extends TargetModule {
     // The read-back says when pub.dev published it, and what it compared.
     return TargetActOutcome(
       ok: true,
-      coordinate: '${project.name} ${project.version}',
       mayHaveActed: true,
       includeInspectionDetail: true,
     );
