@@ -130,7 +130,8 @@ published finishes with 0.1.14.
 - A Homebrew selection keeps running after `brew upgrade`: launchers go
   through Homebrew's `opt` link instead of a versioned keg.
 - Switching rk's own source no longer copies, or compiles, the running rk
-  first.
+  first. If rk's own checkout stops compiling while Local is selected, run a
+  published rk by its path to switch back; `doc/installations.md` shows how.
 - A GitHub update replaces the previous download, uninstall removes every
   download, and an install or update interrupted after unpacking finishes
   when it runs again, without downloading again.

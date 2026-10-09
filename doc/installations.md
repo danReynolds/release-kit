@@ -193,6 +193,23 @@ repair instructions. They do not fall back to another source. Homebrew and Pub
 launchers follow their package manager's own upgrades: `brew upgrade` moves the
 `opt` link, and `dart pub global run` runs whatever Pub has activated.
 
+### When rk's own checkout does not compile
+
+With Local selected in rk's own checkout, `rk` runs that checkout, and rk
+keeps no copy of itself: while the checkout does not compile, `rk use` cannot
+run to switch back. Make the checkout compile again (`git stash`, say), or run
+a published rk by its path from the checkout:
+
+```sh
+$(brew --prefix)/opt/rk/bin/rk use homebrew
+dart pub global run rk use pub
+~/.local/share/rk/downloads/rk/<version>/rk use github
+```
+
+The published rk must already be installed (`dart pub global activate rk`
+installs one) and newer than 0.1.14, which refuses to replace these
+launchers.
+
 ## Implementation and qualification
 
 `use` shares the bounded table, focus treatment, detail view and terminal
