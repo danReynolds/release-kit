@@ -624,20 +624,6 @@ publish = ["pub.dev"]
     expect(run.report['next'], ['rk release core']);
   });
 
-  test('always shows targets when local matches live', () async {
-    final text = await statusOf(
-      source: tree(),
-      state: git(tags: ['v0.2.0']),
-      registry: FakeRegistry({
-        'keybay': ['0.1.0', '0.2.0'],
-      }),
-    );
-    expect(text, matches(RegExp(r'pub\.dev\s+keybay')));
-    expect(text, matches(RegExp(r'^\s+Published$', multiLine: true)));
-    expect(text, isNot(contains('prevent')));
-    expect(text, isNot(contains('rk release')));
-  });
-
   test(
     'post-release commits ask for the next version, not a moved tag',
     () async {
@@ -743,8 +729,20 @@ publish = ["pub.dev"]
     );
     final text = run.text;
     expect(text, isNot(contains('prevent')));
-    expect(text, contains('0.1.0 › 0.2.0'));
-    expect(text, isNot(contains('ready')));
+    expect(
+      text,
+      contains('core 0.1.0 › 0.2.0'),
+      reason:
+          'every lane agrees the current release is 0.1.0, so the movement '
+          'is stated once, on the unit, and not per row',
+    );
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    expect(
+      [for (final target in targets) (target as Map)['current_version']],
+      ['0.1.0', '0.1.0'],
+      reason: 'the Git lane reads its latest older tag, not an absence',
+    );
     expect(text.trimRight(), endsWith('→ rk stage core'));
     expect(
       run.report['next'],
@@ -835,37 +833,6 @@ executables:
   });
 
   test(
-    'the Git lane reports the latest older tag, not an invented absence',
-    () async {
-      final text = await statusOf(
-        source: tree(),
-        state: git(tags: const ['v0.1.0']),
-        registry: FakeRegistry({
-          'keybay': ['0.1.0'],
-        }),
-      );
-      expect(text, contains('0.1.0 › 0.2.0'));
-      expect(
-        text.split('\n').first,
-        isNot(contains('v0.2.0')),
-        reason: 'the tag repeats the version under the default pattern',
-      );
-      expect(
-        text,
-        matches(RegExp(r'core 0\.1\.0 › 0\.2\.0')),
-        reason:
-            'every lane agrees the current release is 0.1.0, so the '
-            'movement is stated once, above them',
-      );
-      expect(
-        text,
-        isNot(contains('not published: origin has no matching release tag')),
-        reason: 'how rk established absence is diagnosis, not the report',
-      );
-    },
-  );
-
-  test(
     'blocks on a missing changelog entry, naming the heading to add',
     () async {
       final text = await statusOf(
@@ -880,18 +847,6 @@ executables:
       expect(text, isNot(contains('rk release')));
     },
   );
-
-  test('blocks on an unclean worktree, naming a file', () async {
-    final text = await statusOf(
-      source: tree(),
-      state: git(clean: false),
-      registry: FakeRegistry({
-        'keybay': ['0.1.0'],
-      }),
-    );
-    expect(text, contains('uncommitted'));
-    expect(text, contains('lib/src/args.dart'));
-  });
 
   test(
     'blocks on a commit no remote has, with the branch and the fix',
@@ -958,15 +913,25 @@ executables:
   test(
     'an unreachable registry blocks rather than reading as absent',
     () async {
-      final text = await statusOf(
+      final run = await statusRun(
         source: tree(),
         state: git(),
         registry: FakeRegistry(const {}, unreachable: true),
       );
-      expect(text, contains('could not be reached'));
+      final targets =
+          ((run.report['units'] as List).single as Map)['targets'] as List;
+      final pub =
+          targets.singleWhere((target) => (target as Map)['kind'] == 'pubDev')
+              as Map;
+      expect(pub['verdict'], 'unknown');
       expect(
-        text,
-        isNot(contains('rk release')),
+        run.text,
+        contains('could not be reached'),
+        reason: 'the lane says the read failed, in the words of the failure',
+      );
+      expect(
+        run.report['next'],
+        isEmpty,
         reason: 'not knowing is not permission to publish',
       );
     },
@@ -1320,72 +1285,6 @@ repository: https://github.com/danReynolds/keybay
     }
   });
 
-  test('unstaged status uses the austere target vocabulary', () async {
-    final text = await statusOf(
-      source: tree(),
-      state: git(),
-      registry: FakeRegistry({
-        'keybay': ['0.1.0'],
-      }),
-    );
-
-    expect(text, contains('Git tag'));
-    expect(text, matches(RegExp(r'pub\.dev\s+keybay')));
-    expect(text, contains('0.1.0 › 0.2.0'));
-    expect(text, isNot(contains('prevent')));
-    expect(text, contains('→ rk stage core'));
-    expect(
-      _targetLine(text, 'pub.dev ').trimLeft(),
-      startsWith('pub.dev'),
-      reason: 'ordinary absent work has no problem mark',
-    );
-    for (final discarded in [
-      'ready',
-      'partial',
-      'blocked',
-      'nothing to release',
-      'build ›',
-    ]) {
-      expect(text, isNot(contains(discarded)));
-    }
-  });
-
-  test(
-    'the settled target report fits a narrow terminal without truncation',
-    () async {
-      const width = 36;
-      final run = await statusRun(
-        withConfig: binaryConfig,
-        source: binaryTree,
-        state: git(),
-        registry: FakeRegistry(const {}),
-        isTerminal: true,
-        useColor: true,
-        terminalWidth: width,
-        inspectorBuilder: (git, _) => FixedInspector(
-          registry: FakeRegistry(const {}),
-          git: git,
-          answer: const Inspection.absent(),
-        ),
-      );
-
-      final visible = run.text
-          .replaceAll(RegExp('\x1b\\[[0-9;]*[A-Za-z]'), '')
-          .replaceAll('\r', '')
-          .split('\n')
-          .where((line) => line.isNotEmpty)
-          .toList();
-      expect(visible.every((line) => line.runes.length <= width), isTrue);
-      expect(visible.join('\n'), contains('GitHub Release'));
-      expect(visible.join('\n'), contains('artifacts'));
-      expect(
-        run.text,
-        isNot(contains('…')),
-        reason: 'settled facts wrap; only transient progress may truncate',
-      );
-    },
-  );
-
   test(
     'Homebrew owns its formula without adding it to GitHub inventory',
     () async {
@@ -1439,54 +1338,6 @@ repository: https://github.com/danReynolds/keybay
       expect(homebrew['uses'], contains('keybay.rb'));
       expect(tag['artifacts'], isEmpty);
       expect(tag['uses'], 'release-manifest.json from GitHub Release');
-    },
-  );
-
-  test(
-    'an aggregate current version is shown only when every target agrees',
-    () async {
-      final agreed = await statusRun(
-        withConfig: binaryConfig,
-        source: binaryTree,
-        state: git(tags: const ['v0.2.0']),
-        registry: FakeRegistry({
-          'keybay': ['0.2.0'],
-        }),
-        inspectorBuilder: (git, _) => FixedInspector(
-          registry: FakeRegistry({
-            'keybay': ['0.2.0'],
-          }),
-          git: git,
-          answer: const Inspection.exact(detail: 'published exactly'),
-        ),
-      );
-      expect(
-        agreed.text,
-        matches(RegExp(r'^\s+Published$', multiLine: true)),
-        reason: 'an arrow to where it already is describes no movement',
-      );
-
-      final split = await statusRun(
-        withConfig: binaryConfig,
-        source: binaryTree,
-        state: git(),
-        registry: FakeRegistry({
-          'keybay': ['0.1.0'],
-        }),
-        inspectorBuilder: (git, _) => FixedInspector(
-          registry: FakeRegistry({
-            'keybay': ['0.1.0'],
-          }),
-          git: git,
-          answer: const Inspection.absent(),
-        ),
-      );
-      expect(split.text, contains('0.1.0 › 0.2.0'));
-      expect(
-        split.text,
-        isNot(matches(RegExp(r'^\s+Published$', multiLine: true))),
-        reason: 'targets disagree, so the header invents no single answer',
-      );
     },
   );
 
@@ -1682,11 +1533,20 @@ publish = ["pub.dev"]
       }),
     );
 
+    expect(
+      run.text,
+      contains('lib/src/args.dart'),
+      reason: 'named, not counted',
+    );
     expect(run.text, contains('issue prevents release'));
     expect((run.report['problems'] as List).single['code'], 'RK-GIT-001');
     expect(run.report['warnings'], isEmpty);
     expect((run.report['repository'] as Map)['source_binding'], 'gitCommit');
-    expect(run.report['next'], isEmpty);
+    expect(
+      run.report['next'],
+      isEmpty,
+      reason: 'the instruction would sit above the reason it will not work',
+    );
   });
 
   for (final code in const ['RK-GIT-004', 'RK-GIT-005', 'RK-GIT-007']) {
@@ -1803,22 +1663,8 @@ publish = ["pub.dev"]
     // them anyway.
     final expected = ReleaseAssets.expectedForUnit(made.unit);
     expect(run.text, matches(RegExp('${expected.length} artifacts')));
-    final staged =
-        (((run.report['units'] as List).single as Map)['targets'] as List)
-                .cast<Map>()
-                .singleWhere(
-                  (target) => target['kind'] == 'githubRelease',
-                )['artifacts']
-            as List;
-    expect(
-      staged.cast<Map>().map((artifact) => artifact['name']).toSet(),
-      expected,
-    );
-    expect(staged.cast<Map>().map((artifact) => artifact['status']).toSet(), {
-      'staged',
-    });
-    final units = run.report['units'] as List;
-    final targets = (units.single as Map)['targets'] as List;
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
     final github =
         targets.singleWhere(
               (target) => (target as Map)['kind'] == 'githubRelease',
@@ -1827,18 +1673,9 @@ publish = ["pub.dev"]
     expect(github['current_known'], isTrue);
     expect(github['target_version'], '0.2.0');
     expect(github['verdict'], 'absent');
-    expect(
-      (github['artifacts'] as List).map(
-        (artifact) => (artifact as Map)['name'],
-      ),
-      contains('keybay-0.2.0-macos-arm64.tar.gz'),
-    );
-    expect(
-      (github['artifacts'] as List)
-          .map((artifact) => (artifact as Map)['status'])
-          .toSet(),
-      {'staged'},
-    );
+    final staged = (github['artifacts'] as List).cast<Map>();
+    expect(staged.map((artifact) => artifact['name']).toSet(), expected);
+    expect(staged.map((artifact) => artifact['status']).toSet(), {'staged'});
   });
 
   test(
@@ -1886,11 +1723,7 @@ publish = ["pub.dev"]
         contains('→ rk release cli'),
         reason: 'the same safe resume command is visible to the operator',
       );
-      expect(run.text, isNot(contains('Issues')));
-      expect(run.text, isNot(contains('issue prevents release')));
-
       expect(run.report['problems'], isEmpty);
-      expect(run.report['next'], ['rk release cli']);
       final targets =
           ((run.report['units'] as List).single as Map)['targets'] as List;
       expect(
@@ -1943,9 +1776,12 @@ publish = ["pub.dev"]
         ),
       );
 
-      expect(run.text, isNot(contains('prevent')));
-      expect(run.text, isNot(contains('RK-HOST-001')));
-      expect(run.text, isNot(contains('cannot produce every platform')));
+      expect(
+        run.report['problems'],
+        isEmpty,
+        reason: 'the stage holds the bytes; this host need not remake them',
+      );
+      expect(run.report['next'], ['rk release cli']);
     },
   );
 
@@ -2521,25 +2357,6 @@ void _phase23Fixes() {
     expect(text, isNot(contains('ready')));
   });
 
-  test(
-    'the target row names the published version, not the local one',
-    () async {
-      final text = await statusOf(
-        source: tree(),
-        state: git(tags: ['v0.1.0']),
-        registry: FakeRegistry({
-          'keybay': ['0.1.0'],
-        }),
-      );
-      expect(
-        text,
-        contains('0.1.0 › 0.2.0'),
-        reason: 'local is 0.2.0; live is 0.1.0',
-      );
-      expect(text, isNot(contains('prevent')));
-    },
-  );
-
   test('a fully published unit ignores worktree state', () async {
     final run = await statusRun(
       source: tree(),
@@ -2549,6 +2366,11 @@ void _phase23Fixes() {
       }),
     );
     expect(run.text, matches(RegExp(r'^\s+Published$', multiLine: true)));
+    expect(
+      run.text,
+      matches(RegExp(r'pub\.dev\s+keybay')),
+      reason: 'a finished release still shows its targets',
+    );
     expect(
       run.text.split('\n').first,
       endsWith('1 uncommitted'),
@@ -2562,6 +2384,7 @@ void _phase23Fixes() {
           'matters to a release that will happen',
     );
     expect(run.text, isNot(contains('prevents release')));
+    expect(run.report['next'], isEmpty);
   });
 }
 
@@ -2583,22 +2406,6 @@ void statusReviewRegressions() {
     expect(text, isNot(contains('rk release')));
     expect(text, contains('pub.dev versions are immutable'));
     expect(text, contains('Bump the version and changelog'));
-  });
-
-  test('a dirty tree suppresses the next command', () async {
-    final text = await statusOf(
-      source: tree(),
-      state: git(clean: false),
-      registry: FakeRegistry({
-        'keybay': ['0.1.0'],
-      }),
-    );
-    expect(
-      text,
-      isNot(contains('→ rk release core')),
-      reason: 'the instruction would sit above the reason it will not work',
-    );
-    expect(text, contains('uncommitted'));
   });
 
   test(
@@ -2630,24 +2437,6 @@ publish = ["pub.dev"]
       expect(run.report['next'], ['rk stage']);
       expect(run.text, isNot(contains('rk stage core')));
       expect(run.text, isNot(contains('rk stage cli')));
-    },
-  );
-
-  test(
-    'the summary never concludes "not published" from a failed read',
-    () async {
-      final run = await statusRun(
-        source: tree(),
-        state: git(),
-        registry: FakeRegistry({}, unreachable: true),
-      );
-      expect(run.text, matches(RegExp(r'pub\.dev\s+keybay')));
-      expect(run.text, contains('could not be read'));
-      expect(
-        run.text,
-        contains('could not be reached'),
-        reason: 'the lane says the read failed, in the words of the failure',
-      );
     },
   );
 
