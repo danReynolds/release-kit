@@ -407,6 +407,35 @@ homebrew_tap = "danReynolds/homebrew-tools"
       );
     });
 
+    test('a tag pattern git cannot create', () {
+      for (final tag in ['v{version} rc', 'v{version}.lock', 'v..{version}']) {
+        expect(
+          refusedWith(
+            'schema = 2\n[release.core]\ntag = "$tag"\n'
+            'path = "a"\npublish = ["git-tag", "pub.dev"]',
+          ),
+          'RK-CONF-033',
+          reason: tag,
+        );
+      }
+      accepted(
+        'schema = 2\n[release.core]\ntag = "releases/cli-v{version}"\n'
+        'path = "a"\npublish = ["git-tag", "pub.dev"]',
+      );
+    });
+
+    test('a tag on a project row, which belongs to its unit', () {
+      expect(
+        refusedWith(
+          'schema = 2\n[release.framework]\ntag = "fleury-v{version}"\n'
+          'publish = ["git-tag"]\n'
+          '[[release.framework.project]]\npath = "packages/a"\n'
+          'publish = ["pub.dev"]\ntag = "a-v{version}"',
+        ),
+        'RK-CONF-016',
+      );
+    });
+
     test('a path escaping the repository', () {
       expect(
         refusedWith(

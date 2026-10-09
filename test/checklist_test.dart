@@ -327,6 +327,26 @@ executables:
     expect(checklist['cli/tag/keybay_cli-v0.2.0']!.phase, StepPhase.publish);
   });
 
+  test('every step waits only on steps listed before it', () {
+    final resolution = resolve(keybayConfig, keybayTree);
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
+    final ids = [for (final step in checklist.steps) step.id];
+    expect(ids.toSet(), hasLength(ids.length), reason: 'ids are unique');
+    for (final (index, step) in checklist.steps.indexed) {
+      for (final need in step.needs) {
+        expect(
+          ids.indexOf(need),
+          inInclusiveRange(0, index - 1),
+          reason: '${step.id} needs $need',
+        );
+      }
+    }
+  });
+
   test('the formula waits for the release to be public', () {
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist = Checklist.derive(
