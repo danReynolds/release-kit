@@ -105,8 +105,10 @@ Each target goes through one loop:
 3. Check the stage it publishes: the complete stage, or, for a moving channel
    finishing without its stage, the public inputs it recovers from.
 4. Act (`publish`), then take the act's own answer or read back (`confirm`).
-5. Exact is done. Anything else stops with the halt that fits: before acting,
-   partway, lost track, or not fixable by re-running.
+5. Exact is done. Anything else stops: refused before acting, partway, lost
+   track, or not fixable by re-running. What that means for the run is said
+   once, when it stops, from whether any act has changed a public target, so
+   lanes that ran side by side agree.
 
 ## Responsibilities
 
@@ -120,7 +122,8 @@ Each target goes through one loop:
 `UnitRun` is what one unit carries between them: the snapshot, whether it
 finishes without its stage, the packages it builds from source, the identity
 its macOS build signs as, and what the release did at each target.
-`release_progress.dart` holds the progress rows both phases fill.
+`release_progress.dart` holds the rows both phases fill: a board row for each
+target, and each unit's stage rows.
 
 ## Temporal invariants
 

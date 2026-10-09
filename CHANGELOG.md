@@ -60,6 +60,8 @@ release an earlier rk left partly published finishes with that rk.
   would name, rather than offering a release that would refuse.
 - With no pub session stored, `dart pub login` runs at once, not after
   twenty silent seconds.
+- A release whose lanes ran at once no longer says nothing public changed
+  after one of them published.
 
 ### Staging
 
@@ -142,6 +144,8 @@ release an earlier rk left partly published finishes with that rk.
   order.
 - `rk clean` removes what it showed, and leaves alone an entry that changed
   while you answered.
+- A control character in a tool's or a destination's message shows as a
+  space in a progress row, rather than stopping rk.
 
 ### Configuration and diagnostics
 
