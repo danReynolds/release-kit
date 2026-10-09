@@ -2090,6 +2090,54 @@ publish = ["pub.dev"]
     expect(ran.text, isNot(contains('Non-dev dependencies are overridden')));
   });
 
+  test('warnings an interrupted stage recorded are shown before the question '
+      'on the run that resumes it', () async {
+    final stages = Directory.systemTemp.createTempSync('rk-release-test-');
+    final staged = await release(
+      dryRun: true,
+      stages: stages,
+      results: {
+        'dart pub publish --to-archive <archive>': ToolResult(
+          exitCode: 65,
+          stdout:
+              'Package validation found the following potential issue:\n'
+              '* Your dependency on ffi is pinned to an exact version.\n'
+              'Package has 1 warning.',
+          stderr: '',
+        ),
+      },
+    );
+    expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+    // Interrupted before it completed: the archive, and the warning Pub
+    // gave with it, are recorded; the manifest is not yet written.
+    final stage = Directory(
+      '${stages.path}/.rk/work/stages',
+    ).listSync().whereType<Directory>().single;
+    final receipt = File('${stage.path}/stage.json');
+    final recorded =
+        jsonDecode(receipt.readAsStringSync()) as Map<String, Object?>;
+    (recorded['producers'] as Map).remove('complete-stage');
+    (recorded['files'] as Map).remove(ReleaseAssets.manifest);
+    receipt.writeAsStringSync(jsonEncode(recorded));
+    File('${stage.path}/${ReleaseAssets.manifest}').deleteSync();
+
+    final ran = await release(stages: stages);
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.calls,
+      isNot(contains('dart pub publish --to-archive <archive>')),
+      reason: 'the archive is resumed, not made again',
+    );
+    expect(
+      [for (final warning in ran.report['warnings'] as List) warning['code']],
+      ['RK-PUB-012'],
+    );
+    final warned = ran.text.indexOf('ffi is pinned to an exact version');
+    expect(warned, isNonNegative, reason: ran.text);
+    expect(warned, lessThan(ran.text.indexOf('\n  Release core 0.2.0\n')));
+  });
+
   test('errors Pub reports without a summary block', () async {
     final ran = await release(
       results: {

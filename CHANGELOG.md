@@ -98,6 +98,8 @@ release an earlier rk left partly published finishes with that rk.
   build reads is left out, as `git archive` leaves out a submodule.
 - Staging offline reports that Pub could not reach the registry
   (`RK-PUB-019`), not validation errors to fix.
+- The run that resumes an interrupted stage shows the warnings its recorded
+  work found, such as Pub's, before a release asks.
 - A stage that no longer validates (`RK-STAGE-002`) names each file that is
   wrong, by its path in the stage: missing from the completed stage, or
   differing from the receipt in size or digest.

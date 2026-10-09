@@ -358,6 +358,9 @@ final class StageRunner {
     for (final (:warning, :target) in warnings) {
       output.deferWarning(warning, unit: unit.name, target: target);
     }
+    // And what the work an interrupted run recorded found: it is not done
+    // again, and its warnings are said with this run's, each once.
+    deferStageWarnings(output, release, stage.receipt!);
     return true;
   }
 
