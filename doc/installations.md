@@ -5,7 +5,8 @@ From a project with `release.toml`:
 ```sh
 rk use                          # compare sources and available updates
 rk use --list                   # inspect without opening the TUI
-rk use local                    # prepare this checkout, then select it
+rk use local                    # compile this checkout, then select it
+rk use local --live             # run source directly while editing
 rk install homebrew             # install without changing the selection
 rk install homebrew --latest    # install the latest compatible version
 rk use homebrew                 # select it; install first if missing
@@ -76,7 +77,8 @@ settle safely. A failed operation clears the queue for review.
 **Install** or **Update** installs the displayed available version and keeps the picker open.
 It does not select another source. If you update the source already selected,
 its new version runs on the next command. Local has no remote version: **Use**
-prepares and binds the checkout you are in. Explicit `rk use pub`, for example,
+compiles and selects the checkout you are in; **Rebuild** refreshes a selected
+Local snapshot after edits. Explicit `rk use pub`, for example,
 still installs first when missing; the table keeps those two actions separate.
 
 | Source | What Available means | Install / Update |
@@ -121,7 +123,7 @@ from any directory.
 
 | Source | When offered | Preparation and execution |
 | --- | --- | --- |
-| Local | Package declares executables | `dart pub get` in this exact checkout; launch the mapped `bin` entrypoint with Dart |
+| Local | Package declares executables | Resolve dependencies and compile this checkout; launch the compiled snapshot (`--live` runs source with Dart) |
 | Homebrew | Project publishes to Homebrew | Install the configured tap/formula with `--skip-link`; launch it through Homebrew's `opt` link, which follows upgrades |
 | Pub | Project publishes to pub.dev | Activate the package with `--no-executables`; run its native global activation |
 | GitHub | Project publishes native binaries through GitHub Releases | Download the latest stable release matching the unit's tag pattern and the current platform |
@@ -135,12 +137,22 @@ supported by these installation adapters yet. A missing Dart or Homebrew tool
 is reported with a reason; RK does not install the package manager itself.
 
 `install` leaves routing unchanged. `use` prepares a missing installation and
-then switches. Local is the checkout itself: `rk install local` prepares it,
-and Local shows as installed only while it is selected. Existing published installations are reused, never silently
-upgraded. Local preparation refreshes dependencies and binds the checkout from
-which you invoke it. Source edits are picked up on the next invocation, with no
-reinstallation or Git pull. The launched program keeps your working directory
-and arguments.
+then switches. Existing published installations are reused, never silently
+upgraded. Local refreshes dependencies and compiles every declared executable
+from the checkout where you invoke it, including uncommitted edits. Normal
+commands then launch those compiled copies without starting Dart's compiler.
+After editing or pulling source, run `rk use local` again to rebuild. RK does
+not pull source or check it for changes on every launch.
+
+`rk install local` builds without switching, keeping the currently selected
+copy usable. `rk use local` always rebuilds before selecting. Both accept
+`--live` to retain direct Dart source execution, where edits take effect on
+the next invocation. A live checkout counts as installed only while selected.
+The launched program keeps your working directory, arguments and stdio in
+both modes. Compiled programs see their executable as `Platform.script`;
+use `--live` for programs that require source-relative files or JIT features.
+`--list --json` identifies Local's `mode`, original `checkout`, installed
+`version`, and artifact `location`.
 
 GitHub archives must use RK's current release manifest and supported single-file
 or Dart bundle layout. The installer checks the manifest's unit, version and
@@ -154,8 +166,11 @@ with that GitHub release; they are not independent publisher authentication.
 
 Command launchers live in `$XDG_DATA_HOME/rk/bin`, or `~/.local/share/rk/bin`.
 Each one names its project and source in a header, so rk reads the selection
-back from the launchers rather than storing it; the only other state is
-GitHub downloads, in `downloads/<package>/<version>` beside `bin`. `use`
+back from the launchers rather than storing it. GitHub downloads live in
+`downloads/<package>/<version>` beside `bin`; compiled Local copies live in
+`local/<package>/<build>`, with a small record of their version, checkout and
+executables. Inspection shows the selected Local build, or the newest completed
+one when another source is selected. `use`
 replaces each command's launcher atomically. A failed prepare or a
 cancellation before the launchers are written leaves the old selection
 usable. Cancelling waits for the current package-manager operation to settle;
@@ -180,7 +195,7 @@ from there, and the next `rk use` of a project exporting the command replaces
 it.
 
 Removing a source any of the project's commands runs is refused: select
-another first. Local is the checkout itself, so there is nothing to uninstall.
+another first. Local uninstall removes RK's compiled copies and keeps the checkout.
 Uninstalling Pub or Homebrew removes that package manager's installation,
 including one installed outside RK. GitHub uninstall removes RK's downloads
 for that project. An update replaces the previous download once the new one is
@@ -195,10 +210,13 @@ launchers follow their package manager's own upgrades: `brew upgrade` moves the
 
 ### When rk's own checkout does not compile
 
-With Local selected in rk's own checkout, `rk` runs that checkout, and rk
-keeps no copy of itself: while the checkout does not compile, `rk use` cannot
-run to switch back. Make the checkout compile again (`git stash`, say), or run
-a published rk by its path from the checkout:
+Compiled Local keeps working if source edits break compilation. A failed
+`rk use local` leaves the previous compiled commands selected. A successful
+rebuild retires older copies, except copies still used by any launcher.
+
+With `rk use local --live`, `rk` runs the source itself: while that checkout
+does not compile, `rk use` cannot run to switch back. Fix the source, or run
+an already installed rk by its path from the checkout:
 
 ```sh
 $(brew --prefix)/opt/rk/bin/rk use homebrew
@@ -221,7 +239,7 @@ release evidence, while Use changes local installations and command routing.
 `installations/manager.dart` owns the shared operation lifecycle;
 `installations/store.dart` owns the launchers. Provider adapters
 live beside their publication counterparts under `targets/*/installation.dart`.
-The Local adapter owns Dart source preparation. The Fleury views in `tui/`
+The Local adapter owns Dart compilation and live source preparation. The Fleury views in `tui/`
 provide input and presentation and call the same coordinator as explicit CLI
 commands. Publication modules do not import the installation adapters.
 
@@ -240,7 +258,15 @@ checks run when installations were built.
 
 ### Local packages with native build hooks
 
-For a local package whose resolved dependencies contain `hook/build.dart`, RK
+Compiled Local uses `dart build cli` to bundle native libraries alongside each
+executable. The bundle remains usable if the checkout or hook cache moves.
+For configured Dart defines, RK uses `dart compile exe`, which supports `-D`
+but refuses hooks. The SDK's native bundler currently does not accept `-D`:
+projects needing both hooks and configured defines must use `--live`. Failed
+builds report the compiler diagnostic and the live-source remedy; RK never
+silently drops defines or native libraries.
+
+With `--live`, for a package whose resolved dependencies contain `hook/build.dart`, RK
 starts Dart in the owning package so a cold launch prepares its native assets.
 A generated bootstrap then starts the original entrypoint in an isolate with
 the caller's working directory. Arguments, stdin, exit status and Platform.script

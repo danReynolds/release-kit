@@ -93,10 +93,14 @@ class Installation {
     required this.version,
     required this.commands,
     required this.location,
+    this.checkout,
     this.exportedPaths = const [],
   });
   final InstallationSource source;
   final String version, location;
+
+  /// Original source directory of a compiled Local snapshot.
+  final String? checkout;
   final Map<String, LaunchCommand> commands;
 
   /// Native package-manager entrypoints, used to detect active external installs.
@@ -105,9 +109,12 @@ class Installation {
     'source': source.name,
     'version': version,
     'location': location,
-    // Whether rk owns the installed bytes: a GitHub download under rk's data
-    // directory, which rk replaces on update and removes on uninstall.
-    'managed': source == InstallationSource.github,
+    // Whether rk owns the installed bytes, including compiled Local copies.
+    'managed': source == InstallationSource.github || checkout != null,
+    if (source == InstallationSource.local) ...{
+      'mode': checkout == null ? 'live' : 'compiled',
+      'checkout': checkout ?? location,
+    },
     'exported_paths': exportedPaths,
     'commands': {
       for (final entry in commands.entries) entry.key: entry.value.toJson(),

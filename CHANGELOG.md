@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `rk use local` compiles the checkout for fast command startup. Run it again
+  after source edits to rebuild; a failed build keeps the previous commands
+  usable. `--live` preserves direct source execution during development.
+  Local builds retain native hook libraries; hooks combined with configured
+  Dart defines currently require `--live` because of a Dart SDK limitation.
+
 - Binary archives use fixed gzip level 6: measured roughly three times
   faster than level 9, with about 0.2% larger archives on Keybay and rk.
 - GitHub installation uses the same archive extraction as identity checks,

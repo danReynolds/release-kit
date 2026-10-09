@@ -28,6 +28,9 @@ class InstallationStore {
   String downloads(ExecutableProject project) =>
       '$root/downloads/${project.name}';
 
+  String localBuilds(ExecutableProject project) =>
+      '$root/local/${project.name}';
+
   static String defaultRoot(Map<String, String> environment) {
     final data = environment['XDG_DATA_HOME'];
     final home = environment['HOME'];
@@ -246,14 +249,17 @@ class InstallationStore {
   }
 
   /// Once [kept] is installed and routed, removes what it replaced: rk's own
-  /// earlier downloads, and any an interrupted run left half unpacked. The
-  /// download the current launchers run is never removed.
+  /// earlier downloads or local builds, and interrupted preparation. No build
+  /// used by any current launcher is removed, even after a partial switch.
   void retire(ExecutableProject project, Installation kept) {
     final parent = Directory(kept.location).parent;
-    if (parent.path != downloads(project)) return;
-    final inUse = selected(project)?.location;
+    if (parent.path != downloads(project) &&
+        parent.path != localBuilds(project)) {
+      return;
+    }
+    final inUse = launchers(project).values.map((l) => l.location).toSet();
     for (final entry in parent.listSync(followLinks: false)) {
-      if (entry.path != kept.location && entry.path != inUse) {
+      if (entry.path != kept.location && !inUse.contains(entry.path)) {
         entry.deleteSync(recursive: true);
       }
     }

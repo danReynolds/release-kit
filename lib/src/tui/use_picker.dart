@@ -170,12 +170,13 @@ class UsePicker extends Notifier {
   bool isDefault(ProjectInstallations state, InstallationSource source) =>
       state.currentSource == source &&
       (source != InstallationSource.local ||
-          state.sources[source]!.installation?.location ==
+          (state.sources[source]!.installation?.checkout ??
+                  state.sources[source]!.installation?.location) ==
               state.project.directory);
 
   bool canUse(ProjectInstallations state, InstallationSource source) =>
       canChoose(state, source) &&
-      !isDefault(state, source) &&
+      (source == InstallationSource.local || !isDefault(state, source)) &&
       state.sources[source]!.problem == null &&
       (source == InstallationSource.local ||
           state.sources[source]!.installation != null);
@@ -444,8 +445,11 @@ class _UseScreenState extends State<UseScreen> {
     return (
       installed: local
           ? (installation != null &&
-                    installation.location != state.project.directory
+                    (installation.checkout ?? installation.location) !=
+                        state.project.directory
                 ? 'Other checkout'
+                : installation?.checkout != null
+                ? '${installation!.version} compiled'
                 : 'This checkout')
           : installation?.version ??
                 (inspection.problem == null ? 'Not installed' : 'Unavailable'),
@@ -470,7 +474,7 @@ class _UseScreenState extends State<UseScreen> {
                   () => unawaited(model.download(state, source)),
                 ),
         // A problem that blocks Use offers Remove in its place.
-        if (status == null && !model.isDefault(state, source))
+        if (status == null && (local || !model.isDefault(state, source)))
           if (inspection.problem != null && model.canUninstall(state, source))
             _SourceAction.remove: (
               'Remove',
@@ -478,7 +482,7 @@ class _UseScreenState extends State<UseScreen> {
             )
           else
             _SourceAction.use: (
-              'Use',
+              local && model.isDefault(state, source) ? 'Rebuild' : 'Use',
               model.canUse(state, source)
                   ? () => unawaited(model.choose(state, source))
                   : null,
@@ -617,7 +621,7 @@ class _UseScreenState extends State<UseScreen> {
           'Commands: ${state.project.commands.join(', ')}',
           '',
           source == InstallationSource.local
-              ? 'Only the local registration is removed. Your checkout stays.'
+              ? 'Compiled local copies are removed. Your checkout stays.'
               : 'This removes the ${source.label} installation, including its use outside this repository.',
         ].join('\n'),
         onBack: model.exit,
@@ -780,7 +784,14 @@ class _UseScreenState extends State<UseScreen> {
         ),
         SizedBox(
           width: 17,
-          child: _action(state, source, row, _SourceAction.download),
+          child: _action(
+            state,
+            source,
+            row,
+            source == InstallationSource.local && model.isDefault(state, source)
+                ? _SourceAction.use
+                : _SourceAction.download,
+          ),
         ),
       ],
     );

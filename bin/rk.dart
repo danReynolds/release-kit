@@ -65,6 +65,7 @@ Flags
               (and .rk/timings.json, a trace Perfetto opens)
   --write     init: write the default configuration without a prompt
   --latest    install: get the latest compatible version without changing source
+  --live      use/install local: run source directly instead of a compiled snapshot
   --version   print this binary's version and exit
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
