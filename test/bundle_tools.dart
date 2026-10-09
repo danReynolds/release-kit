@@ -30,7 +30,9 @@ class BundleRecordingTools extends RecordingTools {
     Map<String, String>? environment,
     Duration? timeout,
   }) async {
-    final key = '$executable ${arguments.join(' ')}';
+    final key =
+        '${executable.endsWith(_fixtureDart) ? 'dart' : executable} '
+        '${arguments.join(' ')}';
     calls.add(key);
     probe?.call(key, workingDirectory);
     onRun?.call(key);
@@ -114,6 +116,22 @@ class BundleRecordingTools extends RecordingTools {
       stderr: 'CandidateCDHash sha256=${signature.cdhash}\n',
     );
   }
+}
+
+const _fixtureDart = '/rk-fixture-sdk/bin/dart';
+
+/// A Dart SDK laid out as a bundle build reads it, under [parent]: `bin/dart`,
+/// a few-byte `bin/dartaotruntime` and `LICENSE`. A modelled macOS bundle
+/// built with it copies and hashes that stand-in rather than this machine's
+/// real runtime, which is megabytes and differs between machines. Its `dart`
+/// is recorded as plain `dart`, the name the scripts answer to.
+String fixtureDartSdk(Directory parent) {
+  final bin = Directory('${parent.path}/rk-fixture-sdk/bin')
+    ..createSync(recursive: true);
+  File('${bin.path}/dart').writeAsStringSync('DART');
+  File('${bin.path}/dartaotruntime').writeAsStringSync('RUNTIME');
+  File('${bin.parent.path}/LICENSE').writeAsStringSync('LICENSE');
+  return '${bin.path}/dart';
 }
 
 /// A signature made here. Its code hash depends on the bytes it covers and

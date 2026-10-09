@@ -1677,7 +1677,8 @@ executables:
             source: tree,
             // The scripted tools answer `dart compile`, not this machine's
             // SDK.
-            sdk: () => const DartSdk(executable: 'dart', version: 'fixture'),
+            sdk: () =>
+                DartSdk(executable: fixtureDartSdk(root), version: 'fixture'),
             repository: git.originUrl,
             directory: directory,
             enforceUnitContract: true,

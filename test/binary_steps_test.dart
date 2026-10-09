@@ -82,6 +82,7 @@ executables:
   /// along in memory, which is exactly what must be impossible.
   BinaryChain chain(Tools tools) => BinaryChain(
     tools: tools,
+    compilerExecutable: fixtureDartSdk(scratch),
     output: output,
     workspace: workspace,
     repositoryRoot: scratch.path,
