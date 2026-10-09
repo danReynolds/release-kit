@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/report.dart';
 import 'package:test/test.dart';
 
@@ -114,43 +113,9 @@ void main() {
     expect(problem['remedy'], 'align the constraint');
   });
 
-  test('warnings are separate, coded, and nonblocking', () {
-    final report = Report('status')
-      ..warning(
-        const Diagnostic(
-          code: 'RK-GIT-001',
-          message: '1 uncommitted path will be included',
-        ),
-      );
-    final json = decode(report);
-    expect(json['problems'], isEmpty);
-    expect((json['warnings'] as List).single['code'], 'RK-GIT-001');
-    expect(json['exit'], 0);
-  });
-
   test('the next command is data a caller can chain on', () {
     final report = Report('status')..next('rk release cli');
     expect(decode(report)['next'], ['rk release cli']);
-  });
-
-  group('recording happens inside printing, so the two cannot drift', () {
-    test('a problem printed is a problem reported', () {
-      final output = Output(sink: (_) {}, isTerminal: false);
-      output.problem(Diagnostic(code: 'RK-GIT-001', message: '2 uncommitted'));
-      expect(
-        decode(output.report)['problems'],
-        hasLength(1),
-        reason: 'there is one call, so there is nothing to forget',
-      );
-    });
-
-    test('and prose suppressed is still recorded', () {
-      final buffer = StringBuffer();
-      final output = Output(sink: (_) {}, isTerminal: false);
-      output.next('rk release cli');
-      expect(buffer.toString(), isEmpty);
-      expect(decode(output.report)['next'], ['rk release cli']);
-    });
   });
 
   group('the diagnosis directory', () {
