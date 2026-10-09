@@ -246,7 +246,10 @@ class InstallationManager {
       cancellation?.check();
       if (action == InstallationAction.install) {
         store.retire(project, installation);
-        return '${project.name} installed from ${source.label}. Selection unchanged.';
+        // Local is the checkout itself: it counts as installed once selected.
+        return source == InstallationSource.local
+            ? '${project.name} prepared in this checkout. Selection unchanged.'
+            : '${project.name} installed from ${source.label}. Selection unchanged.';
       }
       await store.activate(
         project,

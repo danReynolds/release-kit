@@ -144,6 +144,8 @@ published finishes with 0.1.14.
   running; run `rk use` once to move it to the new launchers. Then what
   0.1.14 kept under `~/.local/share/rk`, `managers` and `projects`, can be
   deleted.
+- Local is the checkout itself: `rk install local` prepares it, and Local
+  shows as installed only while it is selected.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.
 - `rk use local` runs Dart commands whose dependencies have build hooks
   (native assets) from any directory, through a small bootstrap. Select

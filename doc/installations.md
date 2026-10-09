@@ -135,7 +135,8 @@ supported by these installation adapters yet. A missing Dart or Homebrew tool
 is reported with a reason; RK does not install the package manager itself.
 
 `install` leaves routing unchanged. `use` prepares a missing installation and
-then switches. Existing published installations are reused, never silently
+then switches. Local is the checkout itself: `rk install local` prepares it,
+and Local shows as installed only while it is selected. Existing published installations are reused, never silently
 upgraded. Local preparation refreshes dependencies and binds the checkout from
 which you invoke it. Source edits are picked up on the next invocation, with no
 reinstallation or Git pull. The launched program keeps your working directory

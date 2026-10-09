@@ -151,6 +151,32 @@ void main(List<String> args) {
   );
 
   test(
+    'rk install local says it prepared the checkout, which is not installed until selected',
+    () async {
+      final provider = LocalInstallationProvider(
+        TestTools((_, _, _, _) async => ok()),
+        Platform.resolvedExecutable,
+        store,
+      );
+      final live = InstallationManager(
+        store: store,
+        providers: {provider.source: provider},
+        environment: manager.environment,
+      );
+      final message = await live.act(
+        project,
+        provider.source,
+        InstallationAction.install,
+        progress: (_) {},
+      );
+      final state = await live.inspect(project);
+      expect(state.sources[provider.source]!.installation, isNull);
+      expect(message, contains('prepared'));
+      expect(message, isNot(contains('installed')));
+    },
+  );
+
+  test(
     'failed or cancelled preparation leaves old selection runnable',
     () async {
       await act(local.source, InstallationAction.use);
