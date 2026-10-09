@@ -138,4 +138,38 @@ void main() {
     expect(screen, contains('Already activated from a local path'));
     expect(screen, contains('dart pub global deactivate orbit_cli'));
   });
+
+  test('compact details can page to the remedy without leaving Back', () {
+    final tester = FleuryTester(viewportSize: const CellSize(40, 12));
+    addTearDown(tester.dispose);
+    var returned = false;
+    tester.pumpWidget(
+      FleuryApp(
+        title: 'rk',
+        home: MatrixDetails(
+          command: 'rk use',
+          title: 'Pub unavailable',
+          body:
+              '${List.generate(20, (i) => 'Detail $i').join('\n')}\nRepair: dart pub global activate tool',
+          onBack: () => returned = true,
+        ),
+      ),
+    );
+    tester.pump();
+    expect(tester.renderToString(), contains('More below'));
+    expect(tester.renderToString(), isNot(contains('Repair:')));
+    tester.sendKey(const KeyEvent(KeyCode.end));
+    tester.pump();
+    expect(
+      tester.renderToString(),
+      contains('Repair: dart pub global activate'),
+    );
+    expect(tester.renderToString(), contains('End · PgUp/PgDn scroll'));
+    tester.sendKey(const KeyEvent(KeyCode.enter));
+    expect(
+      returned,
+      isTrue,
+      reason: 'Paging must leave the safe Back action focused.',
+    );
+  });
 }

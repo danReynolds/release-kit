@@ -15,8 +15,6 @@ import 'package:test/test.dart';
 import 'rk_process.dart';
 
 void main() {
-  dogfoodRegressions();
-  closeoutRegressions();
   test('proposes one unit per releasable package', () async {
     final buffer = StringBuffer();
     final written = <String, String>{};
@@ -309,10 +307,7 @@ void main() {
       );
     });
   });
-}
 
-/// Phase 6 hardening: the proposal is validated against rk itself.
-void dogfoodRegressions() {
   test('the accepted proposal resolves end to end', () async {
     // The dogfood loop: init writes, and what it wrote must release — parsed
     // by rk's parser, resolved against the same tree, checklist derivable.
@@ -345,26 +340,7 @@ workspace:
     expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
     expect(resolution!.units.single.projects.single.name, 'keybay');
   });
-}
 
-/// The problems list as a --json caller reads it: decoded from the encoded
-/// document, not reached through the report's internals.
-Iterable<Object?> problemCodes(Report report, {int exit = 0}) {
-  final doc = jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
-  return (doc['problems'] as List).map(
-    (p) => (p as Map<String, Object?>)['code'],
-  );
-}
-
-Map<String, Object?> problemNamed(Report report, String code, {int exit = 0}) {
-  final doc = jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
-  return (doc['problems'] as List).cast<Map<String, Object?>>().firstWhere(
-    (p) => p['code'] == code,
-  );
-}
-
-/// Phase 6 review closeout: the findings, each pinned where it bit.
-void closeoutRegressions() {
   test('a refusal carries the refused proposal and its problems', () async {
     final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
     final written = <String, String>{};
@@ -503,4 +479,20 @@ void closeoutRegressions() {
       contains('[release.mycool-package_2]'),
     );
   });
+}
+
+/// The problems list as a --json caller reads it: decoded from the encoded
+/// document, not reached through the report's internals.
+Iterable<Object?> problemCodes(Report report, {int exit = 0}) {
+  final doc = jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
+  return (doc['problems'] as List).map(
+    (p) => (p as Map<String, Object?>)['code'],
+  );
+}
+
+Map<String, Object?> problemNamed(Report report, String code, {int exit = 0}) {
+  final doc = jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
+  return (doc['problems'] as List).cast<Map<String, Object?>>().firstWhere(
+    (p) => p['code'] == code,
+  );
 }
