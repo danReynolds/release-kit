@@ -333,8 +333,7 @@ class StatusCommand {
                 unit,
                 releasedSource.target.expectation,
                 releasedSource.target.inspection,
-              )
-              .diagnostic,
+              ),
           evidence: {
             'released source': releasedSource.releasedCommit,
             'current source': releasedSource.currentCommit,
@@ -614,7 +613,6 @@ class StatusCommand {
         ? inspector.targets
               .moduleFor(target.expectation.target)
               .explain(unit, target.expectation, state)
-              .diagnostic
         : Diagnostic(
             code: 'RK-REL-001',
             message: '$label: ${_condition(state)}',

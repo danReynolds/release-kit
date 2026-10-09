@@ -72,33 +72,28 @@ abstract base class TargetModule {
     stage: context.checkedStage,
   )).state;
 
-  /// What [state] means in this target's terms: a conflict found before
-  /// acting, or, with [acted], an act that did not settle exact — and the
-  /// command to run next, when one helps. Core decides when either stops
-  /// the release.
-  ({Diagnostic diagnostic, String? next}) explain(
+  /// What [state], a conflict, means in this target's terms. Core decides
+  /// when it stops the release.
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection state);
+
+  /// What [acted], an act that did not settle exact, means in this target's
+  /// terms, with [state] what the read after it found, and the command to
+  /// run next when one helps. By default, what the act or the read said.
+  ({Diagnostic diagnostic, String? next}) explainAct(
     ResolvedUnit unit,
     Target target,
-    Inspection state, {
-    TargetActOutcome? acted,
-  });
+    Inspection state,
+    TargetActOutcome acted,
+  ) => (
+    diagnostic: Diagnostic(
+      code: 'RK-REL-003',
+      message:
+          '${target.summary}: '
+          '${acted.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+    ),
+    next: null,
+  );
 }
-
-/// How an act that did not settle exact reads when its target has no words
-/// of its own for it: what the act, or the read after it, said.
-({Diagnostic diagnostic, String? next}) unconfirmedAct(
-  Target target,
-  Inspection state,
-  TargetActOutcome acted,
-) => (
-  diagnostic: Diagnostic(
-    code: 'RK-REL-003',
-    message:
-        '${target.summary}: '
-        '${acted.problem ?? state.detail ?? 'the public result could not be confirmed'}',
-  ),
-  next: null,
-);
 
 /// [history], or an unknown one when reading it threw: an unread history is
 /// never taken for an empty one.

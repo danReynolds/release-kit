@@ -166,16 +166,7 @@ final class GitTagTargetModule extends TargetModule {
   }
 
   @override
-  ({Diagnostic diagnostic, String? next}) explain(
-    ResolvedUnit unit,
-    Target target,
-    Inspection state, {
-    TargetActOutcome? acted,
-  }) => acted != null
-      ? unconfirmedAct(target, state, acted)
-      : (diagnostic: _conflict(unit, target, state), next: null);
-
-  Diagnostic _conflict(ResolvedUnit unit, Target target, Inspection conflict) {
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection conflict) {
     if (conflict.sourceMismatch != null) {
       final project = unit.projects.first;
       return Diagnostic(

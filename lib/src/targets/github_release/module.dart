@@ -70,26 +70,17 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   @override
-  ({Diagnostic diagnostic, String? next}) explain(
-    ResolvedUnit unit,
-    Target target,
-    Inspection state, {
-    TargetActOutcome? acted,
-  }) => acted != null
-      ? unconfirmedAct(target, state, acted)
-      : (
-          diagnostic: Diagnostic(
-            code: 'RK-REL-001',
-            message:
-                '${target.label}: '
-                '${state.detail ?? 'the published release does not match'}',
-            remedy:
-                'compare the published release with the source named by its '
-                'tag. If they are not the intended release, bump the version '
-                'and changelog; rk will not replace conflicting public bytes',
-          ),
-          next: null,
-        );
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection state) =>
+      Diagnostic(
+        code: 'RK-REL-001',
+        message:
+            '${target.label}: '
+            '${state.detail ?? 'the published release does not match'}',
+        remedy:
+            'compare the published release with the source named by its '
+            'tag. If they are not the intended release, bump the version '
+            'and changelog; rk will not replace conflicting public bytes',
+      );
 
   /// With [signIn], the GitHub CLI's session.
   @override

@@ -167,14 +167,8 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  ({Diagnostic diagnostic, String? next}) explain(
-    ResolvedUnit unit,
-    Target target,
-    Inspection state, {
-    TargetActOutcome? acted,
-  }) => switch (acted) {
-    null => (
-      diagnostic: Diagnostic(
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection state) =>
+      Diagnostic(
         code: 'RK-REL-001',
         message:
             '${target.label}: '
@@ -182,28 +176,33 @@ final class PubDevTargetModule extends TargetModule {
         remedy:
             'pub.dev versions are immutable. Bump the version and '
             'changelog, then stage the new release',
-      ),
-      next: null,
-    ),
-    _ when state.verdict == Verdict.conflict => (
-      diagnostic: Diagnostic(
-        code: 'RK-PUB-006',
-        message:
-            '${target.project!.name} ${target.project!.version}: '
-            '${state.detail ?? 'the public archive differs'}',
-      ),
-      next: null,
-    ),
-    _ => (
-      diagnostic: Diagnostic(
-        code: 'RK-PUB-005',
-        message:
-            '${target.project!.name} ${target.project!.version}: the exact '
-            'public archive could not be confirmed',
-      ),
-      next: 'rk status ${unit.name}',
-    ),
-  };
+      );
+
+  @override
+  ({Diagnostic diagnostic, String? next}) explainAct(
+    ResolvedUnit unit,
+    Target target,
+    Inspection state,
+    TargetActOutcome acted,
+  ) => state.verdict == Verdict.conflict
+      ? (
+          diagnostic: Diagnostic(
+            code: 'RK-PUB-006',
+            message:
+                '${target.project!.name} ${target.project!.version}: '
+                '${state.detail ?? 'the public archive differs'}',
+          ),
+          next: null,
+        )
+      : (
+          diagnostic: Diagnostic(
+            code: 'RK-PUB-005',
+            message:
+                '${target.project!.name} ${target.project!.version}: the exact '
+                'public archive could not be confirmed',
+          ),
+          next: 'rk status ${unit.name}',
+        );
 
   /// Before staging, the native configuration must publish where this
   /// target does; with [signIn], after the yes, Pub must hold a token or a

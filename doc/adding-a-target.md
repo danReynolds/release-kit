@@ -38,7 +38,8 @@ whole surface is one table:
 | `ready` | no | Ambient checks before staging; with `signIn`, the native session, once per run after the yes. Defaults to ready, so a target with credentials must override it. |
 | `publish` | yes | Performs one provider transaction. An act whose provider answer is its read-back, as a Git tag push is, returns that state with the act. |
 | `confirm` | usually no | Reads back what an act did; defaults to `read`. |
-| `explain` | yes | Names, in the target's own code and sentence, a conflict found before acting or an act that did not settle exact, and the command to run next; `unconfirmedAct` is the shared wording for an act. Core decides the halt. |
+| `explain` | yes | Names, in the target's own code and sentence, a conflict found before acting. Core decides the halt. |
+| `explainAct` | no | Names an act that did not settle exact, and the command to run next; defaults to the shared wording, what the act or the read after it said. Core decides the halt. |
 
 `read` returns `TargetHistory` beside the state: the lane's current
 `version`, any provider-specific `problems`, and any irreversible `claims`.
@@ -78,12 +79,13 @@ lib/src/targets/git_tag/
   transaction.dart            create, sign, and push one tag
 
 lib/src/targets/pub_dev/
-  module.dart                 read, prepare, ready, publish, confirm, explain
+  module.dart                 read, prepare, ready, publish, confirm, explain,
+                              explainAct
   client.dart                 pub.dev HTTP reads
   package_stage.dart          the native Pub archive
 
 lib/src/targets/homebrew/
-  module.dart                 read, prepare, publish, explain
+  module.dart                 read, prepare, publish, explain, explainAct
   client.dart                 tap reads and the compare-and-swap update
   formula_stage.dart          the formula, from the archives' digests
 ```

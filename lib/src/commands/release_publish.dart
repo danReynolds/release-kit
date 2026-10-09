@@ -603,7 +603,7 @@ final class Publication {
     // something else: the conflict a fresh inspection would have found, with
     // the same advice.
     if (conflict && !target.moving && !act.ok && !act.mayHaveActed) {
-      final advice = module.explain(unit, target, state).diagnostic;
+      final advice = module.explain(unit, target, state);
       return _PublicationFailure(
         step: target,
         diagnostics: [
@@ -620,7 +620,7 @@ final class Publication {
     }
     final given = act.diagnostic;
     final named = given == null || conflict
-        ? module.explain(unit, target, state, acted: act)
+        ? module.explainAct(unit, target, state, act)
         : (diagnostic: given, next: null);
     final details = [
       ?given?.remedy,
@@ -686,10 +686,7 @@ final class Publication {
       step: step,
       diagnostics: [
         if (conflict && step is Target)
-          inspector.targets
-              .moduleFor(step.target)
-              .explain(unit, step, state)
-              .diagnostic
+          inspector.targets.moduleFor(step.target).explain(unit, step, state)
         else
           Diagnostic(
             code: 'RK-REL-001',

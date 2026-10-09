@@ -163,37 +163,39 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  ({Diagnostic diagnostic, String? next}) explain(
+  Diagnostic explain(ResolvedUnit unit, Target target, Inspection state) =>
+      Diagnostic(
+        code: 'RK-REL-001',
+        message:
+            '${target.label}: '
+            '${state.detail ?? 'the published formula does not match'}',
+        remedy:
+            'restore the formula to the exact release bytes it is meant '
+            'to reference, or advance the source version intentionally; '
+            'then run rk status ${unit.name} again',
+      );
+
+  @override
+  ({Diagnostic diagnostic, String? next}) explainAct(
     ResolvedUnit unit,
     Target target,
-    Inspection state, {
-    TargetActOutcome? acted,
-  }) => (
-    diagnostic: acted == null
-        ? Diagnostic(
-            code: 'RK-REL-001',
-            message:
-                '${target.label}: '
-                '${state.detail ?? 'the published formula does not match'}',
-            remedy:
-                'restore the formula to the exact release bytes it is meant '
-                'to reference, or advance the source version intentionally; '
-                'then run rk status ${unit.name} again',
-          )
-        : switch (state.verdict) {
-            Verdict.unknown => const Diagnostic(
-              code: 'RK-BREW-002',
-              message: 'the tap was updated and could not be read back',
-            ),
-            Verdict.conflict => const Diagnostic(
-              code: 'RK-BREW-003',
-              message: 'the public tap does not hold what rk pushed',
-            ),
-            Verdict.absent || Verdict.exact => const Diagnostic(
-              code: 'RK-BREW-001',
-              message: 'the tap formula was not updated',
-            ),
-          },
+    Inspection state,
+    TargetActOutcome acted,
+  ) => (
+    diagnostic: switch (state.verdict) {
+      Verdict.unknown => const Diagnostic(
+        code: 'RK-BREW-002',
+        message: 'the tap was updated and could not be read back',
+      ),
+      Verdict.conflict => const Diagnostic(
+        code: 'RK-BREW-003',
+        message: 'the public tap does not hold what rk pushed',
+      ),
+      Verdict.absent || Verdict.exact => const Diagnostic(
+        code: 'RK-BREW-001',
+        message: 'the tap formula was not updated',
+      ),
+    },
     next: null,
   );
 
