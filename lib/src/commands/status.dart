@@ -63,14 +63,19 @@ class StatusCommand {
       return ExitCodes.usage;
     }
 
-    final snapshot = await collect(only: only, checking: output.targetChecks());
+    final snapshot = await collect(
+      only: only,
+      checking: output.board('Release targets', elapsed: false),
+    );
     render(snapshot);
     return ExitCodes.ok;
   }
 
   /// Read once for the text and JSON reports. Progress uses the same publication
   /// interpretation as the completed snapshot, including release blockers.
-  Future<StatusSnapshot> collect({String? only, TargetChecks? checking}) async {
+  /// [checking] shows each read as it answers, and is gone once they all
+  /// have: the report says the rest.
+  Future<StatusSnapshot> collect({String? only, Board? checking}) async {
     // Units are shown in the order a repository release takes them,
     // dependencies first. A circle has no order, and refuses the release.
     final ordering = Diagnostics();
@@ -91,7 +96,7 @@ class StatusCommand {
           _gather(unit, checking, group: units.length > 1 ? unit.name : null),
       ]);
     } finally {
-      checking?.close();
+      checking?.discard();
     }
 
     final workRemains = snapshots.any(_workRemains);
@@ -204,7 +209,7 @@ class StatusCommand {
 
   Future<StatusUnitSnapshot> _gather(
     ResolvedUnit unit,
-    TargetChecks? checking, {
+    Board? checking, {
     required String? group,
   }) async {
     final observed = UnitSnapshot.start(
@@ -232,7 +237,9 @@ class StatusCommand {
     final expectations = observed.targets;
     final artifactProblems = _artifactProductionProblems(unit);
     for (final expectation in expectations) {
-      checking?.add(expectation.id, expectation.label, group: group);
+      checking
+          ?.add(expectation.id, expectation.label, group: group)
+          .begin(Activities.checking);
     }
 
     // Each row settles as its own reads answer, in whatever order they do;
@@ -250,7 +257,22 @@ class StatusCommand {
               artifactProblems,
             ),
           );
-          checking?.finish(expectation.id, target.inspection.verdict);
+          if (checking?[expectation.id] case final row?) {
+            switch (target.inspection.verdict) {
+              case Verdict.exact:
+                row.complete('checked', mark: Mark.satisfied);
+              case Verdict.absent:
+                row.complete('checked', mark: Mark.none);
+              case Verdict.conflict:
+                row.fail(note: 'differs');
+              case Verdict.unknown:
+                row.complete(
+                  'unread',
+                  mark: Mark.none,
+                  tone: RuntimeState.attention,
+                );
+            }
+          }
           return target;
         }(),
     ]);

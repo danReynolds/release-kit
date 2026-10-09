@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' show max, min;
 
 import '../engine/diagnostic.dart';
 import '../engine/unit_release.dart';
-import 'progress.dart';
 import 'report.dart';
 import 'timeline.dart';
 import '../engine/verdict.dart';
+
+part 'board.dart';
 
 /// Makes untrusted text inert on a terminal while leaving report evidence raw.
 ///
@@ -85,6 +87,16 @@ enum Mark {
     // Absent is work to do and unknown is work rk could not rule out.
     // Neither earns a glyph; the words separate them.
     Verdict.absent || Verdict.unknown => none,
+  };
+
+  /// What the glyph is drawn in when nothing says otherwise.
+  RuntimeState get state => switch (this) {
+    done => RuntimeState.success,
+    satisfied => RuntimeState.satisfied,
+    blocked => RuntimeState.failure,
+    next => RuntimeState.active,
+    warning => RuntimeState.attention,
+    none => RuntimeState.neutral,
   };
 }
 
@@ -226,21 +238,18 @@ class Output {
   /// and `--timings`.
   final RunTimeline timeline;
 
-  LiveProgress? _progressBoard;
+  Board? _board;
 
-  /// A fixed-height, target-agnostic progress surface.
-  ///
-  /// Targets receive only row handles; the coordinator retains the returned
-  /// controllers and therefore remains the sole authority that can declare a
-  /// public row complete, failed, or not attempted.
-  LiveProgress progressBoard(
+  /// A fixed-height board of rows. Work is handed its rows; whoever made
+  /// the board is the one that ends it, with settle, conclude or discard.
+  Board board(
     String title, {
     Duration delay = const Duration(milliseconds: 80),
-    Duration pipeDelay = const Duration(seconds: 10),
-    bool emitSlowToNonTerminal = false,
-    bool showElapsed = true,
+    bool heartbeat = false,
+    Duration heartbeatAfter = const Duration(seconds: 10),
+    bool elapsed = true,
   }) {
-    final previous = _progressBoard;
+    final previous = _board;
     if (previous != null) {
       // A board still live when its successor arrives was never resolved
       // by its owner — the same bug [close] guards. Say so loudly in
@@ -250,27 +259,14 @@ class Output {
       previous.discard();
     }
     _yieldToProse();
-    final board = LiveProgress._(
+    return _board = Board._(
       this,
       title,
       delay,
-      pipeDelay: pipeDelay,
-      emitSlowToNonTerminal: emitSlowToNonTerminal,
-      showElapsed: showElapsed,
+      heartbeat: heartbeat,
+      heartbeatAfter: heartbeatAfter,
+      elapsed: elapsed,
     );
-    _progressBoard = board;
-    return board;
-  }
-
-  /// A fixed multi-line region for concurrent public-target reads.
-  ///
-  /// Nothing is emitted for a pipe. On a terminal the region appears only
-  /// after a short delay, so fast reads do not flicker, and [TargetChecks]
-  /// erases it completely before the deterministic report is rendered.
-  TargetChecks targetChecks({
-    Duration delay = const Duration(milliseconds: 80),
-  }) {
-    return TargetChecks._(this, delay);
   }
 
   /// A heading. Callers space their own sections; this adds nothing.
@@ -422,7 +418,7 @@ class Output {
   /// which in CI is worse than a crash because nothing reports it. Calling this
   /// on the way out is what makes that impossible rather than unlikely.
   void close() {
-    final board = _progressBoard;
+    final board = _board;
     if (board != null) {
       // Every board's owner must resolve it — settle, conclude, or discard.
       // A board alive at close is an owner bug; say so loudly in checked
@@ -463,7 +459,7 @@ class Output {
     _yieldToProse();
     label = terminalSafeText(label);
     note = note == null ? null : terminalSafeText(note);
-    final effectiveState = state ?? _stateForMark(mark);
+    final effectiveState = state ?? mark.state;
     final effectiveNoteState = noteState ?? effectiveState;
     final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
     final paintedGlyph = mark == Mark.none
@@ -745,7 +741,7 @@ class Output {
   /// the transcript, and the next frame repaints it beneath. Boards end
   /// only by their owner's settle, conclude, or discard.
   void _yieldToProse() {
-    _progressBoard?.yieldToProse();
+    _board?._yieldToProse();
   }
 
   /// Runs [body] holding back its halts, then says the most serious once.
@@ -903,489 +899,6 @@ class Output {
       );
     }
   }
-
-  static RuntimeState _stateForMark(Mark mark) => switch (mark) {
-    Mark.done => RuntimeState.success,
-    Mark.satisfied => RuntimeState.satisfied,
-    Mark.blocked => RuntimeState.failure,
-    Mark.next => RuntimeState.active,
-    Mark.warning => RuntimeState.attention,
-    Mark.none => RuntimeState.neutral,
-  };
-}
-
-/// One live fixed-height progress surface.
-///
-/// Its model is terminal-agnostic; this class owns delayed display, redraw,
-/// suspension around inherited-stdio tools, and the one settled snapshot that
-/// survives. A caller must choose [discard] for a purely transient board or
-/// [settle] for a board whose final state belongs in the transcript.
-final class LiveProgress {
-  LiveProgress._(
-    this._output,
-    String title,
-    this._delayDuration, {
-    required Duration pipeDelay,
-    required this.emitSlowToNonTerminal,
-    required this.showElapsed,
-  }) {
-    model = ProgressModel(
-      title: title,
-      clock: _output._clock,
-      changed: _changed,
-      announce: emitSlowToNonTerminal && !_output.isTerminal
-          ? (row) => _writeDurableRow(row, active: true, inPipe: true)
-          : null,
-      heartbeatAfter: pipeDelay,
-    );
-    if (_output.isTerminal) {
-      _delay = Timer(_delayDuration, _showTerminal);
-    }
-  }
-
-  final Output _output;
-  final Duration _delayDuration;
-
-  /// Whether a pipe hears of a row still running after `pipeDelay`. Only a
-  /// wait a reader would wonder about, such as a long build or a sign-in,
-  /// is worth a line: shorter ones made the transcript differ from one run
-  /// to the next with how fast a read happened to answer.
-  final bool emitSlowToNonTerminal;
-  final bool showElapsed;
-  late final ProgressModel model;
-  final Map<String, ProgressRowController> _controllers = {};
-  Timer? _delay;
-  Timer? _ticker;
-  var _drawnLines = 0;
-  var _spin = 0;
-  var _closed = false;
-  var _suspended = false;
-  var _visible = false;
-  var _delayElapsed = false;
-
-  static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-  ProgressRowController addRow({
-    required String id,
-    required String label,
-    String? coordinate,
-    String? group,
-  }) {
-    final controller = model.addRow(
-      id: id,
-      label: label,
-      coordinate: coordinate,
-      group: group,
-    );
-    _controllers[id] = controller;
-    return controller;
-  }
-
-  void _changed(ProgressRow row) {
-    if (_closed) return;
-    // A row settles once, so this records it once. One still running when
-    // its board was discarded was recorded then, as unfinished.
-    if (row.took case final took?) _time(row, took, note: row.note);
-    if (!_output.isTerminal) return;
-    if (_visible && !_suspended) {
-      _draw();
-    } else if (_delayElapsed && !_suspended && model.rows.isNotEmpty) {
-      _showTerminal();
-    }
-  }
-
-  /// Clears the transient region so a durable line can join the transcript;
-  /// the board repaints beneath it a frame later. Prose composes with a live
-  /// board — only the owner's settle, conclude, or discard ends one.
-  void yieldToProse() {
-    if (_closed || _suspended || !_visible) return;
-    _erase();
-    _visible = false;
-    _ticker?.cancel();
-    _ticker = Timer(const Duration(milliseconds: 40), _showTerminal);
-  }
-
-  void _showTerminal() {
-    _delayElapsed = true;
-    if (_closed || _suspended || model.rows.isEmpty) return;
-    _ticker?.cancel();
-    _visible = true;
-    if (!_draw()) return;
-    _ticker = Timer.periodic(const Duration(milliseconds: 120), (_) => _draw());
-  }
-
-  bool _draw() {
-    if (_closed || _suspended || !_visible || model.rows.isEmpty) return false;
-    final width = _output.terminalWidth;
-    if (width == null || width < 12) {
-      _ticker?.cancel();
-      _erase();
-      _visible = false;
-      return false;
-    }
-    _erase();
-    final lines = _transientLines(width);
-    _output.sink('${lines.join('\n')}\n');
-    _drawnLines = lines.length;
-    _spin++;
-    return true;
-  }
-
-  List<String> _transientLines(int available) {
-    final lines = <String>[
-      _output._style(_fit(model.title, available), strong: true),
-    ];
-    for (final group in model.groups) {
-      lines.add(
-        _output._style(
-          _fit('  $group', available),
-          role: VisualRole.secondary,
-          strong: true,
-        ),
-      );
-      for (final row in model.rows.where((row) => row.group == group)) {
-        lines.add(_transientRow(row, available, depth: 2));
-      }
-    }
-    for (final row in model.rows.where((row) => row.group == null)) {
-      lines.add(_transientRow(row, available, depth: 1));
-    }
-    return lines;
-  }
-
-  String _transientRow(ProgressRow row, int? available, {required int depth}) {
-    final (glyph, rawStatus, glyphState, textState) = _rowPresentation(
-      row,
-      active: true,
-    );
-    final indent = '  ' * depth;
-    final left = terminalSafeText(
-      [row.label, if (row.coordinate != null) row.coordinate!].join('  '),
-    );
-    final overhead = _displayWidth(indent) + _displayWidth(glyph) + 3;
-    const minimumSubjectWidth = 6;
-    final status = terminalSafeText(
-      _detailGivesWay(
-        row,
-        rawStatus,
-        available == null
-            ? null
-            : available -
-                  overhead -
-                  _greater(_displayWidth(left), minimumSubjectWidth) -
-                  2,
-      ),
-    );
-    final room = available == null ? null : _atLeastZero(available - overhead);
-    final wantedStatus = _displayWidth(status);
-    final statusBudget = room == null
-        ? wantedStatus
-        : _lesser(wantedStatus, _atLeastZero(room - minimumSubjectWidth - 2));
-    final leftWidth = available == null
-        ? _displayWidth(left)
-        : _atLeastZero(available - overhead - statusBudget - 2);
-    final fitted = _fit(left, leftWidth);
-    final fittedLeft =
-        '$fitted${' ' * _atLeastZero(leftWidth - _displayWidth(fitted))}';
-    final remaining = available == null
-        ? null
-        : _atLeastZero(available - overhead - _displayWidth(fittedLeft) - 2);
-    final fittedStatus = _fit(status, remaining);
-    final gap = fittedLeft.isEmpty || fittedStatus.isEmpty ? '' : '  ';
-    return '$indent${_output._style(glyph, state: glyphState)} '
-        '${_output._style(fittedLeft, state: glyphState)}$gap'
-        '${_output._style(fittedStatus, state: textState)}';
-  }
-
-  /// [status], with an active row's long detail shortened or left out so
-  /// that it fits in [room] beside the whole label. The label and the elapsed
-  /// time say more than a long detail does, such as a build's latest line;
-  /// a short one, such as an upload's count, keeps its place.
-  String _detailGivesWay(ProgressRow row, String status, int? room) {
-    final detail = row.detail;
-    if (room == null ||
-        detail == null ||
-        row.state != ProgressRowState.active ||
-        _displayWidth(detail) <= 12 ||
-        _displayWidth(terminalSafeText(status)) <= room) {
-      return status;
-    }
-    final elapsed = [if (showElapsed) formatDuration(row.elapsed)];
-    final without = [row.activity!.running, ...elapsed].join(' · ');
-    final detailRoom = room - _displayWidth(without) - 3;
-    if (detailRoom < 10) return without;
-    return [
-      row.activity!.running,
-      _fit(detail, detailRoom),
-      ...elapsed,
-    ].join(' · ');
-  }
-
-  (String, String, RuntimeState, RuntimeState) _rowPresentation(
-    ProgressRow row, {
-    required bool active,
-    bool inPipe = false,
-  }) {
-    return switch (row.state) {
-      ProgressRowState.pending => (
-        '…',
-        row.note ?? 'queued',
-        RuntimeState.satisfied,
-        RuntimeState.satisfied,
-      ),
-      ProgressRowState.active => (
-        active ? _frames[_spin % _frames.length] : '…',
-        [
-          row.activity!.running,
-          // A count such as `2/6` is wherever the step had got to when the
-          // row was written: a pipe gets the step, not the moment.
-          if (row.detail != null && !inPipe) row.detail!,
-          if (active && showElapsed) formatDuration(row.elapsed),
-        ].join(' · '),
-        RuntimeState.active,
-        RuntimeState.active,
-      ),
-      ProgressRowState.complete => (
-        switch (row.mark) {
-          ProgressRowMark.done => Mark.done.glyph,
-          ProgressRowMark.satisfied => Mark.satisfied.glyph,
-          ProgressRowMark.none => Mark.none.glyph,
-        },
-        row.note!,
-        switch (row.mark) {
-          ProgressRowMark.done => RuntimeState.success,
-          ProgressRowMark.satisfied => RuntimeState.satisfied,
-          ProgressRowMark.none => RuntimeState.neutral,
-        },
-        switch (row.emphasis) {
-          ProgressRowEmphasis.plain => RuntimeState.neutral,
-          ProgressRowEmphasis.muted => RuntimeState.satisfied,
-          ProgressRowEmphasis.attention => RuntimeState.attention,
-        },
-      ),
-      ProgressRowState.failed => (
-        Mark.blocked.glyph,
-        row.note!,
-        RuntimeState.failure,
-        RuntimeState.failure,
-      ),
-      ProgressRowState.notAttempted => (
-        '—',
-        row.note!,
-        RuntimeState.satisfied,
-        RuntimeState.satisfied,
-      ),
-    };
-  }
-
-  /// Temporarily yields the terminal to a native inherited-stdio command.
-  ///
-  /// The durable active line remains above the native output. [resume] starts
-  /// a fresh board below it; it never erases what the native tool printed.
-  void suspend() {
-    if (_closed || _suspended) return;
-    if (!_output.isTerminal) return;
-    _suspended = true;
-    _delay?.cancel();
-    _ticker?.cancel();
-    _erase();
-    _visible = false;
-    for (final row in model.rows.where(
-      (row) => row.state == ProgressRowState.active,
-    )) {
-      _writeDurableRow(row, active: true);
-    }
-  }
-
-  void resume({bool afterNativeOutput = false}) {
-    if (_closed || !_suspended) return;
-    _suspended = false;
-    if (_output.isTerminal) {
-      if (afterNativeOutput) _output.sink('\n');
-      _showTerminal();
-    }
-  }
-
-  /// Erases the transient surface without leaving a snapshot.
-  void discard() {
-    if (_closed) return;
-    // Work cut off mid-run, such as by a crash, still took its time.
-    for (final row in model.rows) {
-      if (row.state != ProgressRowState.active) continue;
-      if (row.ranFor case final ran?) _time(row, ran, note: 'unfinished');
-    }
-    // A pipe told a row was under way hears how it ended.
-    final printedRows = model.rows
-        .where(
-          (row) =>
-              row.announced &&
-              row.state != ProgressRowState.pending &&
-              row.state != ProgressRowState.active,
-        )
-        .toList();
-    _closeTimers();
-    _erase();
-    _closed = true;
-    if (identical(_output._progressBoard, this)) {
-      _output._progressBoard = null;
-    }
-    for (final row in printedRows) {
-      _writeDurableRow(row, inPipe: true);
-    }
-  }
-
-  /// Replaces the transient board with one append-only final snapshot.
-  void settle({String? title}) {
-    if (_closed) return;
-    final unfinished = model.rows.where(
-      (row) =>
-          row.state == ProgressRowState.pending ||
-          row.state == ProgressRowState.active,
-    );
-    if (unfinished.isNotEmpty) {
-      throw StateError(
-        'cannot settle progress with unfinished rows: '
-        '${unfinished.map((row) => row.id).join(', ')}',
-      );
-    }
-    _closeTimers();
-    _erase();
-    _closed = true;
-    if (identical(_output._progressBoard, this)) {
-      _output._progressBoard = null;
-    }
-    _output.heading(title ?? model.title);
-    for (final group in model.groups) {
-      _output.line(group, depth: 1, role: VisualRole.secondary, strong: true);
-      for (final row in model.rows.where((row) => row.group == group)) {
-        _writeDurableRow(row, depth: 2);
-      }
-    }
-    for (final row in model.rows.where((row) => row.group == null)) {
-      _writeDurableRow(row, depth: 1);
-    }
-  }
-
-  /// Concludes a stopped run: still-active rows fail, untouched pending
-  /// rows become an explicit "not attempted", and the board becomes its
-  /// durable snapshot. A no-op on a board already settled or discarded.
-  ///
-  /// The renderer draws; the coordinator judges. A diagnostic never touches
-  /// board state — the owner that began the rows marks them and concludes
-  /// at its own halt sites, so a problem printed while concurrent lanes
-  /// drain cannot turn innocent still-running rows into failures.
-  void conclude() {
-    if (_closed) return;
-    final active = model.rows
-        .where((row) => row.state == ProgressRowState.active)
-        .toList();
-    for (final row in active) {
-      _controllers[row.id]!.fail();
-    }
-    for (final row in model.rows.where(
-      (row) => row.state == ProgressRowState.pending,
-    )) {
-      _controllers[row.id]!.notAttempted();
-    }
-    settle();
-  }
-
-  /// Tells the run's timeline that [row] ran for [took]. Its group goes with
-  /// it: rows under different groups can share a label.
-  void _time(ProgressRow row, Duration took, {required String? note}) =>
-      _output.timeline.rowSettled(
-        board: model.title,
-        id: row.id,
-        subject: row.group == null
-            ? row.subject
-            : '${row.group} · ${row.subject}',
-        note: note,
-        took: took,
-      );
-
-  /// [inPipe] is a row a pipe is told about on its own, outside the
-  /// board's snapshot: it names what it belongs to, and carries no time.
-  void _writeDurableRow(
-    ProgressRow row, {
-    int depth = 1,
-    bool active = false,
-    bool inPipe = false,
-  }) {
-    var (glyph, status, glyphState, textState) = _rowPresentation(
-      row,
-      active: active && !inPipe,
-      inPipe: inPipe,
-    );
-    // A finished row that ran long enough for its counter to tick keeps its
-    // total, on a terminal. A pipe's transcript stays the same every run.
-    final took = row.took;
-    if (!active &&
-        _output.isTerminal &&
-        took != null &&
-        took >= const Duration(seconds: 1)) {
-      status = '$status · ${formatDuration(took)}';
-    }
-    final mark = switch (glyph) {
-      '✓' => Mark.done,
-      '·' => Mark.satisfied,
-      '✗' => Mark.blocked,
-      _ => Mark.none,
-    };
-    final subject = inPipe
-        ? '${row.group ?? model.title} · ${row.subject}'
-        : row.subject;
-    final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
-    _output.line(
-      label,
-      mark: mark,
-      note: status,
-      depth: depth,
-      labelWidth: 48,
-      state: glyphState,
-      noteState: textState,
-    );
-  }
-
-  void _closeTimers() {
-    _delay?.cancel();
-    _ticker?.cancel();
-    model.stopHeartbeats();
-  }
-
-  void _erase() {
-    for (var i = 0; i < _drawnLines; i++) {
-      _output.sink('\x1b[1A\r\x1b[2K');
-    }
-    _drawnLines = 0;
-  }
-
-  static int _atLeastZero(int value) => value < 0 ? 0 : value;
-
-  static int _lesser(int left, int right) => left < right ? left : right;
-
-  static int _greater(int a, int b) => a > b ? a : b;
-
-  static String _fit(String text, int? width) {
-    text = terminalSafeText(text);
-    if (width == null || _displayWidth(text) <= width) return text;
-    if (width <= 0) return '';
-    if (width == 1) return '…';
-    final out = StringBuffer();
-    var used = 0;
-    for (final rune in text.runes) {
-      final next = _runeWidth(rune);
-      if (used + next > width - 1) break;
-      out.writeCharCode(rune);
-      used += next;
-    }
-    return '${out.toString()}…';
-  }
-
-  static int _displayWidth(String text) => Output.displayWidth(text);
-
-  static int _runeWidth(int rune) {
-    return _terminalRuneWidth(rune);
-  }
 }
 
 int _terminalRuneWidth(int rune) {
@@ -1411,56 +924,6 @@ int _terminalRuneWidth(int rune) {
     return 2;
   }
   return 1;
-}
-
-/// Compatibility adapter for status's parallel public-target reads.
-///
-/// It now uses the same renderer that staging and release use, while retaining
-/// status's existing add/finish API and fully transient behavior.
-final class TargetChecks {
-  TargetChecks._(Output output, Duration delay)
-    : _board = output.progressBoard(
-        'Release targets',
-        delay: delay,
-        showElapsed: false,
-      );
-
-  final LiveProgress _board;
-  final Map<String, ProgressRowController> _rows = {};
-  var _closed = false;
-
-  void add(String id, String label, {String? group}) {
-    if (_closed || _rows.containsKey(id)) return;
-    final row = _board.addRow(id: id, label: label, group: group);
-    _rows[id] = row;
-    row.handle.begin(CommonProgressActivities.checking);
-  }
-
-  void finish(String id, Verdict verdict) {
-    if (_closed) return;
-    final row = _rows[id];
-    if (row == null) return;
-    switch (verdict) {
-      case Verdict.exact:
-        row.complete(note: 'checked', mark: ProgressRowMark.satisfied);
-      case Verdict.absent:
-        row.complete(note: 'checked', mark: ProgressRowMark.none);
-      case Verdict.conflict:
-        row.fail(note: 'differs');
-      case Verdict.unknown:
-        row.complete(
-          note: 'unread',
-          mark: ProgressRowMark.none,
-          emphasis: ProgressRowEmphasis.attention,
-        );
-    }
-  }
-
-  void close() {
-    if (_closed) return;
-    _closed = true;
-    _board.discard();
-  }
 }
 
 /// Why a site stops, in order of seriousness. What that means for the whole

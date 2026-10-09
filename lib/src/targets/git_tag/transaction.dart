@@ -2,7 +2,6 @@ import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/resolve.dart';
 import '../../engine/verdict.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 
@@ -98,9 +97,7 @@ Future<TargetActOutcome> publishGitTag(
     object = existing.toLowerCase();
   }
 
-  context.progress.begin(
-    ProgressActivity(running: 'pushing', failed: 'push failed'),
-  );
+  context.progress.begin((running: 'pushing', failed: 'push failed'));
   final pushed = await destination.pushExact(tag, object);
   final exact = Inspection.exact(
     detail: 'origin has the tag rk pushed',

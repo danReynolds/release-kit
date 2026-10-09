@@ -10,7 +10,6 @@ import '../engine/unit_release.dart';
 import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 import '../targets/target_module.dart';
 import 'release_progress.dart';
 
@@ -109,7 +108,7 @@ final class Publication {
           .toList();
       final module = inspector.targets.moduleFor(targetKind);
       for (final target in grouped) {
-        progress.begin(target, CommonProgressActivities.checking);
+        progress.begin(target, Activities.checking);
       }
       final readiness = await module.ready(
         TargetReadinessContext(
@@ -123,7 +122,7 @@ final class Publication {
       );
       if (readiness.problem case final problem?) {
         progress
-          ..failAll(grouped, activity: CommonProgressActivities.checking)
+          ..failAll(grouped, activity: Activities.checking)
           ..notAttemptedPending()
           ..settle();
         output.problem(problem, unit: unit.name);
@@ -288,7 +287,6 @@ final class Publication {
         target,
         note: 'already published',
         satisfied: true,
-        restore: true,
       );
     }
     final done = {
@@ -389,7 +387,7 @@ final class Publication {
     final environment = refreshEnvironment();
     for (final MapEntry(key: kind, value: grouped) in byTarget.entries) {
       for (final target in grouped) {
-        progress.begin(target, CommonProgressActivities.checkingSignIn);
+        progress.begin(target, Activities.checkingSignIn);
       }
       final signedIn = await inspector.targets
           .moduleFor(kind)
@@ -408,7 +406,7 @@ final class Publication {
           );
       if (signedIn.problem case final problem?) {
         progress
-          ..failAll(grouped, activity: CommonProgressActivities.checkingSignIn)
+          ..failAll(grouped, activity: Activities.checkingSignIn)
           ..notAttemptedPending()
           ..settle();
         output.problem(problem, unit: unit.name);
@@ -440,7 +438,7 @@ final class Publication {
     // what is left finishes from public inputs alone.
     final staged = run.recovering ? null : stage;
     final module = inspector.targets.moduleFor(target.target);
-    releaseProgress.begin(target, CommonProgressActivities.checking);
+    releaseProgress.begin(target, Activities.checking);
     // The target is read again right before its act: another run or person
     // may have published it since the snapshot.
     var state = await inspector.inspect(target, unit, stage: staged);
@@ -456,7 +454,7 @@ final class Publication {
       return null;
     }
     if (!state.isAbsent) {
-      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
+      releaseProgress.fail(target, activity: Activities.checking);
       return _refusal(target, unit, state);
     }
     // What the act publishes must still be what was reviewed: public
@@ -488,7 +486,7 @@ final class Publication {
             _ => null,
           };
     if (unpublishable != null) {
-      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
+      releaseProgress.fail(target, activity: Activities.checking);
       return _PublicationFailure(
         step: target,
         diagnostics: [unpublishable],
@@ -529,7 +527,7 @@ final class Publication {
     // A process result is not public truth unless the provider's answer is
     // the read-back. Every started operation is read back even if another
     // concurrent lane has failed.
-    releaseProgress.begin(target, CommonProgressActivities.verifying);
+    releaseProgress.begin(target, Activities.verifying);
     try {
       state =
           act.confirmed ??
@@ -574,7 +572,7 @@ final class Publication {
                 !act.mayHaveActed &&
                 (state.isAbsent || state.verdict == Verdict.conflict)
             ? lastMutationActivity
-            : CommonProgressActivities.verifying,
+            : Activities.verifying,
       );
       return _unconfirmed(unit, target, state, act);
     }
@@ -662,23 +660,17 @@ final class Publication {
   }
 
   /// What a target's row says while rk acts on it.
-  static ProgressActivity _acting(PublishTarget target) => switch (target) {
-    PublishTarget.gitTag => ProgressActivity(
+  static Activity _acting(PublishTarget target) => switch (target) {
+    PublishTarget.gitTag => (
       running: 'creating',
       failed: 'tag creation failed',
     ),
-    PublishTarget.pubDev => ProgressActivity(
-      running: 'publishing',
-      failed: 'publish failed',
-    ),
-    PublishTarget.githubRelease => ProgressActivity(
+    PublishTarget.pubDev => (running: 'publishing', failed: 'publish failed'),
+    PublishTarget.githubRelease => (
       running: 'drafting',
       failed: 'draft failed',
     ),
-    PublishTarget.homebrew => ProgressActivity(
-      running: 'updating',
-      failed: 'update failed',
-    ),
+    PublishTarget.homebrew => (running: 'updating', failed: 'update failed'),
   };
 
   void _completeExistingTarget(

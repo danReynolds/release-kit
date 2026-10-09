@@ -8,10 +8,17 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
 import 'support/memory_source_tree.dart';
 import 'support/scratch_stage.dart';
+
+/// A board in a pipe whose rows read their time from [clock].
+Board rowsOn(Elapsed Function() clock) => Output(
+  sink: (_) {},
+  isTerminal: false,
+  useColor: false,
+  clock: clock,
+).board('stage');
 
 void main() {
   late Directory scratch;
@@ -97,23 +104,18 @@ assets = ["assets/parser.so", "parser.dylib"]
     // Each start of an activity reads a later time, so a row that restarted
     // would show it.
     var starts = 0;
-    final progress = ProgressModel(
-      title: 'stage',
-      clock: () {
-        final at = Duration(seconds: ++starts);
-        return () => at;
-      },
-      changed: (_) {},
-    );
+    final progress = rowsOn(() {
+      final at = Duration(seconds: ++starts);
+      return () => at;
+    });
+    // The run's own timeline read the clock once.
+    starts = 0;
     final rows = [
-      progress.addRow(id: 'so', label: 'parser.so'),
-      progress.addRow(id: 'dylib', label: 'parser.dylib'),
+      progress.add('so', 'parser.so'),
+      progress.add('dylib', 'parser.dylib'),
     ];
-    final handle = ProgressHandle.combine([for (final row in rows) row.handle]);
-    final activity = ProgressActivity(
-      running: 'building',
-      failed: 'build failed',
-    );
+    final handle = Rows(rows);
+    const activity = (running: 'building', failed: 'build failed');
     handle.begin(activity);
     final (:build, :tools, printed: _) = harness(
       ToolResult(
@@ -151,7 +153,7 @@ assets = ["assets/parser.so", "parser.dylib"]
     );
 
     for (final row in rows) {
-      row.complete(note: 'built');
+      row.complete('built');
     }
     await Future<void>.delayed(const Duration(milliseconds: 300));
     expect(
@@ -162,18 +164,12 @@ assets = ["assets/parser.so", "parser.dylib"]
   });
 
   test('shows the last line of a burst once the burst is over', () async {
-    final progress = ProgressModel(
-      title: 'stage',
-      clock: () =>
+    final progress = rowsOn(
+      () =>
           () => Duration.zero,
-      changed: (_) {},
     );
-    final row = progress.addRow(id: 'so', label: 'parser.so');
-    final activity = ProgressActivity(
-      running: 'building',
-      failed: 'build failed',
-    );
-    row.handle.begin(activity);
+    final row = progress.add('so', 'parser.so');
+    row.begin((running: 'building', failed: 'build failed'));
     final (:build, tools: _, printed: _) = harness(
       ToolResult(exitCode: 0, stdout: 'one\ntwo\nthree\n', stderr: ''),
       writes: ['assets/parser.so', 'parser.dylib'],
@@ -181,30 +177,24 @@ assets = ["assets/parser.so", "parser.dylib"]
       terminal: true,
     );
 
-    await build.build(step, project, progress: row.handle);
+    await build.build(step, project, progress: row.rows);
 
     expect(progress.rows.single.detail, 'three');
   });
 
   test('leaves the row alone without a terminal', () async {
-    final progress = ProgressModel(
-      title: 'stage',
-      clock: () =>
+    final progress = rowsOn(
+      () =>
           () => Duration.zero,
-      changed: (_) {},
     );
-    final row = progress.addRow(id: 'so', label: 'parser.so');
-    final activity = ProgressActivity(
-      running: 'building',
-      failed: 'build failed',
-    );
-    row.handle.begin(activity);
+    final row = progress.add('so', 'parser.so');
+    row.begin((running: 'building', failed: 'build failed'));
     final (:build, tools: _, printed: _) = harness(
       ToolResult(exitCode: 0, stdout: 'Compiling comrak\n', stderr: ''),
       writes: ['assets/parser.so', 'parser.dylib'],
     );
 
-    await build.build(step, project, progress: row.handle);
+    await build.build(step, project, progress: row.rows);
 
     expect(
       progress.rows.single.detail,

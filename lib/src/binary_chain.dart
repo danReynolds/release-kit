@@ -6,7 +6,6 @@ import 'builds/macos_identity.dart';
 import 'engine/assets.dart';
 import 'engine/diagnostic.dart';
 import 'output/output.dart';
-import 'output/progress.dart';
 import 'engine/resolve.dart';
 import 'engine/stage.dart';
 import 'engine/tools.dart';
@@ -58,7 +57,7 @@ class BinaryChain {
     Work step,
     ResolvedProject project, {
     MacIdentity? signing,
-    ProgressHandle? progress,
+    Rows? progress,
   }) async {
     // The release refused a platform this host cannot produce before any
     // work began (RK-HOST-001).
@@ -84,9 +83,7 @@ class BinaryChain {
           defines: project.dartDefines,
           onProgress: (event) {
             if (event == DartBuildEvent.testing) {
-              progress?.begin(
-                ProgressActivity(running: 'testing', failed: 'test failed'),
-              );
+              progress?.begin((running: 'testing', failed: 'test failed'));
             }
           },
         );
@@ -126,9 +123,7 @@ class BinaryChain {
       );
     }
 
-    progress?.begin(
-      ProgressActivity(running: 'signing', failed: 'signing failed'),
-    );
+    progress?.begin((running: 'signing', failed: 'signing failed'));
     return _sign(step, project, smoke, signing);
   }
 

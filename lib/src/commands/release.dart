@@ -8,7 +8,6 @@ import '../engine/changelog.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 import '../engine/inspect.dart';
 import '../engine/publish_target.dart';
 import '../engine/registry.dart';
@@ -463,7 +462,7 @@ class ReleaseCommand {
     // rather than their sum. The report is written afterwards in release
     // order, so the document never depends on which answer arrived first.
     for (final target in read.targets) {
-      progress.begin(target, CommonProgressActivities.checking);
+      progress.begin(target, Activities.checking);
     }
     await Future.wait([
       for (final target in read.targets)
@@ -547,9 +546,9 @@ class ReleaseCommand {
       );
       return {if (staged) run};
     }
-    final live = output.progressBoard(
+    final live = output.board(
       'staging ${staging.length} units',
-      emitSlowToNonTerminal: true,
+      heartbeat: true,
     );
     final shared = [
       for (final run in staging)

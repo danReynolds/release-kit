@@ -7,7 +7,6 @@ import '../../engine/stage.dart';
 import '../../engine/tools.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 import 'release_notes_stage.dart';
@@ -179,18 +178,20 @@ final class GithubReleaseTargetModule extends TargetModule {
       onProgress: (event, current, total) {
         switch (event) {
           case GithubPublishEvent.drafting:
-            context.progress.begin(
-              ProgressActivity(running: 'drafting', failed: 'draft failed'),
-            );
+            context.progress.begin((
+              running: 'drafting',
+              failed: 'draft failed',
+            ));
           case GithubPublishEvent.uploading:
-            context.progress.begin(
-              ProgressActivity(running: 'uploading', failed: 'upload failed'),
-              detail: '$current/$total',
-            );
+            context.progress.begin((
+              running: 'uploading',
+              failed: 'upload failed',
+            ), detail: '$current/$total');
           case GithubPublishEvent.publishing:
-            context.progress.begin(
-              ProgressActivity(running: 'publishing', failed: 'publish failed'),
-            );
+            context.progress.begin((
+              running: 'publishing',
+              failed: 'publish failed',
+            ));
         }
       },
     );

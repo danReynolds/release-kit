@@ -8,7 +8,6 @@ import '../engine/receipt.dart';
 import '../engine/resolve.dart';
 import '../engine/tools.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 import '../transforms/macos.dart';
 
 /// Who a unit's macOS binaries are signed as: the code identifier sealed
@@ -58,22 +57,20 @@ final class MacIdentity {
     GitState git,
   ) async {
     final project = _project(unit)!;
-    final live = output.progressBoard(
+    final live = output.board(
       '${unit.name} ${unit.version} · preparing stage',
       delay: briefPhase,
-      emitSlowToNonTerminal: true,
+      heartbeat: true,
     );
-    final row = live.addRow(
-      id: '${unit.name}/release-inputs',
-      label: 'Release inputs',
+    final row = live.add(
+      '${unit.name}/release-inputs',
+      'Release inputs',
       coordinate: 'notarization and signing identity',
     );
-    row.handle.begin(
-      ProgressActivity(
-        running: 'checking notarization',
-        failed: 'notarization check failed',
-      ),
-    );
+    row.begin((
+      running: 'checking notarization',
+      failed: 'notarization check failed',
+    ));
     final notary = await MacOsNotarizer(tools: tools).preflight();
     if (!notary.ok) {
       live.conclude();
@@ -89,12 +86,7 @@ final class MacIdentity {
       output.halt(Stop.refused);
       return null;
     }
-    row.handle.begin(
-      ProgressActivity(
-        running: 'checking signing',
-        failed: 'signing check failed',
-      ),
-    );
+    row.begin((running: 'checking signing', failed: 'signing check failed'));
     final baseline = await _baseline(tools, output, unit, project, git);
     if (!baseline.ok) {
       live.conclude();
@@ -126,7 +118,7 @@ final class MacIdentity {
       output.halt(Stop.refused);
       return null;
     }
-    row.complete(note: 'checked');
+    row.complete('checked');
     live.discard();
     return MacIdentity(
       codeId: codeId,

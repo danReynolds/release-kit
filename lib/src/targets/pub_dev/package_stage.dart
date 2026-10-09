@@ -7,7 +7,6 @@ import '../../engine/stage_source.dart';
 import '../../engine/tools.dart';
 import '../../engine/unit_release.dart';
 import '../../output/output.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'resolution.dart';
 
@@ -16,7 +15,7 @@ import 'resolution.dart';
 /// diagnostics stay together here.
 Future<Produced> preparePubArchive(StageRun context, Work work) async {
   final project = work.project!;
-  context.rows?.begin(CommonProgressActivities.validating);
+  context.rows?.begin(Activities.validating);
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
     context.output.problem(diagnostic, unit: project.unitName);

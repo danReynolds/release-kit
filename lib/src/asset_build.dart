@@ -9,7 +9,6 @@ import 'engine/stage.dart';
 import 'engine/tools.dart';
 import 'engine/unit_release.dart';
 import 'output/output.dart';
-import 'output/progress.dart';
 
 /// A project's own build, run for the release assets it declares.
 ///
@@ -59,7 +58,7 @@ final class AssetBuild {
     Work step,
     ResolvedProject project, {
     Map<String, String> environment = const {},
-    ProgressHandle? progress,
+    Rows? progress,
   }) async {
     final out = Directory.systemTemp.createTempSync('rk-build-');
     try {

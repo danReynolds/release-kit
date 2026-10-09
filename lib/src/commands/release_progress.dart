@@ -2,10 +2,9 @@ import '../engine/tools.dart';
 import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 import '../targets/target_module.dart';
 
-/// Public-target rows rendered through RK's shared progress model.
+/// Public-target rows rendered through RK's shared board.
 final class TargetReleaseProgress {
   TargetReleaseProgress(
     Output output, {
@@ -13,97 +12,61 @@ final class TargetReleaseProgress {
     required Iterable<Target> targets,
     Duration delay = const Duration(milliseconds: 80),
   }) : _output = output,
-       live = output.progressBoard(
-         title,
-         delay: delay,
-         emitSlowToNonTerminal: true,
-       ) {
+       live = output.board(title, delay: delay, heartbeat: true) {
     for (final target in targets) {
-      _controllers[target.id] = live.addRow(
-        id: target.id,
-        label: target.kindLabel,
-        coordinate: target.coordinate,
-      );
+      live.add(target.id, target.kindLabel, coordinate: target.coordinate);
     }
   }
 
   final Output _output;
-  final LiveProgress live;
-  final Map<String, ProgressRowController> _controllers = {};
+  final Board live;
 
-  ProgressRowController _row(Target target) => _controllers[target.id]!;
+  Row _row(Target target) => live[target.id];
 
-  ProgressHandle handle(Target target) => _row(target).handle;
+  Rows handle(Target target) => _row(target).rows;
 
-  ProgressHandle combined(Iterable<Target> targets) =>
-      ProgressHandle.combine(targets.map(handle));
+  Rows combined(Iterable<Target> targets) =>
+      Rows([for (final target in targets) _row(target)]);
 
-  void waiting(Target target, {required String note}) {
-    final row = _row(target);
-    if (row.state != ProgressRowState.pending) return;
-    row.wait(note: note);
-  }
+  void waiting(Target target, {required String note}) =>
+      _row(target).wait(note);
 
-  void begin(Target target, ProgressActivity activity, {String? detail}) {
-    final row = _row(target);
-    if (row.state == ProgressRowState.complete) return;
-    row.handle.begin(activity, detail: detail);
-  }
+  void begin(Target target, Activity activity, {String? detail}) =>
+      _row(target).begin(activity, detail: detail);
 
   void complete(
     Target target, {
     required String note,
     bool satisfied = false,
-    bool restore = false,
-  }) {
-    final row = _row(target);
-    if (row.state == ProgressRowState.complete) return;
-    final mark = satisfied ? ProgressRowMark.satisfied : ProgressRowMark.done;
-    if (restore || row.state == ProgressRowState.pending) {
-      row.restoreComplete(note: note, mark: mark);
-    } else {
-      row.complete(note: note, mark: mark);
-    }
-  }
+  }) =>
+      _row(target).complete(note, mark: satisfied ? Mark.satisfied : Mark.done);
 
   void observe(Target target, Inspection inspection) {
     final row = _row(target);
-    if (row.state != ProgressRowState.active) return;
+    if (row.state != RowState.active) return;
     if (inspection.isExact) {
-      row.complete(note: 'already published', mark: ProgressRowMark.satisfied);
+      row.complete('already published', mark: Mark.satisfied);
     } else if (inspection.isAbsent) {
-      row.complete(note: 'not published', mark: ProgressRowMark.none);
+      row.complete('not published', mark: Mark.none);
     } else {
       row.complete(
-        note: inspection.verdict == Verdict.conflict
-            ? 'conflict'
-            : 'unreadable',
-        mark: ProgressRowMark.none,
-        emphasis: ProgressRowEmphasis.attention,
+        inspection.verdict == Verdict.conflict ? 'conflict' : 'unreadable',
+        mark: Mark.none,
+        tone: RuntimeState.attention,
       );
     }
   }
 
-  void fail(Target target, {ProgressActivity? activity, String? note}) {
-    final row = _row(target);
-    if (row.state == ProgressRowState.active) {
-      row.fail(activity: activity, note: note);
-    }
-  }
+  void fail(Target target, {Activity? activity, String? note}) =>
+      _row(target).fail(activity: activity, note: note);
 
-  void failAll(Iterable<Target> targets, {required ProgressActivity activity}) {
+  void failAll(Iterable<Target> targets, {required Activity activity}) {
     for (final target in targets) {
       fail(target, activity: activity);
     }
   }
 
-  void notAttemptedPending() {
-    for (final row in _controllers.values.where(
-      (row) => row.state == ProgressRowState.pending,
-    )) {
-      row.notAttempted();
-    }
-  }
+  void notAttemptedPending() => live.skipPending();
 
   ProgressInteractiveRunner interactive(Tools tools) {
     return (
@@ -128,18 +91,18 @@ final class TargetReleaseProgress {
 
   void settle({bool released = false}) => live.settle(
     title: released
-        ? live.model.title.replaceFirst(' · releasing', ' · released')
+        ? live.title.replaceFirst(' · releasing', ' · released')
         : null,
   );
 }
 
-/// Receipt-backed stage rows rendered through the shared progress model.
+/// Receipt-backed stage rows rendered through the shared board.
 final class StageReleaseProgress {
   StageReleaseProgress(
     Output output, {
     required String title,
     required this.board,
-  }) : live = output.progressBoard(title, emitSlowToNonTerminal: true),
+  }) : live = output.board(title, heartbeat: true),
        _owned = true {
     _addRows(null);
   }
@@ -157,9 +120,9 @@ final class StageReleaseProgress {
   void _addRows(String? unit) {
     for (final group in board) {
       for (final row in group.rows) {
-        _controllers[row] = live.addRow(
-          id: row.id,
-          label: row.name,
+        _rows[row] = live.add(
+          row.id,
+          row.name,
           group: unit == null ? group.label : '$unit · ${group.label}',
         );
       }
@@ -168,9 +131,9 @@ final class StageReleaseProgress {
 
   /// The rows this stage fills, by destination: see [UnitRelease.board].
   final List<BoardGroup> board;
-  final LiveProgress live;
+  final Board live;
   final bool _owned;
-  final Map<BoardRow, ProgressRowController> _controllers = {};
+  final Map<BoardRow, Row> _rows = {};
 
   /// Each recorded producer's evidence, by its name.
   final Map<String, Map<String, Object?>> _recorded = {};
@@ -183,17 +146,15 @@ final class StageReleaseProgress {
         if (row.filledBy.any((work) => work.name == producer)) row,
   ];
 
-  ProgressHandle? handleFor(String producer) {
+  Rows? handleFor(String producer) {
     final rows = _rowsFor(producer);
     if (rows.isEmpty) return null;
-    return ProgressHandle.combine(rows.map((row) => _controllers[row]!.handle));
+    return Rows([for (final row in rows) _rows[row]!]);
   }
 
-  void begin(String producer, ProgressActivity activity) {
+  void begin(String producer, Activity activity) {
     for (final row in _rowsFor(producer)) {
-      final controller = _controllers[row]!;
-      if (controller.state == ProgressRowState.complete) continue;
-      controller.handle.begin(activity);
+      _rows[row]!.begin(activity);
     }
   }
 
@@ -207,21 +168,11 @@ final class StageReleaseProgress {
         if (expected.isEmpty || !expected.every(_recorded.containsKey)) {
           continue;
         }
-        final controller = _controllers[row]!;
-        final note = _noteFor(expected);
-        switch (controller.state) {
-          case ProgressRowState.pending:
-            controller.restoreComplete(
-              note: note,
-              mark: ProgressRowMark.satisfied,
-            );
-          case ProgressRowState.active:
-            controller.complete(note: note);
-          case ProgressRowState.complete:
-          case ProgressRowState.failed:
-          case ProgressRowState.notAttempted:
-            break;
-        }
+        final filled = _rows[row]!;
+        filled.complete(
+          _noteFor(expected),
+          mark: filled.state == RowState.pending ? Mark.satisfied : Mark.done,
+        );
       }
     }
   }
@@ -244,10 +195,7 @@ final class StageReleaseProgress {
 
   void fail(String producer) {
     for (final row in _rowsFor(producer)) {
-      final controller = _controllers[row]!;
-      if (controller.state == ProgressRowState.active) {
-        controller.fail();
-      }
+      _rows[row]!.fail();
     }
   }
 
@@ -262,22 +210,14 @@ final class StageReleaseProgress {
       live.discard();
       return;
     }
-    for (final controller in _controllers.values) {
-      if (controller.state == ProgressRowState.pending ||
-          controller.state == ProgressRowState.active) {
-        controller.notAttempted();
-      }
+    for (final row in _rows.values) {
+      row.skip();
     }
   }
 
   void concludeStopped() {
-    for (final group in board) {
-      for (final row in group.rows) {
-        final controller = _controllers[row]!;
-        if (controller.state == ProgressRowState.active) {
-          controller.notAttempted();
-        }
-      }
+    for (final row in _rows.values) {
+      if (row.state == RowState.active) row.skip();
     }
     if (_owned) live.conclude();
   }

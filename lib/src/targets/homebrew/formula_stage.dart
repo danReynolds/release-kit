@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import '../../engine/assets.dart';
 import '../../engine/unit_release.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 
@@ -18,9 +17,7 @@ Future<Produced> prepareFormula(StageRun run, Work work) async {
   final recorded = run.stage.receipt!.files;
 
   final executable = project.executable!;
-  run.rows?.begin(
-    ProgressActivity(running: 'rendering', failed: 'rendering failed'),
-  );
+  run.rows?.begin((running: 'rendering', failed: 'rendering failed'));
   final contents = HomebrewFormula.renderRelease(
     className: ReleaseAssets.formulaClass(executable),
     version: project.version.canonical,

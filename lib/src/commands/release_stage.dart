@@ -16,7 +16,6 @@ import '../engine/unit_release.dart';
 import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 import '../targets/catalog.dart';
 import '../targets/target_module.dart';
 import 'release_progress.dart';
@@ -329,10 +328,10 @@ final class StageRunner {
       return false;
     }
 
-    stageProgress.begin(
-      'complete-stage',
-      ProgressActivity(running: 'assembling', failed: 'assembly failed'),
-    );
+    stageProgress.begin('complete-stage', (
+      running: 'assembling',
+      failed: 'assembly failed',
+    ));
     try {
       stage.complete(release);
     } on Object catch (error) {
@@ -442,7 +441,7 @@ final class StageRunner {
     ResolvedUnit unit,
     MacIdentity? signing, {
     required BinaryChain chain,
-    ProgressHandle? progress,
+    Rows? progress,
   }) async {
     final project = step.project!;
     switch (step.kind) {
@@ -523,23 +522,11 @@ final class StageRunner {
     );
   }
 
-  ProgressActivity _producerActivity(Work step) => switch (step.kind) {
-    StepKind.build => ProgressActivity(
-      running: 'building',
-      failed: 'build failed',
-    ),
-    StepKind.notarize => ProgressActivity(
-      running: 'notarizing',
-      failed: 'notarization failed',
-    ),
-    StepKind.archive => ProgressActivity(
-      running: 'packaging',
-      failed: 'packaging failed',
-    ),
-    StepKind.buildAssets => ProgressActivity(
-      running: 'building',
-      failed: 'build failed',
-    ),
+  Activity _producerActivity(Work step) => switch (step.kind) {
+    StepKind.build => (running: 'building', failed: 'build failed'),
+    StepKind.notarize => (running: 'notarizing', failed: 'notarization failed'),
+    StepKind.archive => (running: 'packaging', failed: 'packaging failed'),
+    StepKind.buildAssets => (running: 'building', failed: 'build failed'),
     _ => throw StateError('${step.kind.name} is not a stage producer'),
   };
 }

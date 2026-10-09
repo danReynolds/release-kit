@@ -10,7 +10,6 @@ import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
-import '../output/progress.dart';
 
 /// What one read of a target finds: the state of this release there, and
 /// the lane's public history. Null history means the target keeps none: its
@@ -222,7 +221,7 @@ final class StageRun {
   final Output output;
 
   /// The stage rows this work fills, when it fills any.
-  final ProgressHandle? rows;
+  final Rows? rows;
 
   /// The repository packages a Pub package takes from this source when it
   /// is staged, by name, with each one's directory relative to the
@@ -288,7 +287,7 @@ final class TargetReleaseContext {
   /// The complete stage the act publishes from; null when what is left
   /// finishes from public inputs alone.
   final Stage? stage;
-  final ProgressHandle progress;
+  final Rows progress;
 
   /// Native inherited-stdio access, absent for JSON and redirected output.
   final ProgressInteractiveRunner? runInteractive;
@@ -310,7 +309,7 @@ final class TargetReadinessContext {
   final Tools tools;
   final GitState git;
   final Map<String, String> environment;
-  final ProgressHandle? progress;
+  final Rows? progress;
   final ProgressInteractiveRunner? runInteractive;
 }
 

@@ -2,11 +2,9 @@ import 'dart:convert';
 
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
 
 import 'support/memory_source_tree.dart';
@@ -107,15 +105,13 @@ void main() {
       terminalWidth: 80,
     );
 
-    final progress = output.progressBoard('cli · staging');
-    final row = progress.addRow(
-      id: 'cli/build/macos-arm64',
-      label: 'Local binary',
+    final progress = output.board('cli · staging');
+    final row = progress.add(
+      'cli/build/macos-arm64',
+      'Local binary',
       coordinate: 'macos-arm64',
     );
-    row.handle.begin(
-      ProgressActivity(running: 'building', failed: 'build failed'),
-    );
+    row.begin((running: 'building', failed: 'build failed'));
     output.problem(
       Diagnostic(
         code: 'RK-BUILD-001',
@@ -163,22 +159,16 @@ void main() {
   group('non-terminal output is append-only', () {
     test('a live board prints nothing at all', () {
       final (out, captured) = make(isTerminal: false);
-      final board = out.progressBoard('Staging', delay: Duration.zero);
-      board
-          .addRow(id: 'build', label: 'linux-x64')
-          .handle
-          .begin(CommonProgressActivities.checking);
+      final board = out.board('Staging', delay: Duration.zero);
+      board.add('build', 'linux-x64').begin(Activities.checking);
       expect(captured.text, isEmpty, reason: 'a pipe sees no spinner');
       board.discard();
     });
 
     test('and no cursor movement is emitted', () {
       final (out, captured) = make(isTerminal: false);
-      final board = out.progressBoard('Staging', delay: Duration.zero);
-      board
-          .addRow(id: 'build', label: 'linux-x64')
-          .handle
-          .begin(CommonProgressActivities.checking);
+      final board = out.board('Staging', delay: Duration.zero);
+      board.add('build', 'linux-x64').begin(Activities.checking);
       out.line('built', mark: Mark.done);
       board.discard();
       expect(captured.text, isNot(contains('\r')));
@@ -197,15 +187,22 @@ void main() {
     test('target rows fit and erase exactly at 36 columns', () async {
       const width = 36;
       final (out, captured) = make(isTerminal: true, terminalWidth: width);
-      final checks = out.targetChecks(delay: Duration.zero);
-      checks
-        ..add('tag', 'Git tag')
-        ..add('pub', 'pub.dev · rk')
-        ..add('github', 'GitHub Release · danReynolds/release-kit');
+      final checks = out.board(
+        'Release targets',
+        delay: Duration.zero,
+        elapsed: false,
+      );
+      for (final (id, label) in [
+        ('tag', 'Git tag'),
+        ('pub', 'pub.dev · rk'),
+        ('github', 'GitHub Release · danReynolds/release-kit'),
+      ]) {
+        checks.add(id, label).begin(Activities.checking);
+      }
       await Future<void>.delayed(const Duration(milliseconds: 1));
 
-      checks.finish('github', Verdict.exact);
-      checks.close();
+      checks['github'].complete('checked', mark: Mark.satisfied);
+      checks.discard();
 
       final visibleLines = withoutControls(
         captured.text,
