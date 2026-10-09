@@ -371,6 +371,7 @@ void main() {
     test('a path that a batch cannot carry is read alone', () async {
       if (Platform.isWindows) return;
       write('new\nline.txt', 'both halves\n');
+      write('Icon\r', 'icon\n');
       write('plain.txt', 'plain\n');
       commit();
       final asked = <String>[];
@@ -380,14 +381,16 @@ void main() {
         tools: _Asked(asked),
       );
 
-      final read = await files.read(['new\nline.txt', 'plain.txt']);
+      final read = await files.read(['new\nline.txt', 'Icon\r', 'plain.txt']);
 
       expect(
         String.fromCharCodes(read['new\nline.txt']!.bytes),
         'both halves\n',
       );
+      // The batch reads its input as lines, and drops a line's last CR.
+      expect(String.fromCharCodes(read['Icon\r']!.bytes), 'icon\n');
       expect(String.fromCharCodes(read['plain.txt']!.bytes), 'plain\n');
-      expect(asked, hasLength(3));
+      expect(asked, hasLength(5));
       expect(asked.last, 'git cat-file --batch');
     });
 

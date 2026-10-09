@@ -258,8 +258,9 @@ final class CommitFiles {
 
   /// The object at each path (`<commit>:<path>`; '' is the root tree), in
   /// one `git cat-file --batch`, or null where the commit has none. A path
-  /// that contains a newline, which the protocol cannot carry, is read
-  /// alone, and must be there.
+  /// the protocol cannot carry, one with a newline in it or a carriage
+  /// return at its end, as macOS's `Icon\r` has, is read alone, and must be
+  /// there.
   Future<Map<String, GitObject?>> read(Iterable<String> paths) async {
     final found = <String, GitObject?>{};
     final batched = <String>[];
@@ -268,7 +269,7 @@ final class CommitFiles {
       if (path.split('/').contains('..')) {
         throw ArgumentError('path escapes the commit: $path');
       }
-      if (path.contains('\n')) {
+      if (path.contains('\n') || path.endsWith('\r')) {
         found[path] = await _readAlone(path);
       } else {
         batched.add(path);
