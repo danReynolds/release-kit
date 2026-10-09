@@ -89,24 +89,26 @@ final class StageRunner {
   /// Produces or reuses the receipt-backed stage [run]'s unit publishes
   /// from. Its rows go on [shared] when units stage side by side, and on a
   /// board of its own otherwise. False when it stopped, having said why.
-  Future<bool> run(UnitRun run, {StageReleaseProgress? shared}) async {
+  Future<bool> run(UnitRun run, {StageRows? shared}) async {
     final UnitSnapshot(:unit, :release) = run.read;
     final stage = run.read.stage!;
     final check = run.read.stageCheck!;
-    final stageProgress =
-        shared ??
-        StageReleaseProgress(
-          output,
-          title: '${unit.name} ${unit.version} · staging',
-          board: release.board,
-        );
-    final warnings = <_StageWarning>[];
+    final board = shared == null
+        ? output.board(
+            '${unit.name} ${unit.version} · staging',
+            heartbeat: true,
+          )
+        : null;
+    final rows = shared ?? StageRows(board!, release);
+    // Stopped before any work: the board this unit owns goes, and on a
+    // board units share its rows say they were not attempted.
+    void abandon() => board == null ? rows.abandon() : board.discard();
+    final warnings = <({Diagnostic warning, String target})>[];
     if (check.reusable) {
       final receipt = check.receipt!;
-      stageProgress
-        ..restore(receipt.producers)
-        ..settle(title: '${unit.name} ${unit.version} · already staged');
-      _showStageWarnings(unit, _recordedStageWarnings(receipt, release));
+      rows.restore(receipt);
+      board?.settle(title: '${unit.name} ${unit.version} · already staged');
+      deferStageWarnings(output, release, receipt);
       run.identity = MacIdentity.recorded(receipt);
       return true;
     }
@@ -123,7 +125,7 @@ final class StageRunner {
       try {
         stage.begin();
       } on Object catch (error) {
-        stageProgress.discard();
+        abandon();
         output.problem(
           Diagnostic(
             code: 'RK-STAGE-001',
@@ -139,9 +141,8 @@ final class StageRunner {
       }
     }
 
-    final recorded = stage.receipt!.producers;
-    stageProgress.restore(recorded);
-    final completed = {...recorded.keys};
+    rows.restore(stage.receipt!);
+    final completed = {...stage.receipt!.producers.keys};
 
     // Producers build from the commit the stage names, read once into
     // memory when anything remains to produce; each exports it into a
@@ -153,7 +154,7 @@ final class StageRunner {
       try {
         source = await stage.captureSource();
       } on Object catch (error) {
-        stageProgress.discard();
+        abandon();
         output.problem(
           Diagnostic(
             code: 'RK-STAGE-003',
@@ -177,7 +178,7 @@ final class StageRunner {
     Stop? settle(Work work, Produced produced) {
       if (produced.halt case final halt?) {
         _discardUnrecorded(stage, work.outputs);
-        stageProgress.fail(work.name);
+        rows.fail(work);
         return halt;
       }
       try {
@@ -186,12 +187,10 @@ final class StageRunner {
           evidence: produced.evidence,
           warnings: produced.warnings,
         );
-        stageProgress.restore({
-          work.name: stage.receipt!.producers[work.name]!,
-        });
+        rows.restore(stage.receipt!);
         return null;
       } on Object catch (error) {
-        stageProgress.fail(work.name);
+        rows.fail(work);
         _stageProgressProblem(error);
         return Stop.refused;
       }
@@ -200,7 +199,6 @@ final class StageRunner {
     /// Runs [work], a target's input; null when it is recorded, and
     /// otherwise why the stage stopped.
     Future<Stop?> runTargetStage(Work work) async {
-      final receiptName = work.name;
       final target = release.preparing(work)!;
       try {
         final produced = await targets
@@ -213,19 +211,19 @@ final class StageRunner {
                 tools: tools,
                 git: initialGit,
                 output: output,
-                rows: stageProgress.handleFor(receiptName),
+                rows: rows.of(work),
                 fromSource: run.fromSource[work.project?.name] ?? const {},
               ),
               work,
             );
         warnings.addAll([
           for (final warning in produced.warnings)
-            _StageWarning(warning, target: target.id),
+            (warning: warning, target: target.id),
         ]);
         return settle(work, produced);
       } on Object catch (error) {
         _discardUnrecorded(stage, work.outputs);
-        stageProgress.fail(receiptName);
+        rows.fail(work);
         return _stageOperationProblem(
           '${target.label} stage preparation',
           error,
@@ -236,7 +234,6 @@ final class StageRunner {
     /// Runs [step], local work; null when it is recorded, and otherwise why
     /// the stage stopped.
     Future<Stop?> runProducer(Work step) async {
-      final receiptName = step.name;
       // A project's own build has no platform; it is one lane of its own.
       final laneName = step.platform == null
           ? '${step.project!.name}/build'
@@ -247,7 +244,7 @@ final class StageRunner {
           () => _lane(stage, source, step.project!),
         );
         output.report.acted = true;
-        stageProgress.begin(receiptName, _producerActivity(step));
+        rows.begin(step, _producerActivity(step));
         final Produced produced;
         try {
           produced = await _actProducer(
@@ -255,18 +252,18 @@ final class StageRunner {
             unit,
             run.identity,
             chain: chain,
-            progress: stageProgress.handleFor(receiptName),
+            progress: rows.of(step),
           );
         } on Object catch (error) {
           _discardUnrecorded(stage, step.outputs);
-          stageProgress.fail(receiptName);
+          rows.fail(step);
           _stageOperationProblem(step.summary, error);
           return Stop.partway;
         }
         return settle(step, produced);
       } on Object catch (error) {
         _discardUnrecorded(stage, step.outputs);
-        stageProgress.fail(receiptName);
+        rows.fail(step);
         return _stageOperationProblem('the ${unit.name} stage', error);
       }
     }
@@ -323,19 +320,20 @@ final class StageRunner {
       }
     }
     if (failures.isNotEmpty) {
-      stageProgress.concludeStopped();
+      rows.stopped();
+      board?.conclude();
       if (!output.report.halted) output.halt(Stop.worst(failures));
       return false;
     }
 
-    stageProgress.begin('complete-stage', (
+    rows.begin(release.barrier, (
       running: 'assembling',
       failed: 'assembly failed',
     ));
     try {
       stage.complete(release);
     } on Object catch (error) {
-      stageProgress.conclude();
+      board?.conclude();
       output.problem(
         Diagnostic(
           code: 'RK-STAGE-003',
@@ -355,10 +353,11 @@ final class StageRunner {
       verdict: Verdict.exact,
       detail: 'staged and validated',
     );
-    stageProgress
-      ..restore(stage.receipt!.producers)
-      ..settle(title: '${unit.name} ${unit.version} · staged');
-    _showStageWarnings(unit, warnings);
+    rows.restore(stage.receipt!);
+    board?.settle(title: '${unit.name} ${unit.version} · staged');
+    for (final (:warning, :target) in warnings) {
+      output.deferWarning(warning, unit: unit.name, target: target);
+    }
     return true;
   }
 
@@ -371,34 +370,6 @@ final class StageRunner {
     } on Object {
       // The original failure remains the useful diagnosis, and the producer
       // that needs the path reports what it finds there.
-    }
-  }
-
-  /// The warnings [receipt] keeps, each with the target its work prepares.
-  List<_StageWarning> _recordedStageWarnings(
-    Receipt receipt,
-    UnitRelease release,
-  ) => [
-    for (final work in release.work)
-      for (final warning in receipt.warnings(work.name))
-        _StageWarning(warning, target: release.preparing(work)?.id),
-  ];
-
-  /// Says [found] with the run's other warnings, once every unit is staged.
-  void _showStageWarnings(ResolvedUnit unit, Iterable<_StageWarning> found) {
-    final seen = <String>{};
-    for (final warning in found) {
-      if (!seen.add(
-        '${warning.diagnostic.code}\u0000'
-        '${warning.diagnostic.message}',
-      )) {
-        continue;
-      }
-      output.deferWarning(
-        warning.diagnostic,
-        unit: unit.name,
-        target: warning.target,
-      );
     }
   }
 
@@ -529,11 +500,4 @@ final class StageRunner {
     StepKind.buildAssets => (running: 'building', failed: 'build failed'),
     _ => throw StateError('${step.kind.name} is not a stage producer'),
   };
-}
-
-final class _StageWarning {
-  const _StageWarning(this.diagnostic, {this.target});
-
-  final Diagnostic diagnostic;
-  final String? target;
 }

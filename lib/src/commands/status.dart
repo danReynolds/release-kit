@@ -15,6 +15,7 @@ import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
 import '../targets/target_module.dart';
+import 'release_progress.dart';
 
 /// A read-only snapshot of the configured release targets.
 ///
@@ -167,10 +168,8 @@ class StatusCommand {
     for (final unit in snapshots) {
       // What the stage found, such as Pub's validation warnings, is what
       // `rk release` will list before it asks: said here first.
-      if (_workRemains(unit)) {
-        for (final (:target, :warning) in _stageWarnings(unit)) {
-          output.deferWarning(warning, unit: unit.unit.name, target: target);
-        }
+      if (_workRemains(unit) && unit.stage?.reusable == true) {
+        deferStageWarnings(output, unit.release, unit.stage!.receipt!);
       }
     }
     output.flushWarnings();
@@ -190,21 +189,6 @@ class StatusCommand {
       output.blank();
       output.next(command);
     }
-  }
-
-  /// The warnings [unit]'s reusable stage recorded, each with the target
-  /// that found it.
-  List<({String? target, Diagnostic warning})> _stageWarnings(
-    StatusUnitSnapshot unit,
-  ) {
-    final stage = unit.stage;
-    if (stage == null || !stage.reusable) return const [];
-    final release = unit.release;
-    return [
-      for (final work in release.work)
-        for (final warning in stage.receipt!.warnings(work.name))
-          (target: release.preparing(work)?.id, warning: warning),
-    ];
   }
 
   Future<StatusUnitSnapshot> _gather(

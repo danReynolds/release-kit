@@ -95,45 +95,41 @@ final class Publication {
   Future<bool> checkReadiness(UnitRun run) async {
     final UnitSnapshot(:unit, :targets, remaining: outstanding) = run.read;
     if (outstanding.isEmpty) return true;
-    final progress = TargetReleaseProgress(
+    final board = targetBoard(
       output,
-      title: '${unit.name} ${unit.version} · preparing release',
-      targets: targets,
+      '${unit.name} ${unit.version} · preparing release',
+      targets,
       delay: briefPhase,
     );
     final environment = refreshEnvironment();
     for (final targetKind in outstanding.map((item) => item.target).toSet()) {
-      final grouped = outstanding
-          .where((item) => item.target == targetKind)
-          .toList();
+      final grouped = [
+        for (final target in outstanding)
+          if (target.target == targetKind) board[target.id],
+      ];
       final module = inspector.targets.moduleFor(targetKind);
-      for (final target in grouped) {
-        progress.begin(target, Activities.checking);
-      }
+      final rows = Rows(grouped)..begin(Activities.checking);
       final readiness = await module.ready(
         TargetReadinessContext(
           tools: tools,
           git: initialGit,
           environment: environment,
-          progress: progress.combined(grouped),
+          progress: rows,
         ),
         unit,
         signIn: false,
       );
       if (readiness.problem case final problem?) {
-        progress
-          ..failAll(grouped, activity: Activities.checking)
-          ..notAttemptedPending()
-          ..settle();
+        _stopBefore(board, grouped, Activities.checking);
         output.problem(problem, unit: unit.name);
         output.halt(Stop.refused);
         return false;
       }
-      for (final target in grouped) {
-        progress.complete(target, note: readiness.note);
+      for (final row in grouped) {
+        row.complete(readiness.note);
       }
     }
-    progress.discard();
+    board.discard();
     return true;
   }
 
@@ -275,19 +271,15 @@ final class Publication {
       showActions(run);
       return ExitCodes.refused;
     }
-    final releaseProgress = TargetReleaseProgress(
+    final board = targetBoard(
       output,
-      title: '${unit.name} ${unit.version} · releasing',
-      targets: targets,
+      '${unit.name} ${unit.version} · releasing',
+      targets,
     );
-    for (final target in targets.where(
-      (target) => !accepted.contains(target),
-    )) {
-      releaseProgress.complete(
-        target,
-        note: 'already published',
-        satisfied: true,
-      );
+    for (final target in targets) {
+      if (!accepted.contains(target)) {
+        board[target.id].complete('already published', mark: Mark.satisfied);
+      }
     }
     final done = {
       for (final target in targets)
@@ -310,7 +302,7 @@ final class Publication {
             : acting.any((other) => other.target == target.target)
             ? 'waiting its turn at ${target.kindLabel}'
             : null;
-        if (note != null) releaseProgress.waiting(target, note: note);
+        if (note != null) board[target.id].wait(note);
       }
     }
 
@@ -326,7 +318,7 @@ final class Publication {
         describeWaits();
         final _PublicationFailure? failure;
         try {
-          failure = await _publishTarget(target, run, releaseProgress);
+          failure = await _publishTarget(target, run, board);
         } on Object {
           crashed = true;
           rethrow;
@@ -352,14 +344,14 @@ final class Publication {
     ]);
 
     if (failures.isNotEmpty || output.report.halted) {
-      releaseProgress
-        ..notAttemptedPending()
+      board
+        ..skipPending()
         ..settle();
       _reportPublicationFailures(failures);
       return ExitCodes.refused;
     }
 
-    releaseProgress.settle(released: true);
+    board.settle(title: '${unit.name} ${unit.version} · released');
     return ExitCodes.ok;
   }
 
@@ -379,16 +371,15 @@ final class Publication {
       (byTarget[target.target] ??= []).add(target);
     }
     if (byTarget.isEmpty) return true;
-    final progress = TargetReleaseProgress(
+    final board = targetBoard(
       output,
-      title: '${unit.name} ${unit.version} · preparing release',
-      targets: [for (final grouped in byTarget.values) ...grouped],
+      '${unit.name} ${unit.version} · preparing release',
+      [for (final grouped in byTarget.values) ...grouped],
     );
     final environment = refreshEnvironment();
-    for (final MapEntry(key: kind, value: grouped) in byTarget.entries) {
-      for (final target in grouped) {
-        progress.begin(target, Activities.checkingSignIn);
-      }
+    for (final MapEntry(key: kind, value: targets) in byTarget.entries) {
+      final grouped = [for (final target in targets) board[target.id]];
+      final rows = Rows(grouped)..begin(Activities.checkingSignIn);
       final signedIn = await inspector.targets
           .moduleFor(kind)
           .ready(
@@ -396,30 +387,38 @@ final class Publication {
               tools: tools,
               git: initialGit,
               environment: environment,
-              progress: progress.combined(grouped),
+              progress: rows,
               runInteractive: allowInteractiveTools
-                  ? progress.interactive(tools)
+                  ? interactive(board, tools)
                   : null,
             ),
             unit,
             signIn: true,
           );
       if (signedIn.problem case final problem?) {
-        progress
-          ..failAll(grouped, activity: Activities.checkingSignIn)
-          ..notAttemptedPending()
-          ..settle();
+        _stopBefore(board, grouped, Activities.checkingSignIn);
         output.problem(problem, unit: unit.name);
         output.halt(Stop.refused);
         return false;
       }
       _signedIn.add(kind);
-      for (final target in grouped) {
-        progress.complete(target, note: signedIn.note);
+      for (final row in grouped) {
+        row.complete(signedIn.note);
       }
     }
-    progress.discard();
+    board.discard();
     return true;
+  }
+
+  /// Settles [board] where a check of [checked] refused: they failed at
+  /// [activity], and nothing after them was attempted.
+  static void _stopBefore(Board board, List<Row> checked, Activity activity) {
+    for (final row in checked) {
+      row.fail(activity: activity);
+    }
+    board
+      ..skipPending()
+      ..settle();
   }
 
   /// The release loop for one target: read it fresh; done if it is already
@@ -429,7 +428,7 @@ final class Publication {
   Future<_PublicationFailure?> _publishTarget(
     Target target,
     UnitRun run,
-    TargetReleaseProgress releaseProgress,
+    Board board,
   ) async {
     final unit = run.read.unit;
     final actions = run.actions;
@@ -438,7 +437,7 @@ final class Publication {
     // what is left finishes from public inputs alone.
     final staged = run.recovering ? null : stage;
     final module = inspector.targets.moduleFor(target.target);
-    releaseProgress.begin(target, Activities.checking);
+    final row = board[target.id]..begin(Activities.checking);
     // The target is read again right before its act: another run or person
     // may have published it since the snapshot.
     var state = await inspector.inspect(target, unit, stage: staged);
@@ -450,11 +449,17 @@ final class Publication {
       action: actions[target]!.wire,
     );
     if (state.isExact) {
-      _completeExistingTarget(target, state, actions, releaseProgress);
+      actions[target] = ReleaseAction.alreadyPublished;
+      row.complete('already published', mark: Mark.satisfied);
+      output.record(
+        target,
+        verdict: state.verdict,
+        action: actions[target]!.wire,
+      );
       return null;
     }
     if (!state.isAbsent) {
-      releaseProgress.fail(target, activity: Activities.checking);
+      row.fail(activity: Activities.checking);
       return _refusal(target, unit, state);
     }
     // What the act publishes must still be what was reviewed: public
@@ -486,7 +491,7 @@ final class Publication {
             _ => null,
           };
     if (unpublishable != null) {
-      releaseProgress.fail(target, activity: Activities.checking);
+      row.fail(activity: Activities.checking);
       return _PublicationFailure(
         step: target,
         diagnostics: [unpublishable],
@@ -501,16 +506,14 @@ final class Publication {
       reads: inspector.targetReads,
       tools: tools,
       stage: staged,
-      progress: releaseProgress.handle(target),
-      runInteractive: allowInteractiveTools
-          ? releaseProgress.interactive(tools)
-          : null,
+      progress: row.rows,
+      runInteractive: allowInteractiveTools ? interactive(board, tools) : null,
       wait: wait,
       confirmDeadline: confirmDeadline,
       confirmInterval: confirmInterval,
     );
     final mutationActivity = _acting(target.target);
-    releaseProgress.begin(target, mutationActivity);
+    row.begin(mutationActivity);
     late final TargetActOutcome act;
     try {
       act = await module.publish(releaseContext, unit, target, state);
@@ -527,7 +530,7 @@ final class Publication {
     // A process result is not public truth unless the provider's answer is
     // the read-back. Every started operation is read back even if another
     // concurrent lane has failed.
-    releaseProgress.begin(target, Activities.verifying);
+    row.begin(Activities.verifying);
     try {
       state =
           act.confirmed ??
@@ -559,12 +562,11 @@ final class Publication {
           : '';
       final note =
           '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
-      releaseProgress.complete(target, note: note);
+      row.complete(note);
       return null;
     }
     if (!act.ok || !state.isExact) {
-      releaseProgress.fail(
-        target,
+      row.fail(
         // A refused act failed where it acted; one that may have landed
         // failed where it was read back.
         activity:
@@ -581,7 +583,7 @@ final class Publication {
       ?act.successNote,
       if (act.includeInspectionDetail) ?state.detail,
     ].join(' · ');
-    releaseProgress.complete(target, note: note.isEmpty ? 'published' : note);
+    row.complete(note.isEmpty ? 'published' : note);
     return null;
   }
 
@@ -672,21 +674,6 @@ final class Publication {
     ),
     PublishTarget.homebrew => (running: 'updating', failed: 'update failed'),
   };
-
-  void _completeExistingTarget(
-    Target target,
-    Inspection state,
-    Map<Target, ReleaseAction> actions,
-    TargetReleaseProgress progress,
-  ) {
-    actions[target] = ReleaseAction.alreadyPublished;
-    progress.complete(target, note: 'already published', satisfied: true);
-    output.record(
-      target,
-      verdict: state.verdict,
-      action: actions[target]!.wire,
-    );
-  }
 
   /// A read that found something other than the release missing: a
   /// conflict carries the target's own advice; anything else says what was

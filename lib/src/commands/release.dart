@@ -451,22 +451,24 @@ class ReleaseCommand {
   Future<bool> _inspectRelease(UnitRun run) async {
     final read = run.read;
     final ResolvedUnit(:name, :version) = read.unit;
-    final progress = TargetReleaseProgress(
+    final board = targetBoard(
       output,
-      title: '$name $version · preparing release',
-      targets: read.targets,
+      '$name $version · preparing release',
+      read.targets,
     );
 
     // Destinations are independent, so they are read together: every row
     // says what it is doing at once, and the wait is the slowest read
     // rather than their sum. The report is written afterwards in release
     // order, so the document never depends on which answer arrived first.
-    for (final target in read.targets) {
-      progress.begin(target, Activities.checking);
+    for (final row in board.rows) {
+      row.begin(Activities.checking);
     }
     await Future.wait([
       for (final target in read.targets)
-        read.reads[target.id]!.then((state) => progress.observe(target, state)),
+        read.reads[target.id]!.then(
+          (state) => observe(board[target.id], state),
+        ),
     ]);
     await read.settle();
     for (final step in read.release.steps) {
@@ -483,7 +485,7 @@ class ReleaseCommand {
     final problems = Diagnostics();
     read.historyProblems.forEach(problems.report);
     read.tagProblems.forEach(problems.report);
-    progress.discard();
+    board.discard();
     if (problems.isEmpty) return true;
     output.halt(Stop.refused);
     output.problems(problems.found);
@@ -552,9 +554,9 @@ class ReleaseCommand {
     );
     final shared = [
       for (final run in staging)
-        StageReleaseProgress.shared(
+        StageRows(
           live,
-          board: run.read.release.board,
+          run.read.release,
           unit: '${run.read.unit.name} ${run.read.unit.version}',
         ),
     ];
