@@ -306,8 +306,6 @@ final class ReleasePublicationCoordinator {
       showActions(targets, publicActions);
       return ExitCodes.refused;
     }
-    output.say('Authorized in the reviewed repository plan.');
-
     final releaseProgress = TargetReleaseProgress(
       output,
       title: '${unit.name} ${unit.version} · releasing',
@@ -480,7 +478,8 @@ final class ReleasePublicationCoordinator {
       final note = blockers.isNotEmpty
           ? 'waiting for ${blockers.join(', ')}'
           : activeTargets.contains(target.target)
-          ? 'waiting for ${target.kindLabel} lane'
+          // One publish at a time to a destination: another is under way.
+          ? 'waiting its turn at ${target.kindLabel}'
           : null;
       if (note != null) progress.waiting(target, note: note);
     }
@@ -522,10 +521,10 @@ final class ReleasePublicationCoordinator {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
-        _refusal(step, target, unit, state, acted: output.report.acted),
+        _refusal(step, target, unit, state, acted: output.report.actedPublicly),
       );
     }
-    final halt = output.report.acted
+    final halt = output.report.actedPublicly
         ? HaltKind.stoppedPartway
         : HaltKind.beforeActing;
     if (recoversWithoutStage && !module.recoversWithoutStage(state)) {
@@ -580,8 +579,10 @@ final class ReleasePublicationCoordinator {
       }
     }
 
-    final actedBefore = output.report.acted;
-    output.report.acted = true;
+    final actedBefore = output.report.actedPublicly;
+    output.report
+      ..acted = true
+      ..actedPublicly = true;
     final releaseContext = TargetReleaseContext(
       reads: inspector.targetReads,
       tools: tools,

@@ -264,6 +264,13 @@ void main() {
       );
       expect(run.problemCodes, ['RK-MONO-004']);
       expect(harness.tools.remoteTagObject, _otherTagObject);
+      // The stage this run built is private: the refused push changed
+      // nothing public.
+      expect(
+        (run.report['halt'] as Map?)?['kind'],
+        'unfixableByRerun',
+        reason: run.text,
+      );
     });
 
     test(
@@ -438,9 +445,15 @@ void main() {
         expect(run.publicMutations, isEmpty);
         expect(run.text, contains('tool 1.2.3 · staged'));
         expect(run.text, contains('Local binaries'));
+        // Named as the file is, with the directory a user can find it in.
+        expect(run.text, contains('✓ tool-1.2.3-linux-x64.tar.gz'));
         expect(
           run.text,
-          contains('producers/tool/archives/tool-1.2.3-linux-x64.tar.gz'),
+          matches(
+            RegExp(
+              r'Archives +\.rk/work/stages/[0-9a-f]+/producers/tool/archives',
+            ),
+          ),
         );
         expect(
           run.text.trimRight(),

@@ -56,6 +56,10 @@ class Report {
   /// because a read-only path that printed steps always succeeded.
   var acted = false;
 
+  /// Whether this run changed a public target. A halt says whether anything
+  /// public changed, and the stage a release builds first is private.
+  var actedPublicly = false;
+
   /// [uncommitted] is null when the run stopped before reading git, which is
   /// reported as absence rather than as zero — a clean tree and an unread one
   /// are different facts.

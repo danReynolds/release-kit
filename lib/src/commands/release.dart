@@ -254,7 +254,7 @@ class ReleaseCommand {
     for (final publication in publications) {
       final code = await _publication.publish(publication);
       if (code != ExitCodes.ok) return code;
-      output.previousUnitActed = output.report.acted;
+      output.previousUnitActed = output.report.actedPublicly;
     }
     return ExitCodes.ok;
   }

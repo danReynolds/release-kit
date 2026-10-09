@@ -264,7 +264,7 @@ class BinaryChain {
       );
       return LocalProducerOutcome.failed(
         'the produced signature differs from the published identity',
-        output.report.acted
+        output.report.actedPublicly
             ? HaltKind.actedAndUnfixable
             : HaltKind.unfixableByRerun,
       );
