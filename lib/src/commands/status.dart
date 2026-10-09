@@ -215,7 +215,7 @@ class StatusCommand {
     }
 
     final expectations = observed.targets;
-    final artifactProblems = _artifactProductionProblems(unit);
+    final artifactProblems = _artifactProductionProblems(observed.release);
     for (final expectation in expectations) {
       checking
           ?.add(expectation.id, expectation.label, group: group)
@@ -304,7 +304,7 @@ class StatusCommand {
       ];
     }
     final localOutputPending = _localBinaryWorkRemains(
-      unit: unit,
+      release: observed.release,
       targets: targets,
       stage: stageResult.check,
     );
@@ -497,14 +497,11 @@ class StatusCommand {
         history ??
         TargetHistory.versioned(inspection: inspection, target: expectation);
     final currentInspection = currentHistory.inspection;
+    // A lane read as empty is known to be at no version; any other read
+    // that names none could not say.
     final current = currentHistory.version != null
-        ? _CurrentVersion(value: currentHistory.version!.canonical, known: true)
-        : switch (currentInspection.verdict) {
-            Verdict.absent => const _CurrentVersion(value: null, known: true),
-            Verdict.exact ||
-            Verdict.conflict ||
-            Verdict.unknown => const _CurrentVersion.unknown(),
-          };
+        ? (value: currentHistory.version!.canonical, known: true)
+        : (value: null, known: currentInspection.verdict == Verdict.absent);
 
     // A definitive conflict in the target's public history is also a
     // conflict for this candidate. Keep an unavailable history read separate:
@@ -559,40 +556,32 @@ class StatusCommand {
     return ArtifactObservation(name: name, status: ArtifactStatus.staged);
   }
 
-  Map<String, String> _artifactProductionProblems(ResolvedUnit unit) {
-    final blocked = <String, String>{};
-    for (final project in unit.projects) {
-      for (final platform in project.binaryPlatforms) {
-        final capability = capabilities.resolve(platform);
-        if (!capability.canProduce) {
-          blocked[platform] =
-              capability.reason ?? 'this host cannot produce $platform';
-        }
-      }
-    }
-    if (blocked.isEmpty) return const {};
+  /// The platforms [unit] ships that this host cannot produce, with why.
+  Map<String, String> _blocked(ResolvedUnit unit) => {
+    for (final project in unit.projects)
+      for (final platform in project.binaryPlatforms)
+        if (capabilities.resolve(platform) case final capability
+            when !capability.canProduce)
+          platform: capability.reason ?? 'this host cannot produce $platform',
+  };
 
-    final problems = <String, String>{};
-    for (final project in unit.projects) {
-      final executable = project.executable;
-      if (executable == null) continue;
-      for (final platform in project.binaryPlatforms) {
-        final reason = blocked[platform];
-        if (reason == null) continue;
-        problems[ReleaseAssets.archiveName(
-              executable,
-              project.version.canonical,
-              platform,
-            )] =
-            '$platform cannot be produced here: $reason';
-      }
-      final summary = blocked.entries
-          .map((entry) => '${entry.key}: ${entry.value}')
-          .join('; ');
-      problems[ReleaseAssets.manifest] =
-          'cannot be finalized until every release artifact exists: $summary';
-    }
-    return Map.unmodifiable(problems);
+  /// Why each of [release]'s files this host would have to make cannot be
+  /// made, by public name: the archives of the platforms it cannot build,
+  /// and the manifest that waits for every one.
+  Map<String, String> _artifactProductionProblems(UnitRelease release) {
+    final blocked = _blocked(release.unit);
+    if (blocked.isEmpty) return const {};
+    final summary = blocked.entries
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join('; ');
+    return Map.unmodifiable({
+      for (final asset in release.assets)
+        if (blocked[asset.madeBy.platform] case final reason?)
+          asset.name!:
+              '${asset.madeBy.platform} cannot be produced here: $reason',
+      ReleaseAssets.manifest:
+          'cannot be finalized until every release artifact exists: $summary',
+    });
   }
 
   StatusIssue _hostIssue(ResolvedUnit unit) {
@@ -765,7 +754,6 @@ class StatusCommand {
       for (final issue in snapshot.issues)
         if (issue.target != null) issue.target,
     };
-    final publicationState = _publicationState(verdicts);
 
     output.blank();
     output.line(
@@ -777,7 +765,7 @@ class StatusCommand {
         null => 'Public targets',
       },
       depth: 1,
-      state: publicationState,
+      state: RuntimeState.agreed(verdicts.map(RuntimeState.of)),
       strong: true,
     );
 
@@ -836,20 +824,15 @@ class StatusCommand {
                 snapshot.targets.isEmpty &&
                 snapshot.unit.binaryProject != null) ||
             _localBinaryWorkRemains(
-              unit: snapshot.unit,
+              release: snapshot.release,
               targets: snapshot.targets,
               stage: snapshot.stage,
             )
         ? snapshot.unit.binaryProject
         : null;
-    final localBlocked = {
-      if (localProject != null && !staged)
-        for (final platform in localProject.binaryPlatforms)
-          if (!capabilities.resolve(platform).canProduce)
-            platform:
-                capabilities.resolve(platform).reason ??
-                'this host cannot produce $platform',
-    };
+    final localBlocked = localProject != null && !staged
+        ? _blocked(snapshot.unit)
+        : const <String, String>{};
     final localStatus = localProject == null
         ? null
         : staged
@@ -882,66 +865,50 @@ class StatusCommand {
       for (final row in rows) row.$3,
     };
     final agreed = statuses.length == 1 ? statuses.single : null;
-    final stageState = _stageState(statuses);
 
     output.blank();
     output.line(
-      switch (agreed) {
-        ArtifactStatus.staged => 'Staged',
-        ArtifactStatus.notStaged => 'Not staged',
-        ArtifactStatus.invalid => 'Cannot be staged',
-        null => 'Stage',
-      },
+      agreed?.heading ?? 'Stage',
       depth: 1,
-      state: stageState,
+      state: RuntimeState.agreed(statuses.map((status) => status.state)),
       strong: true,
     );
 
-    if (localProject != null) {
+    if (localStatus != null) {
       output.line(
         'Local binaries',
-        mark: agreed != null ? Mark.none : _artifactMark(localStatus!),
-        note: agreed != null ? null : _artifactNote(localStatus!),
+        mark: agreed != null ? Mark.none : localStatus.mark,
+        note: agreed != null ? null : localStatus.word,
         depth: 2,
-        state: _artifactState(localStatus!),
+        state: localStatus.state,
         noteRole: VisualRole.secondary,
-        noteState: _artifactState(localStatus),
+        noteState: localStatus.state,
       );
-      for (final platform in [...localProject.binaryPlatforms]..sort()) {
-        final problem = localBlocked[platform];
+      // Each archive, in the order of the platforms it is for.
+      for (final archive in snapshot.release.assets) {
+        final problem = localBlocked[archive.madeBy.platform];
+        final state = staged
+            ? ArtifactStatus.staged
+            : problem == null
+            ? ArtifactStatus.notStaged
+            : ArtifactStatus.invalid;
         output.line(
-          ReleaseAssets.archiveName(
-            localProject.executable!,
-            localProject.version.canonical,
-            platform,
-          ),
-          mark: staged
-              ? Mark.satisfied
-              : problem == null
-              ? Mark.none
-              : Mark.blocked,
+          archive.name!,
+          mark: state.mark,
           note: staged ? 'staged' : problem,
           depth: 3,
           labelWidth: 44,
           role: VisualRole.secondary,
-          state: staged
-              ? RuntimeState.satisfied
-              : problem == null
-              ? RuntimeState.neutral
-              : RuntimeState.failure,
+          state: state.state,
           noteRole: VisualRole.secondary,
-          noteState: staged
-              ? RuntimeState.satisfied
-              : problem == null
-              ? RuntimeState.neutral
-              : RuntimeState.failure,
+          noteState: state.state,
         );
       }
       // Where they are, once they are: a directory this repository holds.
       if (staged && snapshot.observed.stage != null) {
         output.line(
           'in ${snapshot.observed.stage!.relativePath}/'
-          '${ReleaseAssets.producerRoot(localProject)}/archives',
+          '${ReleaseAssets.producerRoot(localProject!)}/archives',
           depth: 3,
           role: VisualRole.secondary,
         );
@@ -954,15 +921,15 @@ class StatusCommand {
           .toList();
       output.line(
         target.kindLabel,
-        mark: agreed != null ? Mark.none : _artifactMark(status),
+        mark: agreed != null ? Mark.none : status.mark,
         // The word survives whatever the heading says: the plan requires
         // that marks and colour are never the only signal.
-        note: agreed != null ? summary : '$summary · ${_artifactNote(status)}',
+        note: agreed != null ? summary : '$summary · ${status.word}',
         depth: 2,
         labelWidth: 30,
-        state: _artifactState(status),
+        state: status.state,
         noteRole: VisualRole.secondary,
-        noteState: _artifactState(status),
+        noteState: status.state,
       );
       // A broken artifact is named, always: which one and why are the only
       // questions it raises, and a count answers neither.
@@ -978,47 +945,6 @@ class StatusCommand {
         );
       }
     }
-  }
-
-  static String _artifactNote(ArtifactStatus status) => switch (status) {
-    ArtifactStatus.notStaged => 'not staged',
-    ArtifactStatus.staged => 'staged',
-    ArtifactStatus.invalid => 'invalid',
-  };
-
-  static Mark _artifactMark(ArtifactStatus status) => switch (status) {
-    ArtifactStatus.notStaged => Mark.none,
-    ArtifactStatus.staged => Mark.satisfied,
-    ArtifactStatus.invalid => Mark.blocked,
-  };
-
-  static RuntimeState _artifactState(ArtifactStatus status) => switch (status) {
-    ArtifactStatus.notStaged => RuntimeState.neutral,
-    ArtifactStatus.staged => RuntimeState.satisfied,
-    ArtifactStatus.invalid => RuntimeState.failure,
-  };
-
-  static RuntimeState _publicationState(Set<Verdict> verdicts) {
-    if (verdicts.contains(Verdict.conflict)) return RuntimeState.failure;
-    if (verdicts.contains(Verdict.unknown)) return RuntimeState.attention;
-    if (verdicts.every((verdict) => verdict == Verdict.exact)) {
-      return RuntimeState.satisfied;
-    }
-    if (verdicts.every((verdict) => verdict == Verdict.absent)) {
-      return RuntimeState.neutral;
-    }
-    return RuntimeState.active;
-  }
-
-  static RuntimeState _stageState(Set<ArtifactStatus> statuses) {
-    if (statuses.contains(ArtifactStatus.invalid)) return RuntimeState.failure;
-    if (statuses.every((status) => status == ArtifactStatus.staged)) {
-      return RuntimeState.satisfied;
-    }
-    if (statuses.every((status) => status == ArtifactStatus.notStaged)) {
-      return RuntimeState.neutral;
-    }
-    return RuntimeState.active;
   }
 
   void _renderIssues(List<StatusIssue> issues) {
@@ -1154,7 +1080,7 @@ bool _workRemains(StatusUnitSnapshot snapshot) =>
     snapshot.sourceVersionAlreadyReleased ||
     snapshot.targets.any((target) => !target.inspection.isExact) ||
     _localBinaryWorkRemains(
-      unit: snapshot.unit,
+      release: snapshot.release,
       targets: snapshot.targets,
       stage: snapshot.stage,
     );
@@ -1167,25 +1093,18 @@ bool _workRemains(StatusUnitSnapshot snapshot) =>
 /// the destination's artifact inventory establishes the binding, so status
 /// does not need to know which target kind published the bytes.
 bool _localBinaryWorkRemains({
-  required ResolvedUnit unit,
+  required UnitRelease release,
   required Iterable<TargetObservation> targets,
   required StageCheck? stage,
 }) {
-  final project = unit.binaryProject;
-  if (project == null || stage?.reusable == true) return false;
-
-  final archiveNames = {
-    for (final platform in project.binaryPlatforms)
-      ReleaseAssets.archiveName(
-        project.executable!,
-        project.version.canonical,
-        platform,
-      ),
-  };
+  if (!release.unit.shipsBinaries || stage?.reusable == true) return false;
+  // A binary unit's release files are its archives.
   final published = targets.any(
     (target) =>
         target.inspection.isExact &&
-        archiveNames.every(target.expectation.artifacts.contains),
+        release.assets.every(
+          (archive) => target.expectation.artifacts.contains(archive.name),
+        ),
   );
   return !published;
 }
@@ -1198,15 +1117,22 @@ class _StageResult {
   final StatusIssue? issue;
 }
 
-class _CurrentVersion {
-  const _CurrentVersion({required this.value, required this.known});
-  const _CurrentVersion.unknown() : this(value: null, known: false);
+/// What the stage holds of one file a target publishes: the word a row
+/// says, its mark, and the state both are drawn in.
+enum ArtifactStatus {
+  notStaged('not staged', 'Not staged', Mark.none, RuntimeState.neutral),
+  staged('staged', 'Staged', Mark.satisfied, RuntimeState.satisfied),
+  invalid('invalid', 'Cannot be staged', Mark.blocked, RuntimeState.failure);
 
-  final String? value;
-  final bool known;
+  const ArtifactStatus(this.word, this.heading, this.mark, this.state);
+
+  final String word;
+
+  /// What a stage section says when every row agrees on this.
+  final String heading;
+  final Mark mark;
+  final RuntimeState state;
 }
-
-enum ArtifactStatus { notStaged, staged, invalid }
 
 /// What the exact stage inspection established about one expected filename.
 class ArtifactObservation {

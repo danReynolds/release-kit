@@ -145,6 +145,16 @@ enum RuntimeState {
     Verdict.unknown => attention,
     Verdict.absent => neutral,
   };
+
+  /// What a heading over rows in [states] is drawn in: a failure or an
+  /// attention among them wins, rows that all agree are that, and a mix is
+  /// still active.
+  static RuntimeState agreed(Iterable<RuntimeState> states) {
+    final distinct = states.toSet();
+    if (distinct.contains(failure)) return failure;
+    if (distinct.contains(attention)) return attention;
+    return distinct.length == 1 ? distinct.single : active;
+  }
 }
 
 /// One styled fragment whose unstyled [text] remains the output contract.
