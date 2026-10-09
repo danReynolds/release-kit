@@ -253,11 +253,9 @@ class Inspector {
     Diagnostics problems,
   ) {
     final claims = <TargetClaim>[];
-    final warnings = <Diagnostic>[];
     for (final (target, history) in histories) {
       if (history == null) continue;
       claims.addAll(history.claims);
-      warnings.addAll(history.warnings);
       history.problems.forEach(problems.report);
       final inspection = history.inspection;
       if (inspection.isAbsent) continue;
@@ -286,7 +284,7 @@ class Inspector {
         );
       }
     }
-    return ReleaseHistoryCheck(claims: claims, warnings: warnings);
+    return ReleaseHistoryCheck(claims: claims);
   }
 
   /// Cross-step judgments about the tag, which no single step can make.
@@ -438,14 +436,8 @@ class Inspector {
 /// What one read of every lane's public history found: the names this
 /// release would claim for the first time.
 final class ReleaseHistoryCheck {
-  ReleaseHistoryCheck({
-    Iterable<TargetClaim> claims = const [],
-    Iterable<Diagnostic> warnings = const [],
-  }) : claims = List.unmodifiable(claims),
-       warnings = List.unmodifiable(warnings);
+  ReleaseHistoryCheck({Iterable<TargetClaim> claims = const []})
+    : claims = List.unmodifiable(claims);
 
   final List<TargetClaim> claims;
-
-  /// What the lanes' histories warn of, which does not stop the release.
-  final List<Diagnostic> warnings;
 }

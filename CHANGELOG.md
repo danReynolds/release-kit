@@ -47,8 +47,9 @@ published finishes with 0.1.14.
   it. A named release whose package needs a sibling not on pub.dev yet says
   to release them together (`rk release`) or the sibling first.
 - A GitHub release whose title or notes were edited after publishing is still
-  the release. A package pub.dev lists under another repository is a
-  warning, not a refusal (`RK-PUB-010`).
+  the release. A package pub.dev lists under another repository refuses
+  before anything is pushed, and says what to do when the repository moved
+  (`RK-PUB-010`).
 - A tag on origin that matches the release pattern without naming a version,
   such as `v1.0` under `v{version}`, no longer refuses every release.
 - With no pub session stored, `dart pub login` runs at once, not after

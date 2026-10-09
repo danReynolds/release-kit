@@ -232,10 +232,8 @@ final class TargetHistory {
     required this.inspection,
     this.version,
     Iterable<Diagnostic> problems = const [],
-    Iterable<Diagnostic> warnings = const [],
     Iterable<TargetClaim> claims = const [],
   }) : problems = List.unmodifiable(problems),
-       warnings = List.unmodifiable(warnings),
        claims = List.unmodifiable(claims);
 
   factory TargetHistory.versioned({
@@ -243,7 +241,6 @@ final class TargetHistory {
     required TargetPlan target,
     Diagnostic Function(Version publicVersion)? regressionDiagnostic,
     Iterable<Diagnostic> problems = const [],
-    Iterable<Diagnostic> warnings = const [],
     Iterable<TargetClaim> claims = const [],
   }) {
     final raw = inspection.evidence['version'];
@@ -266,7 +263,6 @@ final class TargetHistory {
       inspection: inspection,
       version: version,
       problems: found,
-      warnings: warnings,
       claims: claims,
     );
   }
@@ -274,9 +270,6 @@ final class TargetHistory {
   final Inspection inspection;
   final Version? version;
   final List<Diagnostic> problems;
-
-  /// What the operator should know before releasing, which does not stop it.
-  final List<Diagnostic> warnings;
   final List<TargetClaim> claims;
 }
 

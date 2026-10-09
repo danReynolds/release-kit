@@ -2755,44 +2755,37 @@ publish = ["pub.dev"]
     );
   });
 
-  test('a package pub.dev lists under another repository is released after '
-      'a warning: the repository may have moved', () async {
-    final registry = FakeRegistry(
-      {
-        'keybay': ['0.1.0'],
-      },
-      repositories: {'keybay': 'https://github.com/old/keybay'},
-    );
+  test('a package pub.dev lists under another repository refuses before the '
+      'tag is pushed', () async {
+    // Another project's package, or this one's from before it moved: pub.dev
+    // would refuse the upload after the tag was public, leaving a tag no
+    // re-run can finish.
     final ran = await release(
-      registry: registry,
+      registry: FakeRegistry(
+        {
+          'keybay': ['0.1.0'],
+        },
+        repositories: {'keybay': 'https://github.com/old/keybay'},
+      ),
       source: MemorySourceTree({
         'packages/keybay/pubspec.yaml':
             'name: keybay\nversion: 0.2.0\n'
             'repository: https://github.com/danReynolds/keybay\n',
         'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
       }, description: '/repo/keybay'),
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.published['keybay']!.add('0.2.0');
-        }
-      },
     );
 
-    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-    const warning =
-        'keybay on pub.dev points to https://github.com/old/keybay, not '
-        'https://github.com/danReynolds/keybay';
+    expect(ran.exitCode, ExitCodes.refused, reason: ran.text);
+    expect(ran.problems.map((p) => p['code']), contains('RK-PUB-010'));
+    expect(ran.text, contains('If this repository moved'));
     expect(
-      ran.text.indexOf(warning),
-      allOf(
-        greaterThanOrEqualTo(0),
-        lessThan(ran.text.indexOf('Release core 0.2.0')),
+      ran.calls.where(
+        (call) =>
+            call.startsWith('git push') ||
+            call.startsWith('git tag ') ||
+            call.contains('publish --from-archive'),
       ),
-      reason: 'the operator sees it before the one question',
-    );
-    expect(
-      (ran.report['warnings'] as List).cast<Map>().map((w) => w['code']),
-      contains('RK-PUB-010'),
+      isEmpty,
     );
   });
 

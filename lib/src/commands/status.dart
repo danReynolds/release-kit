@@ -160,15 +160,6 @@ class StatusCommand {
     }
 
     for (final unit in snapshots) {
-      for (final target in unit.targets) {
-        for (final warning in target.historyWarnings) {
-          output.deferWarning(
-            warning,
-            unit: unit.unit.name,
-            target: target.expectation.step.id,
-          );
-        }
-      }
       // What the stage found, such as Pub's validation warnings, is what
       // `rk release` will list before it asks: said here first.
       if (_workRemains(unit)) {
@@ -305,7 +296,6 @@ class StatusCommand {
             currentKnown: target.currentKnown,
             currentDetail: target.currentDetail,
             historyProblems: target.historyProblems,
-            historyWarnings: target.historyWarnings,
             artifacts: [
               for (final artifact in target.artifacts)
                 artifact.status == ArtifactStatus.invalid
@@ -450,7 +440,6 @@ class StatusCommand {
       currentKnown: target.currentKnown,
       currentDetail: target.currentDetail,
       historyProblems: target.historyProblems,
-      historyWarnings: target.historyWarnings,
       artifacts: target.artifacts,
     );
   }
@@ -545,7 +534,6 @@ class StatusCommand {
       currentKnown: current.known,
       currentDetail: currentInspection.detail,
       historyProblems: currentHistory.problems,
-      historyWarnings: currentHistory.warnings,
       artifacts: [
         for (final name in expectation.artifacts)
           _observeArtifact(expectation, name, stage, artifactProblems[name]),

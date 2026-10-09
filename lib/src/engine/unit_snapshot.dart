@@ -111,9 +111,6 @@ final class UnitSnapshot {
   /// The names this release would claim for the first time.
   late final List<TargetClaim> claims;
 
-  /// What the lanes' histories warn of, which does not stop the release.
-  late final List<Diagnostic> historyWarnings;
-
   /// What the lanes' histories refuse, and what the tag guards do.
   late final List<Diagnostic> historyProblems;
   late final List<Diagnostic> tagProblems;
@@ -137,7 +134,6 @@ final class UnitSnapshot {
       for (final (index, target) in targets.indexed) (target, latest[index]),
     ], problems);
     claims = history.claims;
-    historyWarnings = history.warnings;
     historyProblems = List.unmodifiable(problems.found);
     tagProblems = List.unmodifiable(
       inspector.tagGuards(unit, checklist, states),

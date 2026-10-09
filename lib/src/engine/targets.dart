@@ -86,10 +86,8 @@ class TargetObservation {
     required this.currentKnown,
     this.currentDetail,
     Iterable<Diagnostic> historyProblems = const [],
-    Iterable<Diagnostic> historyWarnings = const [],
     required Iterable<ArtifactObservation> artifacts,
   }) : historyProblems = List<Diagnostic>.unmodifiable(historyProblems),
-       historyWarnings = List<Diagnostic>.unmodifiable(historyWarnings),
        artifacts = List<ArtifactObservation>.unmodifiable(artifacts);
 
   final TargetPlan expectation;
@@ -102,8 +100,6 @@ class TargetObservation {
   final String? currentDetail;
   final List<Diagnostic> historyProblems;
 
-  /// What the provider's history warns of, which does not block.
-  final List<Diagnostic> historyWarnings;
   final List<ArtifactObservation> artifacts;
 
   /// The kind of destination, without the thing it points at.

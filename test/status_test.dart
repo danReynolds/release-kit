@@ -2209,8 +2209,8 @@ void releaseReadiness() {
     expect(_targetLine(run.text, 'pub.dev ').trimLeft(), startsWith('✗'));
   });
 
-  test('a package pub.dev lists under another repository is a warning: the '
-      'repository may have moved', () async {
+  test('a package pub.dev lists under another repository prevents release, '
+      'and says what to do if it moved', () async {
     final run = await statusRun(
       source: tree(coreVersion: '0.2.0'),
       state: git(),
@@ -2229,12 +2229,11 @@ void releaseReadiness() {
         'not https://github.com/danReynolds/keybay',
       ),
     );
-    expect(run.text, contains('if the repository moved'));
-    expect(run.report['problems'], isEmpty);
-    final warning = (run.report['warnings'] as List).cast<Map>().singleWhere(
-      (item) => item['code'] == 'RK-PUB-010',
+    expect(run.text, contains('If this repository moved'));
+    expect(
+      (run.report['problems'] as List).cast<Map>().map((item) => item['code']),
+      contains('RK-PUB-010'),
     );
-    expect(warning['target'], isNotNull);
   });
 
   test('an unreachable registry is still reported beside another '

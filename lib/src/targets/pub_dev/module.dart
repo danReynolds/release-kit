@@ -145,26 +145,27 @@ final class PubDevTargetModule extends TargetModule {
         );
       }
       // pub.dev keeps the repository the latest version named. One that
-      // differs is a repository that moved or was renamed, or another
-      // project's package, which pub.dev refuses to let this one upload to.
+      // differs is another project's package, which pub.dev will not let
+      // this one upload to, or this repository's from before it moved. Both
+      // refuse before the tag is pushed: an upload pub.dev refuses would
+      // leave a tag no re-run can finish.
       final project = target.project!;
       final publishedRepository = latest.repository;
       final localRepository = project.pubspec.repository;
       final publishedIdentity = _repositoryIdentity(publishedRepository);
       final localIdentity = _repositoryIdentity(localRepository);
-      final moved =
-          publishedIdentity != null &&
+      if (publishedIdentity != null &&
           localIdentity != null &&
-          publishedIdentity != localIdentity;
-      final inspection = Inspection.exact(
-        detail: 'latest published package is ${latest.version}',
-        evidence: {'version': latest.version.canonical},
-      );
-      return TargetHistory.versioned(
-        inspection: inspection,
-        target: target,
-        warnings: [
-          if (moved)
+          publishedIdentity != localIdentity) {
+        return TargetHistory(
+          inspection: Inspection.conflict(
+            '${target.coordinate} points to another repository on pub.dev',
+            evidence: {
+              'published repository': publishedRepository!,
+              'this repository': localRepository!,
+            },
+          ),
+          problems: [
             Diagnostic(
               code: 'RK-PUB-010',
               message:
@@ -175,12 +176,23 @@ final class PubDevTargetModule extends TargetModule {
                 project.pubspec.nameLine,
               ),
               remedy:
-                  'if the repository moved, this release records where it '
-                  'is now. If the package on pub.dev is another '
-                  "project's, pub.dev will refuse the upload: choose an "
-                  'unclaimed package name in pubspec.yaml',
+                  "if the package is another project's, choose an "
+                  'unclaimed name in pubspec.yaml. If this repository '
+                  'moved, publish this version once yourself with '
+                  '`dart pub publish` in ${project.pubspec.directory}: '
+                  'pub.dev then names the new repository, and rk release '
+                  'finishes the rest',
             ),
-        ],
+          ],
+        );
+      }
+      final inspection = Inspection.exact(
+        detail: 'latest published package is ${latest.version}',
+        evidence: {'version': latest.version.canonical},
+      );
+      return TargetHistory.versioned(
+        inspection: inspection,
+        target: target,
         regressionDiagnostic: (publicVersion) => Diagnostic(
           code: 'RK-MONO-002',
           message:
