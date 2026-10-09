@@ -17,32 +17,6 @@ import 'package:rk/src/tui/use_picker.dart';
 import 'package:test/test.dart';
 import 'fixtures.dart';
 
-class UpdatingProvider extends StubProvider implements InstallationUpdates {
-  UpdatingProvider() : super(InstallationSource.pub);
-  @override
-  Future<AvailableInstallation> latest(
-    ExecutableProject project, {
-    InstallationCheck? check,
-  }) async => const AvailableInstallation('1.3.0');
-  @override
-  Future<Installation> download(
-    ExecutableProject project,
-    AvailableInstallation release,
-    void Function(String) progress,
-  ) async {
-    await preparing?.call();
-    return installed = Installation(
-      source: source,
-      version: release.version,
-      commands: {
-        for (final name in project.commands)
-          name: LaunchCommand('/bin/echo', arguments: [release.version]),
-      },
-      location: '/fixture',
-    );
-  }
-}
-
 class UpdatingBrew extends HomebrewInstallationProvider {
   UpdatingBrew(
     super.tools,
@@ -73,7 +47,7 @@ void main() {
         const SystemTools(),
       );
       final local = StubProvider(InstallationSource.local);
-      final pub = UpdatingProvider();
+      final pub = StubProvider(InstallationSource.pub);
       final manager = InstallationManager(
         store: store,
         providers: {local.source: local, pub.source: pub},
@@ -138,8 +112,8 @@ void main() {
   test(
     'checks are independent, preserve installations, cancel on dispose, and ignore stale replies',
     () async {
-      final pub = UpdatingProvider();
-      await pub.install(project, (_) {});
+      final pub = StubProvider(InstallationSource.pub);
+      await pub.install(project, null, (_) {});
       final states = [
         ProjectInstallations(project, {
           InstallationSource.local: const SourceInspection(),
@@ -236,9 +210,9 @@ void main() {
     'table starts unfocused, row navigation and Enter use installed sources while checks are pending',
     () async {
       final local = StubProvider(InstallationSource.local);
-      final pub = UpdatingProvider();
-      await local.install(project, (_) {});
-      await pub.install(project, (_) {});
+      final pub = StubProvider(InstallationSource.pub);
+      await local.install(project, null, (_) {});
+      await pub.install(project, null, (_) {});
       local.installed = Installation(
         source: local.source,
         version: '1.2.0',
@@ -300,8 +274,8 @@ void main() {
     test(
       'uninstall ${broken ? 'broken owned' : 'inactive'} source requires confirmation and stays open',
       () async {
-        final pub = UpdatingProvider();
-        await pub.install(project, (_) {});
+        final pub = StubProvider(InstallationSource.pub);
+        await pub.install(project, null, (_) {});
         var removed = false, calls = 0, closes = 0;
         final gate = Completer<String>();
         List<ProjectInstallations> inspect() => [
@@ -586,7 +560,7 @@ void main() {
         final release = await provider.latest(project);
         expect(calls, isEmpty);
         expect(
-          (await provider.download(project, release, (_) {})).version,
+          (await provider.install(project, release, (_) {})).version,
           '1.3.0',
         );
         expect(calls.last, [
@@ -637,7 +611,7 @@ void main() {
       expect(release.version, '1.3.0');
       expect(calls, isEmpty);
       await expectLater(
-        provider.download(project, release, (_) {}),
+        provider.install(project, release, (_) {}),
         throwsA(
           isA<InstallationFailure>().having(
             (e) => e.message,

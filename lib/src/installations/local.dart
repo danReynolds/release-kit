@@ -3,6 +3,7 @@ import 'dart:io';
 import '../engine/tools.dart';
 import 'model.dart';
 import 'local_bootstrap.dart';
+import 'metadata.dart';
 import 'provider.dart';
 import 'store.dart';
 
@@ -71,8 +72,15 @@ class LocalInstallationProvider implements InstallationProvider {
   }
 
   @override
+  Future<AvailableInstallation> latest(
+    ExecutableProject project, {
+    InstallationCheck? check,
+  }) async => throw const InstallationFailure(followsCheckout);
+
+  @override
   Future<Installation> install(
     ExecutableProject project,
+    AvailableInstallation? release,
     void Function(String) progress,
   ) async {
     if (dartExecutable == null) {
@@ -87,11 +95,11 @@ class LocalInstallationProvider implements InstallationProvider {
     return _installation(project);
   }
 
+  /// Only the launchers are rk's to remove; a checkout is never deleted.
   @override
-  Future<void> uninstall(
-    ExecutableProject project,
-    Installation installation,
-  ) async {
-    // Only the routing receipt is removed by the coordinator. Never delete a checkout.
-  }
+  Future<void> uninstall(ExecutableProject project) async {}
 }
+
+/// Why Local has no newer version to check or install.
+const followsCheckout =
+    'Local follows this checkout; it has no remote version to update.';

@@ -3,14 +3,28 @@ import 'model.dart';
 import 'metadata.dart';
 
 /// Installation capability lives beside a provider, not in UI/release lifecycle.
-abstract class InstallationProvider {
+abstract interface class InstallationProvider {
   InstallationSource get source;
+
+  /// What this source has installed for [project], read from its native state.
   Future<SourceInspection> inspect(ExecutableProject project);
+
+  /// The newest version offered to [project]. Local throws: it follows the
+  /// checkout.
+  Future<AvailableInstallation> latest(
+    ExecutableProject project, {
+    InstallationCheck? check,
+  });
+
+  /// Installs exactly [release], or what the package manager picks without
+  /// one. A checked release is carried to installation, so a click never
+  /// installs a version resolved since.
   Future<Installation> install(
     ExecutableProject project,
+    AvailableInstallation? release,
     void Function(String) progress,
   );
-  Future<void> uninstall(ExecutableProject project, Installation installation);
+  Future<void> uninstall(ExecutableProject project);
 }
 
 Future<ToolResult> checked(
@@ -47,20 +61,6 @@ Future<Installation> inspectedAfterInstall(
         state.problem ??
             '${provider.source.label} did not install ${project.name}.',
       ));
-}
-
-/// Optional capability owned by remote sources. The checked release is carried
-/// to installation, so a click never silently installs a newly resolved version.
-abstract interface class InstallationUpdates {
-  Future<AvailableInstallation> latest(
-    ExecutableProject project, {
-    InstallationCheck? check,
-  });
-  Future<Installation> download(
-    ExecutableProject project,
-    AvailableInstallation release,
-    void Function(String) progress,
-  );
 }
 
 /// A version a check found; installing it installs exactly this version.

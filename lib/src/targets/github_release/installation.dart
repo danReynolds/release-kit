@@ -17,8 +17,7 @@ import '../../transforms/digest.dart';
 
 /// Public release assets, verified against RK's release manifest before use.
 /// The checksum proves consistency with that release, not independent authorship.
-class GithubInstallationProvider
-    implements InstallationProvider, InstallationUpdates {
+class GithubInstallationProvider implements InstallationProvider {
   GithubInstallationProvider(
     this.tools,
     this.store,
@@ -175,18 +174,13 @@ class GithubInstallationProvider
   @override
   Future<Installation> install(
     ExecutableProject project,
+    AvailableInstallation? release,
     void Function(String) progress,
   ) async {
-    progress('Finding the latest ${project.unit.name} release…');
-    return download(project, await latest(project), progress);
-  }
-
-  @override
-  Future<Installation> download(
-    ExecutableProject project,
-    AvailableInstallation release,
-    void Function(String) progress,
-  ) async {
+    if (release == null) {
+      progress('Finding the latest ${project.unit.name} release…');
+      release = await latest(project);
+    }
     final version = release.version;
     progress('Downloading ${project.name} $version…');
     final bytes = await fetch(release.url!, release.size!);
@@ -250,10 +244,7 @@ class GithubInstallationProvider
   }
 
   @override
-  Future<void> uninstall(
-    ExecutableProject project,
-    Installation installation,
-  ) async {
+  Future<void> uninstall(ExecutableProject project) async {
     final downloads = Directory(store.downloads(project));
     if (downloads.existsSync()) downloads.deleteSync(recursive: true);
   }

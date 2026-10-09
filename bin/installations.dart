@@ -144,10 +144,7 @@ Future<int> _run(
   if (latest && (command != 'install' || sourceName == null || list)) {
     usageError = '--latest needs an explicit rk install source.';
   }
-  if (latest && sourceName == 'local') {
-    usageError =
-        'Local follows this checkout; it has no remote version to update.';
-  }
+  if (latest && sourceName == 'local') usageError = followsCheckout;
   if (yes && (command != 'uninstall' || sourceName == null || list)) {
     usageError = '--yes needs an explicit rk uninstall source.';
   }

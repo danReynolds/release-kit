@@ -85,14 +85,12 @@ class InstallationManager {
     InstallationCheck? check,
   }) async {
     final provider = providers[source];
-    if (!project.sources.contains(source) || provider is! InstallationUpdates) {
+    if (!project.sources.contains(source) || provider == null) {
       throw const InstallationFailure(
         'This source does not provide remote updates.',
       );
     }
-    return _providerCall(
-      () => (provider as InstallationUpdates).latest(project, check: check),
-    );
+    return _providerCall(() => provider.latest(project, check: check));
   }
 
   Future<String> download(
@@ -103,7 +101,7 @@ class InstallationManager {
     InstallationCancellation? cancellation,
   }) async {
     final provider = providers[source];
-    if (!project.sources.contains(source) || provider is! InstallationUpdates) {
+    if (!project.sources.contains(source) || provider == null) {
       throw const InstallationFailure(
         'This source does not provide downloads.',
       );
@@ -112,7 +110,7 @@ class InstallationManager {
     try {
       cancellation?.check();
       final current = store.selected(project)?.source;
-      final inspected = await _providerCall(() => provider!.inspect(project));
+      final inspected = await _providerCall(() => provider.inspect(project));
       if (inspected.problem != null) {
         throw InstallationFailure(inspected.problem!);
       }
@@ -137,11 +135,7 @@ class InstallationManager {
       final installed = previousVersion == release.version
           ? inspected.installation!
           : await _providerCall(
-              () => (provider as InstallationUpdates).download(
-                project,
-                release,
-                progress,
-              ),
+              () => provider.install(project, release, progress),
             );
       // A package manager may already have committed its update. Finish the
       // routing even when cancellation arrived meanwhile. Updating the selected
@@ -212,14 +206,14 @@ class InstallationManager {
         }
         cancellation?.check();
         progress('Removing ${project.name} from ${source.label}…');
-        await _providerCall(() => provider.uninstall(project, installation));
+        await _providerCall(() => provider.uninstall(project));
         return '${project.name} removed from ${source.label}.${source == InstallationSource.local ? ' Checkout kept.' : ''}';
       }
       // Local preparation rebinds this exact checkout and refreshes its native
       // dependency graph. Other installed providers are reused, never upgraded.
       final installation =
           source == InstallationSource.local || inspected.installation == null
-          ? await _providerCall(() => provider.install(project, progress))
+          ? await _providerCall(() => provider.install(project, null, progress))
           : inspected.installation!;
       cancellation?.check();
       if (action == InstallationAction.install) {

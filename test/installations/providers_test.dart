@@ -178,12 +178,12 @@ void main() {
       );
       corrupt = true;
       await expectLater(
-        provider.install(project, (_) {}),
+        provider.install(project, null, (_) {}),
         throwsA(isA<InstallationFailure>()),
       );
       expect(Directory(store.root).existsSync(), isFalse);
       corrupt = false;
-      final installed = await provider.install(project, (_) {});
+      final installed = await provider.install(project, null, (_) {});
       expect(installed.version, '1.1.0');
       expect(
         (await Process.run(installed.commands['orbit']!.executable, [])).stdout,
@@ -193,7 +193,7 @@ void main() {
         (await provider.inspect(project)).installation!.location,
         installed.location,
       );
-      await provider.uninstall(project, installed);
+      await provider.uninstall(project);
       expect(Directory(installed.location).existsSync(), isFalse);
       expect((await provider.inspect(project)).installation, isNull);
       expect(Directory(project.directory).existsSync(), isTrue);
@@ -246,7 +246,7 @@ void main() {
         (await provider.inspect(project)).problem,
         contains('dart pub global activate --no-executables ${project.name}'),
       );
-      final installed = await provider.install(project, (_) {});
+      final installed = await provider.install(project, null, (_) {});
       expect(calls.single, contains('--no-executables'));
       expect(
         installed.commands['orbit']!.arguments.last,
@@ -282,7 +282,7 @@ void main() {
       );
       Directory('${brew.prefix}/Cellar').deleteSync(recursive: true);
       Link('${brew.prefix}/opt/orbit').deleteSync();
-      final result = await provider.install(project, (_) {});
+      final result = await provider.install(project, null, (_) {});
       expect(result.version, '1.2.0');
       expect(
         result.commands['orbit']!.executable,
@@ -391,7 +391,7 @@ void main() {
         releases.publish('1.2.0');
         final release = await manager.latest(project, github.source);
         // The update unpacked and renamed its download, then stopped.
-        await github.download(project, release, (_) {});
+        await github.install(project, release, (_) {});
         expect(await orbit(), 'release 1.1.0\n');
         final fetched = releases.archiveFetches;
         await manager.download(
@@ -434,7 +434,7 @@ void main() {
       () async {
         // Interrupted after unpacking, before rk routed anything; and an
         // earlier run that stopped while unpacking.
-        await github.install(project, (_) {});
+        await github.install(project, null, (_) {});
         Directory('${downloads.path}/preparing-interrupted').createSync();
         final fetched = releases.archiveFetches;
         await act(github.source, InstallationAction.use);

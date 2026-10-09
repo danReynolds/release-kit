@@ -60,6 +60,9 @@ ${binary ? 'binary_platforms = ["linux-x64", "macos-arm64"]' : ''}
   ).single;
 }
 
+/// A source whose installations are records, whose launchers echo: what
+/// they run without a release (`<source> <command>`), or the version of the
+/// release they installed. Its latest version is 1.3.0.
 class StubProvider implements InstallationProvider {
   StubProvider(this.source);
   @override
@@ -72,8 +75,14 @@ class StubProvider implements InstallationProvider {
   Future<SourceInspection> inspect(ExecutableProject project) async =>
       SourceInspection(installation: installed);
   @override
+  Future<AvailableInstallation> latest(
+    ExecutableProject project, {
+    InstallationCheck? check,
+  }) async => const AvailableInstallation('1.3.0');
+  @override
   Future<Installation> install(
     ExecutableProject project,
+    AvailableInstallation? release,
     void Function(String) progress,
   ) async {
     installs++;
@@ -81,23 +90,22 @@ class StubProvider implements InstallationProvider {
     if (fail) throw const InstallationFailure('Preparation failed.');
     return installed = Installation(
       source: source,
-      version: '1.2.0',
+      version: release?.version ?? '1.2.0',
       location: '/fixture',
       commands: {
         for (final command in project.commands)
           command: LaunchCommand(
             '/bin/echo',
-            arguments: [source.name, command],
+            arguments: release == null
+                ? [source.name, command]
+                : [release.version],
           ),
       },
     );
   }
 
   @override
-  Future<void> uninstall(
-    ExecutableProject project,
-    Installation installation,
-  ) async {
+  Future<void> uninstall(ExecutableProject project) async {
     removals++;
     installed = null;
   }

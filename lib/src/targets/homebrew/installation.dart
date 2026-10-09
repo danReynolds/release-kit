@@ -9,8 +9,7 @@ import '../../transforms/digest.dart';
 import '../../installations/model.dart';
 import '../../installations/provider.dart';
 
-class HomebrewInstallationProvider
-    implements InstallationProvider, InstallationUpdates {
+class HomebrewInstallationProvider implements InstallationProvider {
   HomebrewInstallationProvider(
     this.tools,
     this.brew, {
@@ -155,58 +154,48 @@ class HomebrewInstallationProvider
     return AvailableInstallation(version.canonical, sha256: Sha256.hex(bytes));
   }
 
-  @override
-  Future<Installation> download(
-    ExecutableProject project,
-    AvailableInstallation release,
-    void Function(String) progress,
-  ) async {
-    final tap = project.unit.tapFor(project.repository!);
-    progress('Refreshing Homebrew…');
-    await checked(tools, brew!, ['tap', tap], environment: _environment);
-    await checked(tools, brew!, ['update'], environment: _environment);
-    // Refresh may discover a release newer than the one the user clicked.
-    // Compare the complete formula before allowing Homebrew to execute it.
-    // Read bytes directly: `brew cat` can invoke a user-configured pager or
-    // even install bat, which is outside this operation's scope.
-    final repository = (await checked(tools, brew!, [
-      '--repository',
-      tap,
-    ], environment: _environment)).stdout.trim();
-    if (!repository.startsWith('/')) {
-      throw const InstallationFailure(
-        'Homebrew returned a relative tap directory.',
-      );
-    }
-    final formula = File(
-      '$repository/Formula/${project.formula.split('/').last}.rb',
-    ).readAsBytesSync();
-    if (Sha256.hex(formula) != release.sha256) {
-      throw const InstallationFailure(
-        'The Homebrew release changed since the check.',
-        'Refresh Available and download again.',
-      );
-    }
-    progress('Installing ${project.name} ${release.version} with Homebrew…');
-    final installed = (await inspect(project)).installation;
-    return _brew(project, upgrade: installed != null);
-  }
-
+  /// Installs without linking into Homebrew's bin. A checked [release]
+  /// refreshes the tap first and upgrades an installed formula; the launcher
+  /// runs it through `opt/<name>` either way.
   @override
   Future<Installation> install(
     ExecutableProject project,
+    AvailableInstallation? release,
     void Function(String) progress,
   ) async {
-    progress('Installing ${project.formula}…');
-    return _brew(project, upgrade: false);
-  }
-
-  /// Installs without linking into Homebrew's bin, or upgrades only this
-  /// formula; the launcher runs it through `opt/<name>`.
-  Future<Installation> _brew(
-    ExecutableProject project, {
-    required bool upgrade,
-  }) async {
+    var upgrade = false;
+    if (release == null) {
+      progress('Installing ${project.formula}…');
+    } else {
+      final tap = project.unit.tapFor(project.repository!);
+      progress('Refreshing Homebrew…');
+      await checked(tools, brew!, ['tap', tap], environment: _environment);
+      await checked(tools, brew!, ['update'], environment: _environment);
+      // Refresh may discover a release newer than the one the user clicked.
+      // Compare the complete formula before allowing Homebrew to execute it.
+      // Read bytes directly: `brew cat` can invoke a user-configured pager or
+      // even install bat, which is outside this operation's scope.
+      final repository = (await checked(tools, brew!, [
+        '--repository',
+        tap,
+      ], environment: _environment)).stdout.trim();
+      if (!repository.startsWith('/')) {
+        throw const InstallationFailure(
+          'Homebrew returned a relative tap directory.',
+        );
+      }
+      final formula = File(
+        '$repository/Formula/${project.formula.split('/').last}.rb',
+      ).readAsBytesSync();
+      if (Sha256.hex(formula) != release.sha256) {
+        throw const InstallationFailure(
+          'The Homebrew release changed since the check.',
+          'Refresh Available and download again.',
+        );
+      }
+      progress('Installing ${project.name} ${release.version} with Homebrew…');
+      upgrade = (await inspect(project)).installation != null;
+    }
     await checked(tools, brew!, [
       upgrade ? 'upgrade' : 'install',
       '--formula',
@@ -217,10 +206,7 @@ class HomebrewInstallationProvider
   }
 
   @override
-  Future<void> uninstall(
-    ExecutableProject project,
-    Installation installation,
-  ) async {
+  Future<void> uninstall(ExecutableProject project) async {
     await checked(tools, brew!, [
       'uninstall',
       '--formula',
