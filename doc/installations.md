@@ -183,9 +183,9 @@ another first. Local is the checkout itself, so there is nothing to uninstall.
 Uninstalling Pub or Homebrew removes that package manager's installation,
 including one installed outside RK. GitHub uninstall removes RK's downloads
 for that project. An update replaces the previous download once the new one is
-installed and routed. A download is recorded by its directory, so a run
-interrupted after unpacking finishes on the next run instead of refusing to
-overwrite it.
+installed and routed. A download is recorded by its directory, so an install
+or update interrupted after unpacking finishes when it runs again, without
+downloading again.
 
 If a checkout or native installation moves or disappears, launchers stop with
 repair instructions. They do not fall back to another source. Homebrew and Pub

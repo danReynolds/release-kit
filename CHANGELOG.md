@@ -132,7 +132,8 @@ published finishes with 0.1.14.
 - Switching rk's own source no longer copies, or compiles, the running rk
   first.
 - A GitHub update replaces the previous download, uninstall removes every
-  download, and a run interrupted after unpacking finishes on the next run.
+  download, and an install or update interrupted after unpacking finishes
+  when it runs again, without downloading again.
 - rk reads the selection back from the launchers, each of which names its
   project and source, and keeps GitHub downloads under
   `~/.local/share/rk/downloads/<package>`, so adding or renaming a project's

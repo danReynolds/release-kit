@@ -384,6 +384,23 @@ void main() {
     );
 
     test(
+      'an update interrupted before routing finishes when it runs again',
+      () async {
+        await act(github.source, InstallationAction.use);
+        releases.publish('1.2.0');
+        final release = await manager.latest(project, github.source);
+        // The update unpacked and renamed its download, then stopped.
+        await github.download(project, release, (_) {});
+        expect(await orbit(), 'release 1.1.0\n');
+        final fetched = releases.archiveFetches;
+        await manager.download(project, release, progress: (_) {});
+        expect(await orbit(), 'release 1.2.0\n');
+        expect(downloads.listSync(), hasLength(1));
+        expect(releases.archiveFetches, fetched);
+      },
+    );
+
+    test(
       'a renamed origin keeps its download, and uninstall still removes it',
       () async {
         await act(github.source, InstallationAction.use);

@@ -129,7 +129,7 @@ class InstallationManager {
           ? null
           : Version.tryParse(previousVersion);
       final next = Version.tryParse(release.version);
-      if (previousVersion == release.version) {
+      if (previousVersion == release.version && current != release.source) {
         return '${project.name} · ${release.source.label} ${release.version} is already installed. Source selection unchanged.';
       }
       if (previous != null && next != null && previous.compareTo(next) > 0) {
@@ -140,13 +140,17 @@ class InstallationManager {
       }
       cancellation?.check();
       if (current == release.source) store.checkOwnership(project);
-      final installed = await _providerCall(
-        () => (provider as InstallationUpdates).download(
-          project,
-          release,
-          progress,
-        ),
-      );
+      // An update of the selected source that stopped after installing, before
+      // routing, finishes here: the launchers move to the version installed.
+      final installed = previousVersion == release.version
+          ? inspected.installation!
+          : await _providerCall(
+              () => (provider as InstallationUpdates).download(
+                project,
+                release,
+                progress,
+              ),
+            );
       if (installed.source != release.source ||
           installed.version != release.version) {
         throw const InstallationFailure(
