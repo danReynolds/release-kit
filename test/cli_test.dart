@@ -438,6 +438,48 @@ publish = ["pub.dev"]
       }
     });
 
+    test('a changelog rk cannot read is its own unit\'s problem', () {
+      final repo = Rk.repository(scratch, 'unreadable-changelog', {
+        'release.toml': '''
+schema = 2
+
+[release.a]
+path = "a"
+publish = ["git-tag"]
+tag = "a-v{version}"
+
+[release.b]
+path = "b"
+publish = ["git-tag"]
+tag = "b-v{version}"
+''',
+        'a/pubspec.yaml': 'name: a_pkg\nversion: 1.0.0\npublish_to: none\n',
+        'b/pubspec.yaml': 'name: b_pkg\nversion: 1.0.0\npublish_to: none\n',
+        'b/CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
+      });
+      File(
+        '${repo.root}/a/CHANGELOG.md',
+      ).writeAsBytesSync(latin1.encode('## 1.0.0\n\nCaf\u00e9.\n'));
+      repo.commit();
+
+      final plan = repo(['plan', '--json']);
+      expect(plan.code, 0, reason: plan.all);
+      expect(plan.problems, isEmpty);
+
+      final status = repo(['status', '--json']);
+      final changelogs = [
+        for (final problem in status.problems)
+          if ('${problem['code']}'.startsWith('RK-CHG')) problem,
+      ];
+      expect(changelogs.single['unit'], 'a', reason: status.all);
+      expect(changelogs.single['code'], 'RK-CHG-001');
+      expect(changelogs.single['remedy'], contains('it is not UTF-8 text'));
+      expect(
+        status.problems.map((problem) => problem['code']),
+        isNot(contains('RK-SRC-003')),
+      );
+    });
+
     test(
       'shows Git-target topology before the repository has Git identity',
       () {

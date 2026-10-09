@@ -1,4 +1,5 @@
 import 'diagnostic.dart';
+import 'source_tree.dart';
 import 'version.dart';
 
 /// Whether a changelog records the version being released.
@@ -19,11 +20,11 @@ class Changelog {
     return false;
   }
 
-  /// Checks [changelog], the text of the changelog beside
-  /// [manifestDirectory], recording a problem when the file or the entry is
-  /// missing.
+  /// Checks [changelog], the changelog beside [manifestDirectory] as it was
+  /// read, recording a problem when the file is missing or cannot be read,
+  /// or has no entry.
   static void check({
-    required String? changelog,
+    required SourceText? changelog,
     required String manifestDirectory,
     required String packageName,
     required Version version,
@@ -33,7 +34,20 @@ class Changelog {
         ? 'CHANGELOG.md'
         : '$manifestDirectory/CHANGELOG.md';
 
-    if (changelog == null) {
+    if (changelog?.unreadable case final reason?) {
+      diagnostics.add(
+        'RK-CHG-001',
+        '"$packageName" has a changelog rk cannot read',
+        source: SourceLocation(path),
+        remedy:
+            '$path: $reason\n'
+            'make it a readable UTF-8 file in the repository, with an entry '
+            'for $version',
+      );
+      return;
+    }
+    final text = changelog?.text;
+    if (text == null) {
       diagnostics.add(
         'RK-CHG-001',
         '"$packageName" has no changelog',
@@ -45,7 +59,7 @@ class Changelog {
       return;
     }
 
-    if (!mentions(changelog, version)) {
+    if (!mentions(text, version)) {
       diagnostics.add(
         'RK-CHG-001',
         'the changelog has no entry for $version',

@@ -107,9 +107,6 @@ final class WorkingTree implements SourceTree {
   String? read(String path) {
     final bytes = readBytes(path);
     if (bytes == null) return null;
-    // Outside Git a file that is not UTF-8 still throws: it is the genuine
-    // crash test/end_to_end_test.dart proves the crash path against.
-    if (!git) return utf8.decode(bytes);
     try {
       return utf8.decode(bytes);
     } on FormatException {
@@ -261,8 +258,9 @@ final class CommitFiles {
 
   /// The object at each path (`<commit>:<path>`; '' is the root tree), in
   /// one `git cat-file --batch`, or null where the commit has none. A path
-  /// that contains a newline, which the protocol cannot carry, is read
-  /// alone, and must be there.
+  /// the protocol cannot carry, one with a newline in it or a carriage
+  /// return at its end, as macOS's `Icon\r` has, is read alone, and must be
+  /// there.
   Future<Map<String, GitObject?>> read(Iterable<String> paths) async {
     final found = <String, GitObject?>{};
     final batched = <String>[];
@@ -271,7 +269,7 @@ final class CommitFiles {
       if (path.split('/').contains('..')) {
         throw ArgumentError('path escapes the commit: $path');
       }
-      if (path.contains('\n')) {
+      if (path.contains('\n') || path.endsWith('\r')) {
         found[path] = await _readAlone(path);
       } else {
         batched.add(path);
@@ -369,13 +367,65 @@ class SourceUnreadable implements Exception {
   String toString() => '$path could not be read: $reason';
 }
 
+/// A file as a source holds it: its text, null when there is none; or, for
+/// one that is there and could not be read, why.
+typedef SourceText = ({String? text, String? unreadable});
+
+/// [path], in a commit whose symbolic links hold [links], with every link on
+/// the way to it followed, as a checkout reads it: a stage reads its source
+/// this way, and status and release its changelogs. Null when a link leads
+/// out of the commit, or round in a circle.
+String? followLinks(String path, Map<String, String> links) {
+  var current = path;
+  for (var hops = 0; hops < 40; hops++) {
+    final parts = current.isEmpty ? const <String>[] : current.split('/');
+    var end = 1;
+    while (end <= parts.length &&
+        !links.containsKey(parts.take(end).join('/'))) {
+      end++;
+    }
+    if (end > parts.length) return current;
+    final link = parts.take(end).join('/');
+    final target = withinCommit(parentOf(link), links[link]!);
+    if (target == null) return null;
+    current = [
+      target,
+      ...parts.skip(end),
+    ].where((part) => part.isNotEmpty).join('/');
+  }
+  return null;
+}
+
+/// [relative], written from [directory], as a path in the commit; null when
+/// it is absolute or climbs out of the commit.
+String? withinCommit(String directory, String relative) {
+  if (relative.startsWith('/')) return null;
+  final parts = [if (directory.isNotEmpty) ...directory.split('/')];
+  for (final part in relative.split('/')) {
+    if (part.isEmpty || part == '.') continue;
+    if (part != '..') {
+      parts.add(part);
+    } else if (parts.isEmpty) {
+      return null;
+    } else {
+      parts.removeLast();
+    }
+  }
+  return parts.join('/');
+}
+
+/// The directory holding [path], or '' at the root.
+String parentOf(String path) {
+  final cut = path.lastIndexOf('/');
+  return cut < 0 ? '' : path.substring(0, cut);
+}
+
 /// The segments of [path] when it names a place inside a directory: relative,
-/// with no empty, `.` or `..` segment, backslash, NUL or drive letter.
+/// with no empty, `.` or `..` segment, or NUL. rk runs on POSIX, where a
+/// backslash or a colon is part of a name.
 List<String>? relativeSegments(String path) {
   final parts = path.split('/');
-  if (path.contains('\\') ||
-      path.contains('\u0000') ||
-      RegExp(r'^[A-Za-z]:').hasMatch(path) ||
+  if (path.contains('\u0000') ||
       parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
     return null;
   }

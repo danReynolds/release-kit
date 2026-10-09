@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/engine/config.dart';
@@ -5,6 +6,7 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/release_source.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/stage_source.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
@@ -52,7 +54,7 @@ publish = ["pub.dev"]
     expect(source.inRepository, isTrue);
     final unit = read.resolution.unit('tool')!;
     expect(unit.version.canonical, '1.0.0');
-    expect(unit.projects.single.changelog, '## 1.0.0\n');
+    expect(unit.projects.single.changelog?.text, '## 1.0.0\n');
     expect(source.git.stagingProblem(), isNull);
   });
 
@@ -100,42 +102,111 @@ publish = ["git-tag", "github-release"]
   );
 
   test(
-    'a committed changelog that links into the commit is read through',
+    'a committed changelog reads as a stage reads it, link by link',
     () async {
       if (Platform.isWindows) return;
-      _write(root, 'packages/a/pubspec.yaml', 'name: a\nversion: 1.0.0\n');
-      Link(
-        '${root.path}/packages/a/CHANGELOG.md',
-      ).createSync('../../CHANGELOG.md');
-      _write(root, 'release.toml', '''
+      final links = {
+        'one': '../../CHANGELOG.md',
+        'chain': '../../docs/CHANGELOG.md',
+        'directory': '../../notes/CHANGELOG.md',
+        'out': '../../../outside.md',
+        'absolute': '/etc/hosts',
+        'circle': 'CHANGELOG.md',
+        'dangling': 'gone.md',
+      };
+      _write(
+        root,
+        'release.toml',
+        [
+          'schema = 2',
+          for (final name in links.keys)
+            '[release.$name]\npath = "packages/$name"\npublish = ["pub.dev"]',
+        ].join('\n\n'),
+      );
+      _write(root, 'docs/real.md', '## 1.0.0\n');
+      _write(root, 'docs/notes/CHANGELOG.md', '## 1.0.0\n');
+      Link('${root.path}/docs/CHANGELOG.md').createSync('real.md');
+      Link('${root.path}/notes').createSync('docs/notes');
+      links.forEach((name, target) {
+        _write(
+          root,
+          'packages/$name/pubspec.yaml',
+          'name: $name\nversion: 1.0.0\n',
+        );
+        Link('${root.path}/packages/$name/CHANGELOG.md').createSync(target);
+      });
+      commitAll();
+      final source = await ReleaseSource.open(root.path);
+
+      final read = await source.readConfig() as ConfigResolved;
+      final stage = await StageSourceSnapshot.capture(
+        source.tree,
+        commit: source.git.head,
+      );
+
+      for (final name in links.keys) {
+        final changelog = read.resolution
+            .unit(name)!
+            .projects
+            .single
+            .changelog!;
+        final staged = stage.read('packages/$name/CHANGELOG.md');
+        expect(changelog.text, staged, reason: name);
+        expect(
+          changelog.unreadable,
+          staged == null
+              ? 'it is a symbolic link to no file in the commit'
+              : null,
+          reason: name,
+        );
+      }
+      expect(
+        stage.read('packages/chain/CHANGELOG.md'),
+        '## 1.0.0\n',
+        reason: 'the stage reads through a chain of links',
+      );
+      expect(stage.read('packages/directory/CHANGELOG.md'), '## 1.0.0\n');
+    },
+  );
+
+  test('a changelog that cannot be read is its own unit\'s problem', () async {
+    _write(root, 'packages/a/pubspec.yaml', 'name: a\nversion: 1.0.0\n');
+    File(
+      '${root.path}/packages/a/CHANGELOG.md',
+    ).writeAsBytesSync(latin1.encode('## 1.0.0\n- caf\u00e9\n'));
+    _write(root, 'release.toml', '''
 schema = 2
+
+[release.tool]
+publish = ["pub.dev"]
 
 [release.a]
 path = "packages/a"
 publish = ["pub.dev"]
 ''');
-      commitAll();
-
+    Future<void> expectRead(String where) async {
       final read =
           await (await ReleaseSource.open(root.path)).readConfig()
               as ConfigResolved;
+      final changelogs = {
+        for (final unit in read.resolution.units)
+          unit.name: unit.projects.single.changelog!,
+      };
+      expect(changelogs['tool']!.text, '## 1.0.0\n', reason: where);
+      expect(changelogs['a']!.text, isNull, reason: where);
       expect(
-        read.resolution.unit('a')!.projects.single.changelog,
-        '## 1.0.0\n',
+        changelogs['a']!.unreadable,
+        'it is not UTF-8 text',
+        reason: where,
       );
+    }
 
-      // One that leads out of the commit is refused, as a stage refuses it.
-      Link('${root.path}/packages/a/CHANGELOG.md')
-        ..deleteSync()
-        ..createSync('/etc/hosts');
-      git(['commit', '-qam', 'out']);
-      final refused =
-          await (await ReleaseSource.open(root.path)).readConfig()
-              as ConfigProblems;
-      expect(refused.problems.single.code, 'RK-SRC-003');
-      expect(refused.problems.single.remedy, contains('symbolic link'));
-    },
-  );
+    await expectRead('outside Git');
+    commitAll();
+    await expectRead('at the commit');
+    _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.0.0\n# edited\n');
+    await expectRead('in the working tree');
+  });
 
   test('installing reads no changelog: a link to one is never refused', () {
     if (Platform.isWindows) return;
@@ -148,6 +219,10 @@ publish = ["pub.dev"]
       Diagnostics(),
     )!;
 
+    expect(
+      Manifests.pathsFor(config, releasing: false),
+      isNot(contains('CHANGELOG.md')),
+    );
     final installing = Resolution.resolve(
       config,
       tree,
@@ -155,9 +230,11 @@ publish = ["pub.dev"]
       releasing: false,
     );
     expect(installing!.unit('tool')!.projects.single.changelog, isNull);
+    // A release reads it, and its unit is told it cannot.
+    final releasing = Resolution.resolve(config, tree, Diagnostics())!;
     expect(
-      () => Resolution.resolve(config, tree, Diagnostics()),
-      throwsA(isA<SourceUnreadable>()),
+      releasing.unit('tool')!.projects.single.changelog!.unreadable,
+      contains('symbolic link'),
     );
   });
 
@@ -219,6 +296,32 @@ publish = ["pub.dev"]
       }
     },
   );
+
+  test('a project path is a POSIX path: a colon is part of a name', () async {
+    _write(root, 'release.toml', '''
+schema = 2
+
+[release.tool]
+path = "c:tool"
+publish = ["pub.dev"]
+''');
+    _write(root, 'c:tool/pubspec.yaml', 'name: tool\nversion: 1.0.0\n');
+    Future<void> expectResolved(String where) async {
+      final read = await (await ReleaseSource.open(root.path)).readConfig();
+      expect(
+        read,
+        isA<ConfigResolved>(),
+        reason: '$where: ${read is ConfigProblems ? read.problems : ''}',
+      );
+    }
+
+    await expectResolved('outside Git');
+    commitAll();
+    await expectResolved('at the commit');
+    _write(root, 'README.md', 'uncommitted\n');
+    await expectResolved('in the working tree');
+    expect(relativeSegments(r'a\b:c'), [r'a\b:c'], reason: 'so is a backslash');
+  });
 
   test('a repository without release.toml is not onboarded', () async {
     File('${root.path}/release.toml').deleteSync();

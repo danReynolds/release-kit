@@ -84,6 +84,16 @@ void main() {
     expect(snapshot.exists('packages/app/elsewhere.md'), isFalse);
   });
 
+  test(
+    'a file named as macOS names a folder\'s icon, Icon\\r, is staged',
+    () async {
+      final snapshot = await _committed({'Icon\r': 'icon\n', 'a.txt': 'a\n'});
+
+      expect(snapshot.trackedFiles(), ['Icon\r', 'a.txt']);
+      expect(snapshot.read('Icon\r'), 'icon\n');
+    },
+  );
+
   test('an export carries what the links it holds lead to', () async {
     final snapshot = await _committed(
       {

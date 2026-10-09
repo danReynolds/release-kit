@@ -1,6 +1,7 @@
 @Timeout(Duration(minutes: 2))
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'fixtures.dart';
@@ -94,6 +95,17 @@ void main() {
       expect(result.stdout, contains('dogfood'));
     },
   );
+
+  test('a changelog rk cannot read is no installation\'s business', () {
+    final project = fixture(scratch);
+    File(
+      '${project.directory}/CHANGELOG.md',
+    ).writeAsBytesSync(latin1.encode('## 1.2.0\n\nCaf\u00e9.\n'));
+    for (final command in ['use', 'install', 'uninstall']) {
+      final listed = rk(project.directory, [command, '--list']);
+      expect(listed.code, 0, reason: '$command: ${listed.all}');
+    }
+  });
 
   test(
     'multi-project config lists each executable package, requires -p and excludes SDKs',

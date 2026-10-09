@@ -85,7 +85,7 @@ void main() {
     test('passes when the entry is there', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        changelog: '## 0.2.0\n\n- a change\n',
+        changelog: (text: '## 0.2.0\n\n- a change\n', unreadable: null),
         manifestDirectory: 'packages/keybay',
         packageName: 'keybay',
         version: v('0.2.0'),
@@ -113,7 +113,7 @@ void main() {
     test('reports a missing entry with the heading to add', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        changelog: '## 0.1.0\n',
+        changelog: (text: '## 0.1.0\n', unreadable: null),
         manifestDirectory: '.',
         packageName: 'keybay',
         version: v('0.2.0'),
@@ -121,6 +121,24 @@ void main() {
       );
       expect(diagnostics.found.single.code, 'RK-CHG-001');
       expect(diagnostics.found.single.remedy, contains('## 0.2.0'));
+    });
+
+    test('reports one that cannot be read, and why', () {
+      final diagnostics = Diagnostics();
+      Changelog.check(
+        changelog: (text: null, unreadable: 'it is not UTF-8 text'),
+        manifestDirectory: 'packages/keybay',
+        packageName: 'keybay',
+        version: v('0.2.0'),
+        diagnostics: diagnostics,
+      );
+      final problem = diagnostics.found.single;
+      expect(problem.code, 'RK-CHG-001');
+      expect(problem.message, '"keybay" has a changelog rk cannot read');
+      expect(
+        problem.remedy,
+        startsWith('packages/keybay/CHANGELOG.md: it is not UTF-8 text\n'),
+      );
     });
   });
 

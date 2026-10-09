@@ -156,10 +156,11 @@ release an earlier rk left partly published finishes with that rk.
   pubspec.yaml, Cargo.toml and CHANGELOG.md. `rk plan` on Fleury's four
   packages reads them in about 0.03s instead of 0.1s.
 - `rk status` and `rk release` check the changelog of the commit they
-  release, not the working tree's. A changelog committed as a link to
-  another file in the commit is read through it, as a stage reads it; one
-  that cannot be read is refused up front (`RK-SRC-003`), as an unreadable
-  pubspec is. `rk use` does not read changelogs.
+  release, not the working tree's, and read one committed as a link the
+  way a stage does: through every link on the way, within the commit. One
+  rk cannot read, such as one that is not UTF-8 or a link out of the
+  commit, is reported on its own unit (`RK-CHG-001`) rather than stopping
+  rk; `rk use` does not read changelogs.
 - A table header inside an array of tables, such as
   `[release.core.project.x]`, is a TOML error (`RK-TOML-001`).
 - A diagnostic code names the kind of mistake; the message names the
