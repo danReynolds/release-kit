@@ -928,11 +928,15 @@ final class LiveProgress {
     required Duration pipeDelay,
     required this.emitSlowToNonTerminal,
     required this.showElapsed,
-  }) : _pipeDelay = pipeDelay {
+  }) {
     model = ProgressModel(
       title: title,
       clock: _output._clock,
       changed: _changed,
+      announce: emitSlowToNonTerminal && !_output.isTerminal
+          ? (row) => _writeDurableRow(row, active: true, inPipe: true)
+          : null,
+      heartbeatAfter: pipeDelay,
     );
     if (_output.isTerminal) {
       _delay = Timer(_delayDuration, _showTerminal);
@@ -942,18 +946,14 @@ final class LiveProgress {
   final Output _output;
   final Duration _delayDuration;
 
-  /// How long a row runs before a pipe is told about it. Only a wait a
-  /// reader would wonder about, such as a long build or a sign-in, is
-  /// worth a line: shorter ones made the transcript differ from one run to
-  /// the next with how fast a read happened to answer.
-  final Duration _pipeDelay;
+  /// Whether a pipe hears of a row still running after `pipeDelay`. Only a
+  /// wait a reader would wonder about, such as a long build or a sign-in,
+  /// is worth a line: shorter ones made the transcript differ from one run
+  /// to the next with how fast a read happened to answer.
   final bool emitSlowToNonTerminal;
   final bool showElapsed;
   late final ProgressModel model;
   final Map<String, ProgressRowController> _controllers = {};
-  final Map<String, Timer> _nonTerminalDelays = {};
-  final Map<String, ProgressActivity> _nonTerminalPrinted = {};
-  final Map<String, ProgressActivity> _nonTerminalScheduled = {};
   Timer? _delay;
   Timer? _ticker;
   var _drawnLines = 0;
@@ -986,41 +986,12 @@ final class LiveProgress {
     // A row settles once, so this records it once. One still running when
     // its board was discarded was recorded then, as unfinished.
     if (row.took case final took?) _time(row, took, note: row.note);
-    if (_output.isTerminal) {
-      if (_visible && !_suspended) {
-        _draw();
-      } else if (_delayElapsed && !_suspended && model.rows.isNotEmpty) {
-        _showTerminal();
-      }
-      return;
+    if (!_output.isTerminal) return;
+    if (_visible && !_suspended) {
+      _draw();
+    } else if (_delayElapsed && !_suspended && model.rows.isNotEmpty) {
+      _showTerminal();
     }
-    if (!emitSlowToNonTerminal) return;
-    if (row.state != ProgressRowState.active) {
-      _nonTerminalDelays.remove(row.id)?.cancel();
-      _nonTerminalScheduled.remove(row.id);
-      return;
-    }
-    if (row.state != ProgressRowState.active || row.activity == null) return;
-    final activity = row.activity!;
-    if (_nonTerminalPrinted[row.id] == activity) {
-      return;
-    }
-    if ((_nonTerminalDelays[row.id]?.isActive ?? false) &&
-        _nonTerminalScheduled[row.id] == activity) {
-      return;
-    }
-    _nonTerminalDelays.remove(row.id)?.cancel();
-    _nonTerminalScheduled[row.id] = activity;
-    _nonTerminalDelays[row.id] = Timer(_pipeDelay, () {
-      if (_closed ||
-          row.state != ProgressRowState.active ||
-          row.activity != activity) {
-        return;
-      }
-      _nonTerminalScheduled.remove(row.id);
-      _nonTerminalPrinted[row.id] = activity;
-      _writeDurableRow(row, active: true, inPipe: true);
-    });
   }
 
   /// Clears the transient region so a durable line can join the transcript;
@@ -1243,16 +1214,15 @@ final class LiveProgress {
       if (row.state != ProgressRowState.active) continue;
       if (row.ranFor case final ran?) _time(row, ran, note: 'unfinished');
     }
-    final printedRows = !_output.isTerminal && emitSlowToNonTerminal
-        ? model.rows
-              .where(
-                (row) =>
-                    _nonTerminalPrinted.containsKey(row.id) &&
-                    row.state != ProgressRowState.pending &&
-                    row.state != ProgressRowState.active,
-              )
-              .toList()
-        : const <ProgressRow>[];
+    // A pipe told a row was under way hears how it ended.
+    final printedRows = model.rows
+        .where(
+          (row) =>
+              row.announced &&
+              row.state != ProgressRowState.pending &&
+              row.state != ProgressRowState.active,
+        )
+        .toList();
     _closeTimers();
     _erase();
     _closed = true;
@@ -1379,11 +1349,7 @@ final class LiveProgress {
   void _closeTimers() {
     _delay?.cancel();
     _ticker?.cancel();
-    for (final timer in _nonTerminalDelays.values) {
-      timer.cancel();
-    }
-    _nonTerminalDelays.clear();
-    _nonTerminalScheduled.clear();
+    model.stopHeartbeats();
   }
 
   void _erase() {

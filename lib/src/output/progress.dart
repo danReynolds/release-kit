@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'output.dart' show oneLine;
 
 /// Long enough that a preparation board helps instead of flashing briefly.
@@ -142,24 +144,20 @@ final class ProgressRowController {
 
 /// One row in a fixed-height progress surface.
 final class ProgressRow {
-  ProgressRow._({
+  ProgressRow._(
+    this._model, {
     required this.id,
     required String label,
     required String? coordinate,
     required this.group,
-    required ProgressElapsed Function() clock,
-    required void Function(ProgressRow row) changed,
   }) : label = oneLine(label),
-       coordinate = coordinate == null ? null : oneLine(coordinate, max: 160),
-       _clock = clock,
-       _changed = changed;
+       coordinate = coordinate == null ? null : oneLine(coordinate, max: 160);
 
+  final ProgressModel _model;
   final String id;
   final String label;
   final String? coordinate;
   final String? group;
-  final ProgressElapsed Function() _clock;
-  final void Function(ProgressRow row) _changed;
 
   ProgressRowState _state = ProgressRowState.pending;
   ProgressRowMark _mark = ProgressRowMark.none;
@@ -173,6 +171,11 @@ final class ProgressRow {
   /// each new activity, this one does not.
   ProgressElapsed? _activeSince;
   Duration? _took;
+
+  /// A pipe's heartbeat: restarted when the row's activity changes, it says
+  /// the activity once if the row is still at it when the timer fires.
+  Timer? _heartbeat;
+  ProgressActivity? _announced;
 
   ProgressRowState get state => _state;
   ProgressRowMark get mark => _mark;
@@ -194,12 +197,17 @@ final class ProgressRow {
   /// What the row is about: its label, and its coordinate when it has one.
   String get subject => coordinate == null ? label : '$label · $coordinate';
 
+  /// Whether a pipe has been told this row is under way.
+  bool get announced => _announced != null;
+
+  void _changed() => _model._changed(this);
+
   void _wait(String result) {
     if (_state != ProgressRowState.pending) {
       throw StateError('only pending progress row $id can wait');
     }
     _note = oneLine(result);
-    _changed(this);
+    _changed();
   }
 
   void _begin(ProgressActivity next, {String? detail}) {
@@ -209,13 +217,27 @@ final class ProgressRow {
       throw StateError('settled progress row $id cannot become active');
     }
     final safeDetail = detail == null ? null : oneLine(detail);
-    if (_activity != next) _elapsed = _clock();
+    if (_activity != next) {
+      _elapsed = _model._clock();
+      if (_model._announce case final announce?) {
+        _heartbeat?.cancel();
+        _heartbeat = Timer(_model._heartbeatAfter, () {
+          if (_state != ProgressRowState.active ||
+              _activity != next ||
+              _announced == next) {
+            return;
+          }
+          _announced = next;
+          announce(this);
+        });
+      }
+    }
     _activeSince ??= _elapsed;
     _activity = next;
     _detail = safeDetail;
     _note = null;
     _state = ProgressRowState.active;
-    _changed(this);
+    _changed();
   }
 
   void _complete(
@@ -251,7 +273,8 @@ final class ProgressRow {
     _mark = mark;
     _emphasis = emphasis;
     _state = ProgressRowState.complete;
-    _changed(this);
+    _heartbeat?.cancel();
+    _changed();
   }
 
   void _fail({ProgressActivity? activity, String? note}) {
@@ -267,7 +290,8 @@ final class ProgressRow {
     _mark = ProgressRowMark.none;
     _emphasis = ProgressRowEmphasis.plain;
     _state = ProgressRowState.failed;
-    _changed(this);
+    _heartbeat?.cancel();
+    _changed();
   }
 
   void _notAttempted(String result) {
@@ -285,7 +309,8 @@ final class ProgressRow {
     // A drained lane's row did run, until the stop; its time stands.
     _took = _activeSince?.call();
     _state = ProgressRowState.notAttempted;
-    _changed(this);
+    _heartbeat?.cancel();
+    _changed();
   }
 }
 
@@ -294,17 +319,25 @@ final class ProgressRow {
 /// Rendering lives in [Output]; this model is deliberately terminal-agnostic
 /// so target contract tests can assert lifecycle behavior without ANSI text.
 final class ProgressModel {
+  /// With [announce], a pipe hears of a row still at one activity after
+  /// [heartbeatAfter], once, through it.
   ProgressModel({
     required String title,
     required ProgressElapsed Function() clock,
     required void Function(ProgressRow row) changed,
+    void Function(ProgressRow row)? announce,
+    Duration heartbeatAfter = const Duration(seconds: 10),
   }) : title = oneLine(title),
        _clock = clock,
-       _changed = changed;
+       _changed = changed,
+       _announce = announce,
+       _heartbeatAfter = heartbeatAfter;
 
   final String title;
   final ProgressElapsed Function() _clock;
   final void Function(ProgressRow row) _changed;
+  void Function(ProgressRow row)? _announce;
+  final Duration _heartbeatAfter;
   final List<ProgressRow> _rows = [];
   final List<String> _groups = [];
 
@@ -325,15 +358,22 @@ final class ProgressModel {
       _groups.add(safeGroup);
     }
     final row = ProgressRow._(
+      this,
       id: id,
       label: label,
       coordinate: coordinate,
       group: safeGroup,
-      clock: _clock,
-      changed: _changed,
     );
     _rows.add(row);
     _changed(row);
     return ProgressRowController._(row);
+  }
+
+  /// Stops every row's heartbeat, for good: its board has ended.
+  void stopHeartbeats() {
+    _announce = null;
+    for (final row in _rows) {
+      row._heartbeat?.cancel();
+    }
   }
 }
