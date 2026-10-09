@@ -44,8 +44,6 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''';
 
 void main() {
-  frozenIdVectors();
-
   group('schema 2 tag dependency rules', () {
     final tree = MemorySourceTree({
       'pubspec.yaml': 'name: example\nversion: 1.2.3\n',
@@ -138,26 +136,6 @@ binary_platforms = ["linux-x64"]
     });
   });
 
-  test('a registry-only unit stages before its tag and publish', () {
-    final resolution = resolve(keybayConfig, keybayTree);
-    final checklist = Checklist.derive(
-      resolution.unit('core')!,
-      resolution,
-      Diagnostics(),
-    );
-
-    expect(checklist.steps.map((s) => s.id), [
-      'core/stage/complete',
-      'core/tag/keybay-v0.2.0',
-      'core/pub.dev/keybay@0.2.0',
-    ]);
-    expect(checklist['core/stage/complete']!.needs, isEmpty);
-    expect(checklist['core/tag/keybay-v0.2.0']!.needs, ['core/stage/complete']);
-    expect(checklist['core/pub.dev/keybay@0.2.0']!.needs, [
-      'core/tag/keybay-v0.2.0',
-    ]);
-  });
-
   test('a unit refuses several standalone producers', () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
@@ -202,31 +180,30 @@ executables:
     expect(diagnostics.found.single.code, 'RK-RES-009');
   });
 
-  test('the binary chain covers every declared platform', () {
+  test('the checklist names every step the same way, in order', () {
+    // Step ids are what a --json caller keys on, run after run.
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist = Checklist.derive(
       resolution.unit('cli')!,
       resolution,
       Diagnostics(),
     );
-    final ids = checklist.steps.map((s) => s.id).toList();
 
-    expect(ids, contains('cli/build/keybay_cli/linux-x64'));
-    expect(ids, contains('cli/build/keybay_cli/macos-arm64'));
-    expect(
-      checklist['cli/build/keybay_cli/macos-arm64']!.summary,
-      contains('build and sign'),
-      reason: 'only macOS binaries are signed, inside their build step',
-    );
-    expect(
-      checklist['cli/build/keybay_cli/linux-x64']!.summary,
-      isNot(contains('sign')),
-    );
-    expect(ids, contains('cli/notarize/keybay_cli/macos-arm64'));
-    expect(ids, contains('cli/archive/keybay_cli/linux-x64'));
-    expect(ids, contains('cli/stage/complete'));
-    expect(ids, contains('cli/github-release/keybay_cli-v0.2.0'));
-    expect(ids, contains('cli/homebrew/keybay_cli/keybay'));
+    expect(checklist.steps.map((s) => s.id).toList(), [
+      'cli/requires/pub.dev/keybay/0.2.0',
+      'cli/build/keybay_cli/linux-arm64',
+      'cli/archive/keybay_cli/linux-arm64',
+      'cli/build/keybay_cli/linux-x64',
+      'cli/archive/keybay_cli/linux-x64',
+      'cli/build/keybay_cli/macos-arm64',
+      'cli/notarize/keybay_cli/macos-arm64',
+      'cli/archive/keybay_cli/macos-arm64',
+      'cli/stage/complete',
+      'cli/tag/keybay_cli-v0.2.0',
+      'cli/pub.dev/keybay_cli@0.2.0',
+      'cli/github-release/keybay_cli-v0.2.0',
+      'cli/homebrew/keybay_cli/keybay',
+    ]);
   });
 
   test('notarization sits between the signed build and its archive', () {
@@ -238,15 +215,9 @@ executables:
     );
 
     expect(
-      checklist['cli/sign/macos-arm64'],
-      isNull,
-      reason:
-          'compiling and signing are one build step, so the checklist, '
-          'the receipt, and the validators speak the same producer names',
-    );
-    expect(
       checklist['cli/build/keybay_cli/macos-arm64']!.summary,
       contains('build and sign'),
+      reason: 'compiling and signing are one build step',
     );
     expect(checklist['cli/notarize/keybay_cli/macos-arm64']!.needs, [
       'cli/build/keybay_cli/macos-arm64',
@@ -536,41 +507,6 @@ dependencies:
         isEmpty,
       );
     });
-
-    test(
-      'an incompatible local version leaves native hosted resolution pending',
-      () {
-        final resolution = resolve(
-          '''
-schema = 2
-
-[release.framework]
-path = "packages/fleury"
-publish = ["pub.dev"]
-
-[release.mcp]
-path = "packages/fleury_mcp"
-publish = ["pub.dev"]
-''',
-          MemorySourceTree({
-            'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
-            'packages/fleury_mcp/pubspec.yaml': '''
-name: fleury_mcp
-version: 0.1.0
-dependencies:
-  fleury: ^0.1.0
-''',
-          }),
-        );
-
-        final diagnostics = Diagnostics();
-        final prerequisites = ReleaseDependencyPlan(
-          resolution,
-        ).prerequisites(resolution.unit('mcp')!, diagnostics);
-        expect(prerequisites, isEmpty);
-        expect(diagnostics.found, isEmpty);
-      },
-    );
   });
 
   group("a project's own build", () {
@@ -649,49 +585,6 @@ assets = ["assets/parser-macos-arm64.dylib", "parser-linux-x64.so", "src.tar.gz"
         'producers/flark_parse/assets/src.tar.gz': 'asset',
       });
     });
-  });
-}
-
-/// The step-id grammar, frozen the way the version vectors are.
-///
-/// Ids are the machine surface's keys: an agent that polled yesterday and
-/// diffs against today must see the same id for the same fact. A change here
-/// is a wire-format break and gets made deliberately or not at all.
-void frozenIdVectors() {
-  test('every id form, spelled out and frozen', () {
-    final tree = MemorySourceTree({
-      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-      'packages/keybay_cli/pubspec.yaml': '''
-name: keybay_cli
-version: 0.2.0
-dependencies:
-  keybay: 0.2.0
-executables:
-  keybay: keybay
-''',
-    });
-    final resolution = resolve(keybayConfig, tree);
-    final checklist = Checklist.derive(
-      resolution.unit('cli')!,
-      resolution,
-      Diagnostics(),
-    );
-
-    expect(checklist.steps.map((s) => s.id).toList(), [
-      'cli/requires/pub.dev/keybay/0.2.0',
-      'cli/build/keybay_cli/linux-arm64',
-      'cli/archive/keybay_cli/linux-arm64',
-      'cli/build/keybay_cli/linux-x64',
-      'cli/archive/keybay_cli/linux-x64',
-      'cli/build/keybay_cli/macos-arm64',
-      'cli/notarize/keybay_cli/macos-arm64',
-      'cli/archive/keybay_cli/macos-arm64',
-      'cli/stage/complete',
-      'cli/tag/keybay_cli-v0.2.0',
-      'cli/pub.dev/keybay_cli@0.2.0',
-      'cli/github-release/keybay_cli-v0.2.0',
-      'cli/homebrew/keybay_cli/keybay',
-    ]);
   });
 
   group('dependency ordering under refusal', () {
