@@ -5,14 +5,13 @@ import '../engine/git.dart';
 import '../engine/inspect.dart';
 import '../engine/publish_target.dart';
 import '../engine/resolve.dart';
-import '../engine/stage.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
+import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
 import '../targets/target_module.dart';
-import 'release_preparation.dart';
 import 'release_progress.dart';
 
 enum ReleaseAction {
@@ -27,33 +26,32 @@ enum ReleaseAction {
   final String human;
 }
 
-/// Everything public publication receives after private preparation settles.
-final class PublicationPlan {
-  PublicationPlan({
-    required this.release,
-    required Map<String, Inspection> states,
-    required Map<String, ReleaseAction> actions,
-    required this.prepared,
-    required this.stage,
-    required this.recoversWithoutStage,
-  }) : states = Map.of(states),
-       actions = Map.of(actions);
+/// One unit's way through a release: what was read once, shared with
+/// `rk status`, and what each phase settles for the next.
+final class UnitRun {
+  UnitRun(this.read);
 
-  final UnitRelease release;
-  ResolvedUnit get unit => release.unit;
-  List<Target> get targets => release.targets;
-  final Map<String, Inspection> states;
-  final Map<String, ReleaseAction> actions;
-  final PreparedRelease prepared;
-  final Stage stage;
-  final bool recoversWithoutStage;
+  final UnitSnapshot read;
 
-  /// The targets this release still publishes: those the snapshot taken
-  /// before staging did not find exact.
-  List<Target> get remaining => [
-    for (final target in targets)
-      if (!states[target.id]!.isExact) target,
-  ];
+  /// Whether what this unit has left finishes from public inputs, without
+  /// its stage.
+  var recovering = false;
+
+  /// The repository packages each of the unit's Pub packages takes from
+  /// this source when staged: see [StageRun.fromSource].
+  var fromSource = const <String, Map<String, String>>{};
+
+  /// The identity its macOS build signs as: settled before the stage is
+  /// built, or recorded in the stage reused. Null when it signs nothing.
+  MacIdentity? identity;
+
+  /// What the release has done at each target so far.
+  late final actions = <Target, ReleaseAction>{
+    for (final target in read.targets)
+      target: read.states[target.id]!.isExact
+          ? ReleaseAction.alreadyPublished
+          : ReleaseAction.notAttempted,
+  };
 }
 
 /// Owns the late, public half of a release.
@@ -62,8 +60,8 @@ final class PublicationPlan {
 /// question asks about. After the yes, each act reads its own target again,
 /// checks the staged bytes it publishes, acts, and reads the result back.
 /// Nothing the yes did not accept is published.
-final class ReleasePublicationCoordinator {
-  ReleasePublicationCoordinator({
+final class Publication {
+  Publication({
     required this.inspector,
     required this.initialGit,
     required this.tools,
@@ -87,22 +85,16 @@ final class ReleasePublicationCoordinator {
   final Duration confirmDeadline;
   final Duration confirmInterval;
 
-  /// The public steps the one yes accepted, by unit. Null until asked.
-  Map<String, Set<String>>? _authorized;
+  /// The targets the one yes accepted, by unit. Null until asked.
+  Map<String, Set<Target>>? _authorized;
 
   /// The targets whose native session this run has already signed in to.
   final Set<PublishTarget> _signedIn = {};
 
-  /// Proves every unfinished target can publish from this host, before any
-  /// private work is spent on it.
-  Future<bool> checkReadiness({
-    required ResolvedUnit unit,
-    required List<Target> targets,
-    required Map<String, Inspection> states,
-  }) async {
-    final outstanding = targets
-        .where((target) => !states[target.id]!.isExact)
-        .toList();
+  /// Proves every unfinished target of [run]'s unit can publish from this
+  /// host, before any private work is spent on it.
+  Future<bool> checkReadiness(UnitRun run) async {
+    final UnitSnapshot(:unit, :targets, remaining: outstanding) = run.read;
     if (outstanding.isEmpty) return true;
     final progress = TargetReleaseProgress(
       output,
@@ -146,11 +138,12 @@ final class ReleasePublicationCoordinator {
     return true;
   }
 
-  void showActions(List<Target> targets, Map<String, ReleaseAction> actions) {
+  /// What the release did at each of [run]'s targets, said when it stops.
+  void showActions(UnitRun run) {
     output.blank();
     output.heading('Release targets');
-    for (final target in targets) {
-      final action = actions[target.id] ?? ReleaseAction.notAttempted;
+    for (final target in run.read.targets) {
+      final action = run.actions[target]!;
       final mark = switch (action) {
         ReleaseAction.completed => Mark.done,
         ReleaseAction.alreadyPublished => Mark.satisfied,
@@ -182,24 +175,21 @@ final class ReleasePublicationCoordinator {
 
   /// Asks once, for every unit, whether to publish what the snapshot found
   /// missing. No session is acquired before the answer.
-  Future<bool> authorize(List<PublicationPlan> plans) async {
-    final asking = plans.where((plan) => plan.remaining.isNotEmpty).toList();
+  Future<bool> authorize(List<UnitRun> runs) async {
+    final asking = [
+      for (final run in runs)
+        if (run.read.remaining.isNotEmpty) run.read,
+    ];
     if (asking.isEmpty) {
       _authorized = const {};
       return true;
     }
-    for (final plan in asking) {
-      _showAuthorization(
-        plan.unit,
-        plan.remaining,
-        unprovable: _unprovable(plan),
-        signing: plan.prepared.signing,
-        claims: plan.prepared.claims,
-      );
+    for (final run in runs) {
+      if (run.read.remaining.isNotEmpty) _showAuthorization(run);
     }
-    if (!requireAuthorizer(asking.first.unit)) return false;
+    if (!_requireAuthorizer(asking.first.unit)) return false;
     final names = [
-      for (final plan in asking) '${plan.unit.name} ${plan.unit.version}',
+      for (final read in asking) '${read.unit.name} ${read.unit.version}',
     ];
     final series = names.length <= 2
         ? names.join(' and ')
@@ -208,21 +198,21 @@ final class ReleasePublicationCoordinator {
       'authorization-disclosures/run',
       [
         'Private preparation completed for the selected release scope.',
-        for (final plan in asking)
+        for (final read in asking)
           [
-            '${plan.unit.name} ${plan.unit.version}',
-            'stage ${plan.stage.id.id}',
-            ...plan.remaining.map(
+            '${read.unit.name} ${read.unit.version}',
+            'stage ${read.stage!.id.id}',
+            ...read.remaining.map(
               (target) =>
                   '  ${target.kindLabel}: '
-                  '${targetNote(target, plan.prepared.claims)}',
+                  '${_targetNote(target, read.claims)}',
             ),
             output
                     .report
-                    .attachments['authorization-disclosures/${plan.unit.name}'] ??
+                    .attachments['authorization-disclosures/${read.unit.name}'] ??
                 '',
             CanonicalJson.encode(
-              output.report.warningEvidenceFor(plan.unit.name),
+              output.report.warningEvidenceFor(read.unit.name),
             ),
           ].join('\n'),
       ].join('\n\n'),
@@ -246,31 +236,28 @@ final class ReleasePublicationCoordinator {
       );
       output.halt(HaltKind.beforeActing);
       output.next(
-        plans.length == 1
-            ? 'rk release ${plans.single.unit.name}'
+        runs.length == 1
+            ? 'rk release ${runs.single.read.unit.name}'
             : 'rk release',
       );
       return false;
     }
     _authorized = {
-      for (final plan in asking)
-        plan.unit.name: {for (final target in plan.remaining) target.id},
+      for (final read in asking) read.unit.name: {...read.remaining},
     };
     output.blank();
     return true;
   }
 
-  /// Publishes what [authorize] accepted for [plan]'s unit, and nothing
+  /// Publishes what [authorize] accepted for [run]'s unit, and nothing
   /// else, in fixed lanes.
-  Future<int> publish(PublicationPlan plan) async {
+  Future<int> publish(UnitRun run) async {
     final authorized = _authorized;
     if (authorized == null) {
       throw StateError('publication needs one authorization first');
     }
-    final unit = plan.unit;
-    final targets = plan.targets;
-    final publicActions = plan.actions;
-    final accepted = authorized[unit.name] ?? const <String>{};
+    final UnitSnapshot(:unit, :targets, :release) = run.read;
+    final accepted = authorized[unit.name] ?? const <Target>{};
     if (accepted.isEmpty) {
       if (targets.isNotEmpty) {
         output.line(
@@ -283,10 +270,10 @@ final class ReleasePublicationCoordinator {
     }
     final publishing = [
       for (final target in targets)
-        if (accepted.contains(target.id)) target,
+        if (accepted.contains(target)) target,
     ];
     if (!await _acquireSessions(unit, publishing)) {
-      showActions(targets, publicActions);
+      showActions(run);
       return ExitCodes.refused;
     }
     final releaseProgress = TargetReleaseProgress(
@@ -295,7 +282,7 @@ final class ReleasePublicationCoordinator {
       targets: targets,
     );
     for (final target in targets.where(
-      (target) => !accepted.contains(target.id),
+      (target) => !accepted.contains(target),
     )) {
       releaseProgress.complete(
         target,
@@ -306,7 +293,7 @@ final class ReleasePublicationCoordinator {
     }
     final done = {
       for (final target in targets)
-        if (!accepted.contains(target.id)) target.id,
+        if (!accepted.contains(target)) target.id,
     };
     final acting = <Target>{};
     final failures = <_PublicationFailure>[];
@@ -341,7 +328,7 @@ final class ReleasePublicationCoordinator {
         describeWaits();
         final _PublicationFailure? failure;
         try {
-          failure = await _publishTarget(target, plan, releaseProgress);
+          failure = await _publishTarget(target, run, releaseProgress);
         } on Object {
           crashed = true;
           rethrow;
@@ -360,7 +347,6 @@ final class ReleasePublicationCoordinator {
     // The tag first: everything else is published under it. Then the
     // packages, in dependency order, beside the GitHub release and the
     // formula that points at its archives.
-    final release = plan.release;
     await lane([release.tag]);
     await Future.wait([
       lane(release.packages),
@@ -444,18 +430,15 @@ final class ReleasePublicationCoordinator {
   /// release stops.
   Future<_PublicationFailure?> _publishTarget(
     Target target,
-    PublicationPlan plan,
+    UnitRun run,
     TargetReleaseProgress releaseProgress,
   ) async {
-    final PublicationPlan(
-      :unit,
-      actions: publicActions,
-      :stage,
-      :recoversWithoutStage,
-    ) = plan;
+    final unit = run.read.unit;
+    final actions = run.actions;
+    final stage = run.read.stage!;
     // What the act publishes from: the complete stage, or nothing when
     // what is left finishes from public inputs alone.
-    final staged = recoversWithoutStage ? null : stage;
+    final staged = run.recovering ? null : stage;
     final module = inspector.targets.moduleFor(target.target);
     releaseProgress.begin(target, CommonProgressActivities.checking);
     // The target is read again right before its act: another run or person
@@ -466,11 +449,11 @@ final class ReleasePublicationCoordinator {
       verdict: state.verdict,
       detail: state.detail,
       evidence: state.evidence,
-      action: publicActions[target.id]!.wire,
+      action: actions[target]!.wire,
       show: false,
     );
     if (state.isExact) {
-      _completeExistingTarget(target, state, publicActions, releaseProgress);
+      _completeExistingTarget(target, state, actions, releaseProgress);
       return null;
     }
     if (!state.isAbsent) {
@@ -480,7 +463,7 @@ final class ReleasePublicationCoordinator {
     // What the act publishes must still be what was reviewed: public
     // inputs a lost stage can finish from, or the stage's recorded bytes,
     // checked again. Within a run this costs a stat per file.
-    final unpublishable = recoversWithoutStage
+    final unpublishable = run.recovering
         ? (state.recoversWithoutStage
               ? null
               : Diagnostic(
@@ -493,7 +476,7 @@ final class ReleasePublicationCoordinator {
                       'the release again; restore ${stage.path} if the '
                       'target still needs the original bytes.',
                 ))
-        : switch (stage.check(plan.release)) {
+        : switch (stage.check(run.read.release)) {
             final checked when !checked.reusable => Diagnostic(
               code: 'RK-STAGE-002',
               message:
@@ -560,7 +543,7 @@ final class ReleasePublicationCoordinator {
         '${target.kindLabel} verification threw: $error',
       );
     }
-    publicActions[target.id] = state.isExact
+    actions[target] = state.isExact
         ? ReleaseAction.completed
         : ReleaseAction.failed;
     output.step(
@@ -568,7 +551,7 @@ final class ReleasePublicationCoordinator {
       verdict: state.verdict,
       detail: state.detail,
       evidence: state.evidence,
-      action: publicActions[target.id]!.wire,
+      action: actions[target]!.wire,
       show: false,
     );
     if (!act.ok && state.isExact) {
@@ -705,17 +688,17 @@ final class ReleasePublicationCoordinator {
   void _completeExistingTarget(
     Target target,
     Inspection state,
-    Map<String, ReleaseAction> actions,
+    Map<Target, ReleaseAction> actions,
     TargetReleaseProgress progress,
   ) {
-    actions[target.id] = ReleaseAction.alreadyPublished;
+    actions[target] = ReleaseAction.alreadyPublished;
     progress.complete(target, note: 'already published', satisfied: true);
     output.step(
       target,
       mark: Mark.satisfied,
       verdict: state.verdict,
       note: state.detail ?? 'already done',
-      action: actions[target.id]!.wire,
+      action: actions[target]!.wire,
       show: false,
     );
   }
@@ -772,13 +755,13 @@ final class ReleasePublicationCoordinator {
   HaltKind _strongerHalt(HaltKind left, HaltKind right) =>
       left.index >= right.index ? left : right;
 
-  /// The platforms [plan]'s stage built and could not run, from what its
+  /// The platforms [run]'s stage built and could not run, from what its
   /// receipt records: a reused stage may have been smoke-tested elsewhere.
-  List<({String platform, String reason})> _unprovable(PublicationPlan plan) {
-    final checked = plan.stage.check(plan.release);
+  List<({String platform, String reason})> _unprovable(UnitRun run) {
+    final checked = run.read.stage!.check(run.read.release);
     if (!checked.reusable) return const [];
     return [
-      for (final work in plan.release.work)
+      for (final work in run.read.release.work)
         if (work.kind == StepKind.build)
           if (checked.receipt!.producers[work.name]?['smoke'] case {
             'status': 'not-executed',
@@ -790,7 +773,7 @@ final class ReleasePublicationCoordinator {
 
   /// A row for each of [remaining], saying which are permanent and which
   /// claim a name for the first time.
-  void showTargets(List<Target> remaining, List<TargetClaim> claims) {
+  void _showTargets(List<Target> remaining, List<TargetClaim> claims) {
     // Grouped by destination, the way status and staging read. What is
     // permanent is said on the row it belongs to: a paragraph explaining
     // that publishing is forever tells an operator what they already know,
@@ -798,7 +781,7 @@ final class ReleasePublicationCoordinator {
     for (final target in remaining) {
       output.line(
         target.kindLabel,
-        note: targetNote(target, claims),
+        note: _targetNote(target, claims),
         depth: 1,
         labelWidth: 26,
         role: VisualRole.releaseTarget,
@@ -810,7 +793,7 @@ final class ReleasePublicationCoordinator {
   }
 
   /// What [target]'s row says: what arrives there, and its marks.
-  String targetNote(Target target, List<TargetClaim> claims) =>
+  String _targetNote(Target target, List<TargetClaim> claims) =>
       [target.planNote, ..._marks(target, claims)].join(' · ');
 
   // Keyed by what is claimed, not by where: a unit publishing several
@@ -832,7 +815,7 @@ final class ReleasePublicationCoordinator {
   ///
   /// [firstStep] says which permanent step is the first a yes lets happen,
   /// which only the question itself knows when it covers several units.
-  List<String> disclosureFor(
+  List<String> _disclosureFor(
     List<Target> remaining,
     List<TargetClaim> claims, {
     MacIdentity? firstSigning,
@@ -858,13 +841,10 @@ final class ReleasePublicationCoordinator {
     ];
   }
 
-  void _showAuthorization(
-    ResolvedUnit unit,
-    List<Target> remaining, {
-    required List<({String platform, String reason})> unprovable,
-    required MacIdentity? signing,
-    required List<TargetClaim> claims,
-  }) {
+  void _showAuthorization(UnitRun run) {
+    final UnitSnapshot(:unit, :remaining, :claims) = run.read;
+    final signing = run.identity;
+    final unprovable = _unprovable(run);
     final disclosed = <String>[];
     output.blank();
     output.line(
@@ -873,7 +853,7 @@ final class ReleasePublicationCoordinator {
       strong: true,
     );
 
-    showTargets(remaining, claims);
+    _showTargets(remaining, claims);
     final firstSigning = signing != null && signing.first ? signing : null;
     if (firstSigning != null) {
       // The identifier first: it is what gets sealed into the designated
@@ -898,7 +878,7 @@ final class ReleasePublicationCoordinator {
     // and which step is the first that cannot be re-run, stay in the record
     // that travels with the authorization.
     disclosed.addAll(
-      disclosureFor(remaining, claims, firstSigning: firstSigning),
+      _disclosureFor(remaining, claims, firstSigning: firstSigning),
     );
 
     // A weaker build proof belongs on the authorization surface as well as in
@@ -938,7 +918,7 @@ final class ReleasePublicationCoordinator {
     }
   }
 
-  bool requireAuthorizer(ResolvedUnit unit) {
+  bool _requireAuthorizer(ResolvedUnit unit) {
     if (confirm != null) return true;
     output.problem(
       Diagnostic(

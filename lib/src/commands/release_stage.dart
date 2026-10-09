@@ -6,7 +6,6 @@ import '../builds/capability.dart';
 import '../builds/macos_identity.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
-import '../engine/producer_lane.dart';
 import '../engine/publish_target.dart';
 import '../engine/receipt.dart';
 import '../engine/resolve.dart';
@@ -14,18 +13,18 @@ import '../engine/stage.dart';
 import '../engine/stage_source.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
+import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
 import '../targets/catalog.dart';
 import '../targets/target_module.dart';
-import 'release_preparation.dart';
 import 'release_progress.dart';
+import 'release_publish.dart' show UnitRun;
 
-/// Owns the private stage boundary: building, resuming or reusing the stage
-/// a release publishes from.
-final class ReleaseStageCoordinator {
-  const ReleaseStageCoordinator({
+/// Builds, resumes or reuses the stage a unit's release publishes from.
+final class StageRunner {
+  const StageRunner({
     required this.initialGit,
     required this.output,
     required this.tools,
@@ -68,62 +67,39 @@ final class ReleaseStageCoordinator {
     );
   }
 
-  /// Settles what staging [unit] needs before its producers run: leftovers
-  /// of an interrupted run are cleared, and its signing identity is chosen.
-  /// Units do this one at a time, since choosing an identity may ask the
-  /// operator. [fromSource] names, for each Pub package, the repository
-  /// packages it takes from this source: see [StageRun.fromSource].
-  Future<UnitStaging?> begin({
-    required UnitRelease release,
-    required Stage stage,
-    required StageCheck check,
-    required List<TargetClaim> claims,
-    Map<String, Map<String, String>> fromSource = const {},
-  }) async {
-    final unit = release.unit;
-    final staging = UnitStaging._(
-      release: release,
-      stage: stage,
-      check: check,
-      claims: claims,
-      fromSource: fromSource,
-    );
+  /// Settles what staging [run]'s unit needs before its producers run:
+  /// leftovers of an interrupted run are cleared, and the identity its
+  /// macOS build signs as is chosen. Units do this one at a time, since
+  /// choosing an identity may ask the operator. False when refused, having
+  /// said why.
+  Future<bool> begin(UnitRun run) async {
+    final UnitSnapshot(:unit, :release) = run.read;
+    final check = run.read.stageCheck!;
     if (check.state == StageState.resumable) {
-      _discardUnrecorded(stage, [
+      _discardUnrecorded(run.read.stage!, [
         for (final work in release.work) ...work.outputs,
       ]);
     }
     if (!check.reusable && MacIdentity.signs(unit)) {
-      final signing = await MacIdentity.settle(tools, output, unit, initialGit);
-      if (signing == null) return null;
-      staging._signing = signing;
+      run.identity = await MacIdentity.settle(tools, output, unit, initialGit);
+      if (run.identity == null) return false;
     }
-    return staging;
+    return true;
   }
 
-  /// Produces or reuses the exact receipt-backed private stage [staging]
-  /// describes. Its rows go on [shared] when units stage side by side, and
-  /// on a board of its own otherwise.
-  Future<PreparedRelease?> complete(
-    UnitStaging staging, {
-    StageReleaseProgress? shared,
-  }) async {
-    final UnitStaging(
-      :release,
-      :unit,
-      :stage,
-      :check,
-      :claims,
-      :fromSource,
-      :signing,
-      :producerSteps,
-    ) = staging;
+  /// Produces or reuses the receipt-backed stage [run]'s unit publishes
+  /// from. Its rows go on [shared] when units stage side by side, and on a
+  /// board of its own otherwise. False when it stopped, having said why.
+  Future<bool> run(UnitRun run, {StageReleaseProgress? shared}) async {
+    final UnitSnapshot(:unit, :release) = run.read;
+    final stage = run.read.stage!;
+    final check = run.read.stageCheck!;
     final stageProgress =
         shared ??
         StageReleaseProgress(
           output,
           title: '${unit.name} ${unit.version} · staging',
-          board: staging.board,
+          board: release.board,
         );
     final warnings = <_StageWarning>[];
     if (check.reusable) {
@@ -132,10 +108,8 @@ final class ReleaseStageCoordinator {
         ..restore(receipt.producers)
         ..settle(title: '${unit.name} ${unit.version} · already staged');
       _showStageWarnings(unit, _recordedStageWarnings(receipt, release));
-      return PreparedRelease(
-        claims: claims,
-        signing: MacIdentity.recorded(receipt),
-      );
+      run.identity = MacIdentity.recorded(receipt);
+      return true;
     }
 
     if (check.state == StageState.resumable) {
@@ -162,7 +136,7 @@ final class ReleaseStageCoordinator {
           ),
         );
         output.halt(HaltKind.beforeActing);
-        return null;
+        return false;
       }
     }
 
@@ -192,11 +166,10 @@ final class ReleaseStageCoordinator {
           ),
         );
         output.halt(HaltKind.beforeActing);
-        return null;
+        return false;
       }
     }
-    final laneSources = <String, ProducerLaneSource>{};
-    final laneChains = <String, BinaryChain>{};
+    final lanes = <String, BinaryChain>{};
     final failures = <HaltKind>[];
 
     /// Records what [work] produced, and fills the rows it completes; null
@@ -242,7 +215,7 @@ final class ReleaseStageCoordinator {
                 git: initialGit,
                 output: output,
                 rows: stageProgress.handleFor(receiptName),
-                fromSource: fromSource[work.project?.name] ?? const {},
+                fromSource: run.fromSource[work.project?.name] ?? const {},
               ),
               work,
             );
@@ -270,13 +243,9 @@ final class ReleaseStageCoordinator {
           ? '${step.project!.name}/build'
           : '${step.project!.name}/${step.platform!}';
       try {
-        final laneSource = laneSources.putIfAbsent(
+        final chain = lanes.putIfAbsent(
           laneName,
-          () => ProducerLaneSource.export(source, project: step.project!),
-        );
-        final chain = laneChains.putIfAbsent(
-          laneName,
-          () => _chain(stage, repositoryRoot: laneSource.path),
+          () => _lane(stage, source, step.project!),
         );
         output.report.acted = true;
         stageProgress.begin(receiptName, _producerActivity(step));
@@ -285,7 +254,7 @@ final class ReleaseStageCoordinator {
           produced = await _actProducer(
             step,
             unit,
-            signing,
+            run.identity,
             chain: chain,
             progress: stageProgress.handleFor(receiptName),
           );
@@ -325,7 +294,11 @@ final class ReleaseStageCoordinator {
     // (or the project's own build) side by side; each formula once every
     // archive is there.
     final platforms = <String?, List<Work>>{};
-    for (final work in producerSteps) {
+    for (final work in release.work) {
+      if (work.kind == StepKind.targetStage ||
+          work.kind == StepKind.completeStage) {
+        continue;
+      }
       (platforms[work.platform] ??= []).add(work);
     }
     await Future.wait([
@@ -341,9 +314,10 @@ final class ReleaseStageCoordinator {
       ),
     ]);
 
-    for (final laneSource in laneSources.values) {
+    for (final chain in lanes.values) {
       try {
-        laneSource.close();
+        final directory = Directory(chain.repositoryRoot);
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
       } on Object catch (error) {
         _stageOperationProblem('the ${unit.name} producer lane cleanup', error);
         failures.add(HaltKind.stoppedPartway);
@@ -358,7 +332,7 @@ final class ReleaseStageCoordinator {
           ),
         );
       }
-      return null;
+      return false;
     }
 
     stageProgress.begin(
@@ -380,7 +354,7 @@ final class ReleaseStageCoordinator {
         ),
       );
       output.halt(HaltKind.beforeActing);
-      return null;
+      return false;
     }
 
     output.step(
@@ -393,7 +367,7 @@ final class ReleaseStageCoordinator {
       ..restore(stage.receipt!.producers)
       ..settle(title: '${unit.name} ${unit.version} · staged');
     _showStageWarnings(unit, warnings);
-    return PreparedRelease(claims: claims, signing: signing);
+    return true;
   }
 
   /// Removes those of [files] the receipt does not record, so the work that
@@ -524,15 +498,37 @@ final class ReleaseStageCoordinator {
     }
   }
 
-  BinaryChain _chain(Stage stage, {required String repositoryRoot}) =>
-      BinaryChain(
-        tools: tools,
-        output: output,
-        stage: stage,
-        repositoryRoot: repositoryRoot,
-        capabilities: capabilities,
-        compilerExecutable: stage.sdk.executable,
-      );
+  /// A lane for [project]'s producers: a platform's build, notarization and
+  /// archive, or the project's own build. Their outputs meet in the stage;
+  /// their working files do not, since tools write scratch such as
+  /// `.dart_tool` beneath the source, and one lane must never clean or reuse
+  /// another's. So each lane works in its own export of [source], outside
+  /// the repository, removed once every lane drains. The export is whole: a
+  /// binary's Dart source can import any file by its path, and a project's
+  /// own build may read anything. Only Pub bounds what it reads (see
+  /// [StageSourceSnapshot.dartBuildInputs]).
+  BinaryChain _lane(
+    Stage stage,
+    StageSourceSnapshot source,
+    ResolvedProject project,
+  ) {
+    final compiler = stage.sdk.executable;
+    final directory = Directory.systemTemp.createTempSync('rk-lane-');
+    try {
+      source.export(directory.path, reader: project.name);
+    } on Object {
+      directory.deleteSync(recursive: true);
+      rethrow;
+    }
+    return BinaryChain(
+      tools: tools,
+      output: output,
+      stage: stage,
+      repositoryRoot: directory.path,
+      capabilities: capabilities,
+      compilerExecutable: compiler,
+    );
+  }
 
   ProgressActivity _producerActivity(Work step) => switch (step.kind) {
     StepKind.build => ProgressActivity(
@@ -560,38 +556,4 @@ final class _StageWarning {
 
   final Diagnostic diagnostic;
   final String? target;
-}
-
-/// One unit's staging, settled up to its producers: see
-/// [ReleaseStageCoordinator.begin].
-final class UnitStaging {
-  UnitStaging._({
-    required this.release,
-    required this.stage,
-    required this.check,
-    required this.claims,
-    required this.fromSource,
-  });
-
-  final UnitRelease release;
-  ResolvedUnit get unit => release.unit;
-  final Stage stage;
-  final StageCheck check;
-  final List<TargetClaim> claims;
-  final Map<String, Map<String, String>> fromSource;
-
-  /// The identity a macOS build signs with; null for anything else.
-  MacIdentity? get signing => _signing;
-  MacIdentity? _signing;
-
-  /// The rows this unit's stage fills.
-  List<BoardGroup> get board => release.board;
-
-  /// The local work: builds, notarizations, archives, a project's own build.
-  late final List<Work> producerSteps = [
-    for (final work in release.work)
-      if (work.kind != StepKind.targetStage &&
-          work.kind != StepKind.completeStage)
-        work,
-  ];
 }

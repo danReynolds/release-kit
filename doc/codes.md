@@ -20,8 +20,8 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-AUTH-001` | nobody is here to authorize this release or cleanup | `lib/src/commands/clean.dart`, `lib/src/commands/release_publication_coordinator.dart` |
-| `RK-AUTH-002` | the release was not authorized | `lib/src/commands/release_publication_coordinator.dart` |
+| `RK-AUTH-001` | nobody is here to authorize this release or cleanup | `lib/src/commands/clean.dart`, `lib/src/commands/release_publish.dart` |
+| `RK-AUTH-002` | the release was not authorized | `lib/src/commands/release_publish.dart` |
 
 ## RK-BREW — The Homebrew tap
 
@@ -36,7 +36,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-BUILD-001` | $platform: the build did not produce a working binary | `lib/src/binary_chain.dart` |
-| `RK-BUILD-002` | $platform was built but not executed | `lib/src/commands/release_publication_coordinator.dart` |
+| `RK-BUILD-002` | $platform was built but not executed | `lib/src/commands/release_publish.dart` |
 | `RK-BUILD-003` | a project's own build failed, could not start, or could not make its cache | `lib/src/asset_build.dart` |
 | `RK-BUILD-004` | a project's own build did not write every asset it declares | `lib/src/asset_build.dart` |
 
@@ -200,7 +200,7 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
+| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart`, `lib/src/commands/release_publish.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/targets/target_module.dart` |
 
 ## RK-RES — The config resolved against the repository
@@ -253,10 +253,10 @@ RK-SRC-004 (no commit to release) is now RK-GIT-001, and is not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-STAGE-001` | the old release stage could not be replaced safely | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/unit_snapshot.dart` |
-| `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release_stage_coordinator.dart`, `lib/src/engine/stage_source.dart` |
-| `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/engine/unit_snapshot.dart` |
+| `RK-STAGE-001` | the old release stage could not be replaced safely | `lib/src/commands/release_stage.dart` |
+| `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publish.dart`, `lib/src/commands/release_stage.dart`, `lib/src/commands/status.dart`, `lib/src/engine/unit_snapshot.dart` |
+| `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release_stage.dart`, `lib/src/engine/stage_source.dart` |
+| `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release_publish.dart`, `lib/src/engine/unit_snapshot.dart` |
 | `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart`, `lib/src/commands/clean.dart` |
 
 ## RK-TAG — The tag

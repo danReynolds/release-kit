@@ -498,8 +498,12 @@ void main() {
     () async {
       final local = _Harness(twoPlatforms: true);
       addTearDown(local.close);
+      // Each lane holds the whole commit, since Dart source imports any
+      // file by its path: even one no Pub package would read.
+      local.source.files['docs/guide.md'] = '# Nothing builds this\n';
       final x64Started = Completer<void>();
       final workingDirectories = <String>{};
+      final whole = <bool>[];
       var x64ScratchSurvived = false;
       local.tools.gate = (call) async {
         if (!_compilesFor(call, 'linux-x64') &&
@@ -507,6 +511,9 @@ void main() {
           return;
         }
         workingDirectories.add(call.workingDirectory!);
+        whole.add(
+          File('${call.workingDirectory}/../../docs/guide.md').existsSync(),
+        );
         if (_compilesFor(call, 'linux-arm64')) {
           await x64Started.future.timeout(const Duration(seconds: 5));
           return;
@@ -538,6 +545,7 @@ void main() {
 
       expect(ran.code, ExitCodes.ok, reason: ran.text);
       expect(workingDirectories, hasLength(2));
+      expect(whole, [true, true]);
       expect(x64ScratchSurvived, isTrue);
       expect(Directory('${local.stage.path}.lanes').existsSync(), isFalse);
       expect(local.checked.reusable, isTrue);
