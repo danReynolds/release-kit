@@ -383,15 +383,12 @@ Map<String, int> _laneCounts(Iterable<PlanNode> nodes) {
 
 /// One unit's plan rows, by phase, and what its release calls them.
 final class _UnitRows {
-  _UnitRows(this.release)
-    : name = release.unit.name,
-      version = release.unit.version.canonical,
-      nodes = release.planNodes;
+  _UnitRows(this.release);
 
   final UnitRelease release;
-  final String name;
-  final String version;
-  final List<PlanNode> nodes;
+  late final List<PlanNode> nodes = release.planNodes;
+  String get name => release.unit.name;
+  String get version => release.unit.version.canonical;
 
   Iterable<PlanNode> get requirements =>
       nodes.where((node) => node.phase == StepPhase.inspect);

@@ -1026,6 +1026,8 @@ class StatusCommand {
   }
 }
 
+/// [current] becoming [target]. › is for becoming, everywhere inline: the
+/// gutter's → is reserved for "your next move".
 String _versionMovement(String current, String target) {
   final parsedCurrent = Version.tryParse(current);
   final parsedTarget = Version.tryParse(target);

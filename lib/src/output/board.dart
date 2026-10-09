@@ -216,11 +216,10 @@ final class Board {
 
   static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-  /// The rows, in the order they were added; [groups] in the order they
-  /// first appeared. The board is drawn in that order, which is what lets
-  /// it erase exactly the lines it drew.
+  /// The rows, in the order they were added, under their groups in the
+  /// order those first appeared. The board is drawn in that order, which is
+  /// what lets it erase exactly the lines it drew.
   List<Row> get rows => List.unmodifiable(_rows);
-  List<String> get groups => List.unmodifiable(_groups);
 
   Row add(String id, String label, {String? coordinate, String? group}) {
     if (_rows.any((row) => row.id == id)) {

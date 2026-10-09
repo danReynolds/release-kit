@@ -374,24 +374,19 @@ class Output {
     heading(identity.isEmpty ? name : '$name · $identity');
   }
 
-  /// Opens a unit. Steps printed after this belong to it.
+  /// Opens a unit, said as [display]. Steps printed after this belong to
+  /// it.
   void unit(
     String name, {
     required String version,
     required String? tag,
-    String? state,
-    String? display,
+    required String display,
   }) {
     report.unit(name: name, version: version, tag: tag);
     blank();
-    // › for becomes and for sequence, everywhere inline: the gutter's → is
-    // reserved for "your next move", and three reviewers independently
-    // caught it moonlighting.
     line(
       name,
-      note:
-          display ??
-          (state == null ? '$version › $tag' : '$version › $tag · $state'),
+      note: display,
       // The unit's own line is a sentence, not a column: what follows the
       // name belongs beside it, not at the note column the rows below
       // share.
