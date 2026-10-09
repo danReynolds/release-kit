@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../engine/tools.dart';
-import '../../builds/capability.dart';
 import '../../engine/version.dart';
 import '../../transforms/digest.dart';
 import '../../installations/model.dart';
@@ -12,9 +11,9 @@ class HomebrewInstallationProvider implements InstallationProvider {
   HomebrewInstallationProvider(
     this.tools,
     this.brew, {
+    required this.platform,
     this.fetch = fetchHttps,
-    String? platform,
-  }) : platform = platform ?? HostCapabilities.inspect().hostPlatform;
+  });
   final String platform;
   final HttpsFetch fetch;
   final Tools tools;

@@ -71,67 +71,80 @@ Future<void> installationMain(List<String> args, String command) async {
   if (json) stdout.write(output.report.encode(exit: code));
 }
 
+/// What [args] ask of rk [command], with the first usage error among them.
+({
+  String? project,
+  String? source,
+  bool list,
+  bool yes,
+  bool latest,
+  bool help,
+  String? error,
+})
+_arguments(List<String> args, String command) {
+  String? project, source, error;
+  var list = false, yes = false, latest = false, help = false;
+  final rest = [...args]..remove(command);
+  for (var i = 0; i < rest.length && error == null; i++) {
+    final arg = rest[i];
+    switch (arg) {
+      case '--latest':
+        latest = true;
+      case '--list':
+        list = true;
+      case '--json': // Owned by the output.
+        break;
+      case '-y' || '--yes':
+        yes = true;
+      case '-h' || '--help':
+        help = true;
+      case _
+          when arg == '-p' ||
+              arg == '--project' ||
+              arg.startsWith('--project='):
+        if (project != null) {
+          error = 'Name one project only.';
+        } else {
+          project = arg.startsWith('--project=')
+              ? arg.substring(10)
+              : ++i < rest.length && !rest[i].startsWith('-')
+              ? rest[i]
+              : '';
+          if (project.isEmpty) error = '$arg needs a package name.';
+        }
+      case _ when !arg.startsWith('-') && source == null:
+        source = arg;
+      default:
+        error = 'Unexpected argument: $arg';
+    }
+  }
+  if (latest && (command != 'install' || source == null || list)) {
+    error = '--latest needs an explicit rk install source.';
+  }
+  if (latest && source == 'local') error = followsCheckout;
+  if (yes && (command != 'uninstall' || source == null || list)) {
+    error = '--yes needs an explicit rk uninstall source.';
+  }
+  if (list && source != null) error = '--list does not select a source.';
+  return (
+    project: project,
+    source: source,
+    list: list,
+    yes: yes,
+    latest: latest,
+    help: help,
+    error: error,
+  );
+}
+
 Future<int> _run(
   List<String> args,
   String command,
   Output output,
   bool json,
 ) async {
-  String? projectName, sourceName;
-  var list = false,
-      yes = false,
-      latest = false,
-      help = false,
-      seenCommand = false;
-  String? usageError;
-  for (var i = 0; i < args.length; i++) {
-    final arg = args[i];
-    if (arg == command && !seenCommand) {
-      seenCommand = true;
-      continue;
-    }
-    if (arg == '-p' || arg == '--project' || arg.startsWith('--project=')) {
-      if (projectName != null) {
-        usageError = 'Name one project only.';
-        break;
-      }
-      if (arg.startsWith('--project=')) {
-        projectName = arg.substring(10);
-      } else if (++i < args.length && !args[i].startsWith('-')) {
-        projectName = args[i];
-      } else {
-        usageError = '$arg needs a package name.';
-        break;
-      }
-      if (projectName.isEmpty) usageError = '$arg needs a package name.';
-    } else if (arg == '--latest') {
-      latest = true;
-    } else if (arg == '--list') {
-      list = true;
-    } else if (arg == '--json') {
-      /* Owned by the output. */
-    } else if (arg == '-y' || arg == '--yes') {
-      yes = true;
-    } else if (arg == '-h' || arg == '--help') {
-      help = true;
-    } else if (!arg.startsWith('-') && sourceName == null) {
-      sourceName = arg;
-    } else {
-      usageError = 'Unexpected argument: $arg';
-      break;
-    }
-  }
-  if (latest && (command != 'install' || sourceName == null || list)) {
-    usageError = '--latest needs an explicit rk install source.';
-  }
-  if (latest && sourceName == 'local') usageError = followsCheckout;
-  if (yes && (command != 'uninstall' || sourceName == null || list)) {
-    usageError = '--yes needs an explicit rk uninstall source.';
-  }
-  if (list && sourceName != null) {
-    usageError = '--list does not select a source.';
-  }
-  if (usageError != null) {
+  final asked = _arguments(args, command);
+  if (asked.error case final usageError?) {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-005',
@@ -141,7 +154,7 @@ Future<int> _run(
     );
     return ExitCodes.usage;
   }
-  if (help) {
+  if (asked.help) {
     output.help(installationUsage);
     output.report.next(installationUsage);
     return ExitCodes.ok;
@@ -195,11 +208,11 @@ Future<int> _run(
     repository: repository,
   );
   var projects = discovered;
-  if (projectName != null) {
-    projects = projects.where((p) => p.name == projectName).toList();
+  if (asked.project case final name?) {
+    projects = projects.where((p) => p.name == name).toList();
     if (projects.isEmpty) {
       throw InstallationFailure(
-        '$projectName is not an executable project here.',
+        '$name is not an executable project here.',
         'Executable projects: ${discovered.map((p) => p.name).join(', ')}.',
       );
     }
@@ -210,12 +223,12 @@ Future<int> _run(
       'Libraries are consumed as dependencies; they cannot be selected with rk use.',
     );
   }
-  final source = sourceName == null
+  final source = asked.source == null
       ? null
-      : InstallationSource.named(sourceName);
-  if (sourceName != null && source == null) {
+      : InstallationSource.named(asked.source!);
+  if (asked.source != null && source == null) {
     throw InstallationFailure(
-      'Unknown source: $sourceName',
+      'Unknown source: ${asked.source}',
       'Use rk $command --list to see supported sources.',
     );
   }
@@ -238,6 +251,7 @@ Future<int> _run(
     tools,
   );
   final dart = findExecutable('dart', environment);
+  final platform = HostCapabilities.inspect().hostPlatform;
   final manager = InstallationManager(
     store: store,
     environment: environment,
@@ -247,11 +261,12 @@ Future<int> _run(
       InstallationSource.homebrew: HomebrewInstallationProvider(
         tools,
         findExecutable('brew', environment),
+        platform: platform,
       ),
       InstallationSource.github: GithubInstallationProvider(
         tools,
         store,
-        HostCapabilities.inspect().hostPlatform,
+        platform,
       ),
     },
   );
@@ -286,7 +301,7 @@ Future<int> _run(
       stdout.hasTerminal &&
       environment['TERM'] != 'dumb';
   final states = await refresh();
-  if (source == null && !list && interactive) {
+  if (source == null && !asked.list && interactive) {
     final result = await runUsePicker(
       states: states,
       refresh: refresh,
@@ -304,44 +319,9 @@ Future<int> _run(
     if (result.failure case final failure?) throw InstallationFailure(failure);
     if (outcomes.isEmpty) output.say('No installations changed.');
   } else if (source == null) {
-    for (final state in states) {
-      output.line(
-        state.project.name == state.project.label
-            ? state.project.name
-            : '${state.project.name} · ${state.project.label}',
-        strong: true,
-      );
-      for (final e in state.sources.entries) {
-        output.line(
-          e.key.label,
-          depth: 1,
-          mark: state.selected == e.key || state.currentSource == e.key
-              ? Mark.done
-              : Mark.none,
-          note:
-              e.value.problem ??
-              (e.value.installation == null
-                  ? 'Not installed'
-                  : '${e.value.installation!.version}${state.currentSource == e.key
-                        ? ' · default on PATH'
-                        : state.selected == e.key
-                        ? ' · selected'
-                        : ' · installed'}'),
-        );
-        if (e.key == InstallationSource.local && e.value.installation != null) {
-          output.line(
-            e.value.installation!.location,
-            depth: 2,
-            role: VisualRole.secondary,
-          );
-        }
-      }
-      for (final problem in state.routing) {
-        output.line(problem, mark: Mark.warning);
-      }
-    }
+    _list(output, states);
   } else {
-    if (commandAction == InstallationAction.uninstall && !yes) {
+    if (commandAction == InstallationAction.uninstall && !asked.yes) {
       if (!interactive) {
         throw const InstallationFailure(
           'Removal needs confirmation.',
@@ -358,7 +338,7 @@ Future<int> _run(
       }
     }
     try {
-      final release = latest
+      final release = asked.latest
           ? await manager.latest(projects.single, source)
           : null;
       final result = await perform(
@@ -377,5 +357,45 @@ void _result(Output output, String message) {
   final lines = message.split('\n');
   for (var i = 0; i < lines.length; i++) {
     output.line(lines[i], mark: i == 0 ? Mark.done : Mark.none);
+  }
+}
+
+/// The inventory `--list`, or a bare command without a terminal, prints.
+void _list(Output output, List<ProjectInstallations> states) {
+  for (final state in states) {
+    output.line(
+      state.project.name == state.project.label
+          ? state.project.name
+          : '${state.project.name} · ${state.project.label}',
+      strong: true,
+    );
+    for (final e in state.sources.entries) {
+      output.line(
+        e.key.label,
+        depth: 1,
+        mark: state.selected == e.key || state.currentSource == e.key
+            ? Mark.done
+            : Mark.none,
+        note:
+            e.value.problem ??
+            (e.value.installation == null
+                ? 'Not installed'
+                : '${e.value.installation!.version}${state.currentSource == e.key
+                      ? ' · default on PATH'
+                      : state.selected == e.key
+                      ? ' · selected'
+                      : ' · installed'}'),
+      );
+      if (e.key == InstallationSource.local && e.value.installation != null) {
+        output.line(
+          e.value.installation!.location,
+          depth: 2,
+          role: VisualRole.secondary,
+        );
+      }
+    }
+    for (final problem in state.routing) {
+      output.line(problem, mark: Mark.warning);
+    }
   }
 }

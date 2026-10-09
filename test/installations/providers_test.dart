@@ -273,7 +273,11 @@ void main() {
     () async {
       final project = fixture(scratch, commands: ['orbit'], binary: true);
       final brew = FakeHomebrew('${scratch.path}/brew');
-      final provider = HomebrewInstallationProvider(brew.tools, '/brew');
+      final provider = HomebrewInstallationProvider(
+        brew.tools,
+        '/brew',
+        platform: 'linux-x64',
+      );
       expect((await provider.inspect(project)).installation, isNull);
       brew.pour('someone/else/orbit', '3.0.0');
       expect(
@@ -314,6 +318,7 @@ void main() {
           InstallationSource.homebrew: HomebrewInstallationProvider(
             brew.tools,
             '/brew',
+            platform: 'linux-x64',
           ),
         },
         environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
