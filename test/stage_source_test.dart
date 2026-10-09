@@ -399,13 +399,6 @@ void main() {
     expect(posixMode(data.statSync().mode), '0644');
 
     await expectLater(
-      StageSourceSnapshot.capture(
-        GitCommitSourceTree(root.path, commit),
-        commit: 'f' * 40,
-      ),
-      throwsStateError,
-    );
-    await expectLater(
       StageSourceSnapshot.capture(snapshot, commit: 'f' * 40),
       throwsStateError,
     );

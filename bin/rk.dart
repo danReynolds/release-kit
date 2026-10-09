@@ -848,7 +848,7 @@ class _Prepared {
 /// from the working tree otherwise — for status, plan, stage and release.
 Future<_Prepared> _prepare(Output output) async {
   final source = await ReleaseSource.open(Directory.current.absolute.path);
-  switch (source.readConfig()) {
+  switch (await source.readConfig()) {
     case ConfigMissing():
       output.repository(name: source.root.split('/').last);
       output.blank();

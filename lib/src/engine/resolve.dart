@@ -4,6 +4,7 @@ import 'diagnostic.dart';
 import 'publish_target.dart';
 import 'pubspec.dart';
 import 'release_dependencies.dart';
+import 'release_source.dart';
 import 'source_tree.dart';
 import 'version.dart';
 
@@ -36,7 +37,11 @@ class Resolution {
     ReleaseConfig config,
     SourceTree tree,
     Diagnostics diagnostics,
-  ) => _resolve(config, tree, diagnostics, developmentSources: false);
+  ) => fromManifests(
+    config,
+    Manifests.readFrom(tree, Manifests.pathsFor(config)),
+    diagnostics,
+  );
 
   /// Discovers installation targets without applying release source policy.
   /// Local checkouts may depend on unpublished path or Git packages. Release
@@ -45,13 +50,22 @@ class Resolution {
     ReleaseConfig config,
     SourceTree tree,
     Diagnostics diagnostics,
-  ) => _resolve(config, tree, diagnostics, developmentSources: true);
+  ) => fromManifests(
+    config,
+    Manifests.readFrom(tree, Manifests.pathsFor(config)),
+    diagnostics,
+    releasing: false,
+  );
 
-  static Resolution? _resolve(
+  /// Resolves [config] against [manifests], everything it declares read
+  /// from one source. [releasing] applies the release source policy: a
+  /// local checkout being installed may depend on unpublished path or Git
+  /// packages.
+  static Resolution? fromManifests(
     ReleaseConfig config,
-    SourceTree tree,
+    Manifests manifests,
     Diagnostics diagnostics, {
-    required bool developmentSources,
+    bool releasing = true,
   }) {
     final projects = <ResolvedProject>[];
     final byUnit = <String, List<ResolvedProject>>{};
@@ -62,9 +76,9 @@ class Resolution {
         final project = _project(
           unit,
           declared,
-          tree,
+          manifests,
           diagnostics,
-          developmentSources: developmentSources,
+          releasing: releasing,
         );
         if (project != null) {
           list.add(project);
@@ -181,20 +195,20 @@ class Resolution {
   static ResolvedProject? _project(
     UnitConfig unit,
     ProjectConfig declared,
-    SourceTree tree,
+    Manifests manifests,
     Diagnostics diagnostics, {
-    required bool developmentSources,
+    required bool releasing,
   }) {
     final manifestPath = declared.path == '.'
         ? 'pubspec.yaml'
         : '${declared.path}/pubspec.yaml';
 
-    final source = tree.read(manifestPath);
+    final source = manifests.text(manifestPath);
     if (source == null) {
       final crate = declared.path == '.'
           ? 'Cargo.toml'
           : '${declared.path}/Cargo.toml';
-      final crateSource = tree.read(crate);
+      final crateSource = manifests.text(crate);
       if (crateSource != null) {
         return _crate(unit, declared, crate, crateSource, diagnostics);
       }
@@ -202,7 +216,7 @@ class Resolution {
         'RK-RES-001',
         'no package at "${declared.path}"',
         source: declared.location,
-        remedy: tree.exists(declared.path)
+        remedy: manifests.exists(declared.path)
             ? 'that directory has no pubspec.yaml or Cargo.toml'
             : 'that directory does not exist in the repository',
       );
@@ -271,7 +285,7 @@ class Resolution {
         escaping.add('$name -> ${dependency.describeRequirement()}');
       }
     });
-    if (!developmentSources && escaping.isNotEmpty) {
+    if (releasing && escaping.isNotEmpty) {
       diagnostics.add(
         'RK-DART-201',
         '"${pubspec.name}" is built from sources this repository does not '
