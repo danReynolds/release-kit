@@ -1697,6 +1697,13 @@ void main() {
       expect(released.code, ExitCodes.refused);
       expect(released.problemCodes, contains(scenario.code));
       expect((released.report['halt'] as Map?)?['kind'], scenario.halt);
+      // Every line of a remedy is something the act or the read said.
+      final problem = (released.report['problems'] as List).cast<Map>().single;
+      expect(
+        (problem['remedy'] as String).split('\n'),
+        isNot(contains('null')),
+      );
+      expect(released.text, isNot(contains('\n    null\n')));
     });
   }
 

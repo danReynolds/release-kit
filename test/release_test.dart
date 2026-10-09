@@ -2195,6 +2195,11 @@ publish = ["pub.dev"]
       final pushFailure = ran.problems.singleWhere(
         (p) => p['code'] == 'RK-TAG-002',
       );
+      expect((pushFailure['remedy'] as String).split('\n'), [
+        'fatal: unable to access origin',
+        'the local tag was removed, so re-running starts clean',
+        'not on origin',
+      ]);
       final filed = pushFailure['evidence'] as String?;
       expect(filed, isNotNull, reason: 'the push kept only its first line');
       final account = (ran.report['attachments'] as Map)[filed] as String;

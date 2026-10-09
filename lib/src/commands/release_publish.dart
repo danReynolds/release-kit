@@ -623,7 +623,7 @@ final class Publication {
     final details = [
       ?given?.remedy,
       ?act.problem,
-      switch (act.privateEffect) {
+      ?switch (act.privateEffect) {
         TargetPrivateEffect.none => null,
         TargetPrivateEffect.changed =>
           'GitHub private draft state changed; this step did not publish a '
