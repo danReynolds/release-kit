@@ -97,12 +97,11 @@ class StageBoard {
           binaryProject.version.canonical,
           platform,
         );
+        // Named as the file is: the path inside the stage means nothing to
+        // a reader, and the stage says where its archives are.
         if (!publishedArtifacts.contains(publicName)) {
           localRows.add(
-            StageBoardRow(
-              'local/${binaryProject.name}/$platform',
-              ReleaseAssets.archivePath(binaryProject, platform),
-            ),
+            StageBoardRow('local/${binaryProject.name}/$platform', publicName),
           );
         }
       }

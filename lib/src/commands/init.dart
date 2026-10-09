@@ -112,16 +112,15 @@ class InitCommand {
       );
       return ExitCodes.refused;
     }
+    // Already configured is where init leads, not a problem: rk never edits
+    // a config, and says where to go from it.
     if (existing != null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-INIT-002',
-          message: 'release.toml already exists',
-          remedy:
-              'rk never edits one — a config is a decision already made. '
-              'Change it by hand.',
-        ),
+      output.blank();
+      output.line(
+        'release.toml already exists; rk init leaves it as it is',
+        mark: Mark.satisfied,
       );
+      output.next('rk status');
       return ExitCodes.ok;
     }
 

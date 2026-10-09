@@ -555,19 +555,24 @@ class Output {
     final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
     final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark, effectiveState);
 
-    // The indent is part of what is padded, so the note column stays put as
-    // the tree deepens rather than drifting right with it.
-    final indented = '${'  ' * depth}$label';
+    // The mark sits beside its row, at the row's indent: a nested row's mark
+    // reads as its bullet, not as a stray in the left margin. The text
+    // columns are where they would be without it, and the indent is part of
+    // what is padded, so the note column stays put as the tree deepens
+    // rather than drifting right with it.
+    final indent = '  ' * depth;
+    final indented = '$indent$label';
     final indentedWidth = displayWidth(indented);
+    final pad = labelWidth - displayWidth(indent);
     final plain = note == null
-        ? '$plainGlyph $indented'
+        ? '$indent$plainGlyph $label'
         : indentedWidth >= labelWidth
-        ? '$plainGlyph $indented $note'
-        : '$plainGlyph ${_padToWidth(indented, labelWidth)} $note';
+        ? '$indent$plainGlyph $label $note'
+        : '$indent$plainGlyph ${_padToWidth(label, pad)} $note';
     final width = terminalWidth;
     if (width != null && displayWidth(plain) > width) {
-      final firstPrefix = '$plainGlyph ${'  ' * depth}';
-      final paintedFirstPrefix = '$paintedGlyph ${'  ' * depth}';
+      final firstPrefix = '$indent$plainGlyph ';
+      final paintedFirstPrefix = '$indent$paintedGlyph ';
       final continuationPrefix = '${' ' * firstPrefix.runes.length}  ';
       _writeSettled(
         label,
@@ -591,11 +596,11 @@ class Output {
       return;
     }
 
-    final glyph = paintedGlyph;
+    final glyph = '$indent$paintedGlyph';
     if (note == null) {
       sink(
         '$glyph '
-        '${_style(indented, role: role, state: effectiveState, strong: strong)}\n',
+        '${_style(label, role: role, state: effectiveState, strong: strong)}\n',
       );
       return;
     }
@@ -606,12 +611,12 @@ class Output {
       // "permanent" out of column.
       sink(
         '$glyph '
-        '${_style(indented, role: role, state: effectiveState, strong: strong)} '
+        '${_style(label, role: role, state: effectiveState, strong: strong)} '
         '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
       );
       return;
     }
-    final padded = _padToWidth(indented, labelWidth);
+    final padded = _padToWidth(label, pad);
     sink(
       '$glyph '
       '${_style(padded, role: role, state: effectiveState, strong: strong)} '

@@ -931,6 +931,44 @@ publish = ["pub.dev"]
       expect(registry.reading, {'keybay', 'other'});
     });
 
+    test('units with long names stage side by side', () async {
+      // Side by side, each row group is prefixed with "<unit> <version> · ",
+      // which takes these past the width a row shows. A long name is a
+      // display matter: it is shortened, never a reason to stop.
+      const first = 'platform-engineering-internal-sdk';
+      const second = 'platform-engineering-internal-developer-sdk-tools';
+      const firstPackage = 'platform_engineering_internal_sdk_core_bindings';
+      const secondPackage =
+          'platform_engineering_internal_developer_sdk_tools_bindings';
+      final ran = await release(
+        only: null,
+        config:
+            '''
+schema = 2
+
+[release.$first]
+path = "packages/a"
+publish = ["pub.dev"]
+
+[release.$second]
+path = "packages/b"
+publish = ["pub.dev"]
+''',
+        source: MemorySourceTree({
+          'packages/a/pubspec.yaml': 'name: $firstPackage\nversion: 0.2.0\n',
+          'packages/a/CHANGELOG.md': '## 0.2.0\n',
+          'packages/b/pubspec.yaml': 'name: $secondPackage\nversion: 0.2.0\n',
+          'packages/b/CHANGELOG.md': '## 0.2.0\n',
+        }, description: '/repo/keybay'),
+        registry: FakeRegistry({
+          firstPackage: ['0.1.0'],
+          secondPackage: ['0.1.0'],
+        }),
+        dryRun: true,
+      );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    });
+
     test('stages its units side by side', () async {
       // Each unit's package archive is held until both have started: one
       // after the other, the first would wait forever.
@@ -1138,11 +1176,13 @@ publish = ["pub.dev"]
         greaterThan(validation),
         reason: 'all private packages finish before publication',
       );
-      expect(
-        'Authorized in the reviewed repository plan.'.allMatches(ran.text),
-        hasLength(2),
-        reason: 'each unit still shows what it is about to do',
-      );
+      for (final unit in ['keybay', 'other']) {
+        expect(
+          ran.text,
+          contains('$unit 0.2.0 · released'),
+          reason: 'each unit still shows what it did',
+        );
+      }
       expect(registry.published['keybay'], contains('0.2.0'));
       expect(registry.published['other'], contains('0.2.0'));
       expect(
@@ -1179,10 +1219,6 @@ publish = ["pub.dev"]
 
         expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
         expect(prompts, ['Release core 0.2.0 and other 0.2.0? [y/N] ']);
-        expect(
-          ran.text,
-          contains('Authorized in the reviewed repository plan'),
-        );
       },
     );
 
@@ -3060,7 +3096,7 @@ publish = ["pub.dev"]
       ran.text.indexOf(warning),
       allOf(
         greaterThanOrEqualTo(0),
-        lessThan(ran.text.indexOf('Authorized in the reviewed')),
+        lessThan(ran.text.indexOf('Release keybay 0.2.0')),
       ),
       reason: 'the operator sees it before the one question',
     );

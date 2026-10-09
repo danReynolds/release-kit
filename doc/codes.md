@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-151 codes across 28 families.
+150 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -162,7 +162,6 @@ stages the package) is retired and not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-INIT-001` | the config rk would propose is one rk itself refuses | `lib/src/commands/init.dart` |
-| `RK-INIT-002` | release.toml already exists | `lib/src/commands/init.dart` |
 | `RK-INIT-003` | nothing here can be released | `lib/src/commands/init.dart` |
 | `RK-INIT-004` | release.toml appeared before rk could write it | `lib/src/commands/init.dart` |
 | `RK-INIT-005` | .gitignore changed while init was being reviewed | `lib/src/commands/init.dart` |

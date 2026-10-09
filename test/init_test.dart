@@ -490,7 +490,12 @@ void closeoutRegressions() {
     });
     final proposal = await run({'pubspec.yaml': 'name: x\nversion: 1.0.0\n'});
 
-    expect(problemCodes(exists), contains('RK-INIT-002'));
+    expect(problemCodes(exists), isEmpty);
+    expect(
+      (jsonDecode(exists.encode(exit: 0)) as Map)['next'],
+      ['rk status'],
+      reason: 'already configured leads to status; it is not a problem',
+    );
     expect(problemCodes(nothing), contains('RK-INIT-003'));
     expect(problemCodes(proposal), isEmpty);
     expect(proposal.attachments['release.toml'], isNotNull);

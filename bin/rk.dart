@@ -226,7 +226,21 @@ String _usageFor(String? command) => switch (command) {
   _ => _usage,
 };
 
-Future<void> main(List<String> args) => runRk(args);
+Future<void> main(List<String> args) {
+  // A reader that stops reading, as `rk --help | head -1` does, closes the
+  // pipe under rk's later writes. Output nobody reads is not an error: rk
+  // finishes what it was doing, writes nothing more, and exits as it would
+  // have, rather than dying with a stack trace mid-run.
+  stdout.done.catchError((_) {}, test: _closedPipe);
+  return runRk(args);
+}
+
+/// EPIPE: the reading end of stdout is gone.
+bool _closedPipe(Object error) => switch (error) {
+  FileSystemException(:final osError?) => osError.errorCode == 32,
+  SocketException(:final osError?) => osError.errorCode == 32,
+  _ => false,
+};
 
 /// Shared command composition. The shipped entry point always uses pub.dev;
 /// native publication qualification supplies an explicit loopback endpoint.

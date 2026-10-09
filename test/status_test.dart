@@ -855,10 +855,8 @@ executables:
 
       expect(run.text, contains('Not staged'));
       expect(run.text, contains('Local binaries'));
-      expect(
-        run.text,
-        contains('producers/keybay/archives/keybay-0.2.0-linux-x64.tar.gz'),
-      );
+      expect(run.text, contains('keybay-0.2.0-linux-x64.tar.gz'));
+      expect(run.text, isNot(contains('producers/')));
       expect(run.report['next'], ['rk release cli']);
     },
   );
@@ -898,10 +896,8 @@ executables:
     expect(run.text, contains('Published'));
     expect(run.text, contains('Not staged'));
     expect(run.text, contains('Local binaries'));
-    expect(
-      run.text,
-      contains('producers/keybay/archives/keybay-0.2.0-linux-x64.tar.gz'),
-    );
+    expect(run.text, contains('keybay-0.2.0-linux-x64.tar.gz'));
+    expect(run.text, isNot(contains('producers/')));
     expect(run.report['next'], ['rk stage cli']);
   });
 
@@ -2027,7 +2023,7 @@ publish = ["pub.dev"]
       }
       _expectStyledSubject(
         notStaged.text,
-        'producers/keybay/archives/keybay-0.2.0-macos-arm64.tar.gz',
+        'keybay-0.2.0-macos-arm64.tar.gz',
         code: '90',
         after: 'Not staged',
       );

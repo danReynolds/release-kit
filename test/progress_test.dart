@@ -327,7 +327,11 @@ void main() {
         board.settle();
         final settled = harness.text.substring(beforeSettle);
         expect(settled, contains('\x1b[32m✓\x1b[0m'));
-        expect(settled, matches(RegExp(r'\x1b\[32m +package archive')));
+        expect(
+          settled,
+          contains('    \x1b[32m✓\x1b[0m \x1b[32mpackage archive'),
+          reason: 'the mark sits beside its row, not in the margin',
+        );
         expect(
           settled,
           isNot(contains('\x1b[34m')),

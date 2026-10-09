@@ -1004,7 +1004,11 @@ class StatusCommand {
       for (final platform in [...localProject.binaryPlatforms]..sort()) {
         final problem = localBlocked[platform];
         output.line(
-          ReleaseAssets.archivePath(localProject, platform),
+          ReleaseAssets.archiveName(
+            localProject.executable!,
+            localProject.version.canonical,
+            platform,
+          ),
           mark: staged
               ? Mark.satisfied
               : problem == null
@@ -1025,6 +1029,15 @@ class StatusCommand {
               : problem == null
               ? RuntimeState.neutral
               : RuntimeState.failure,
+        );
+      }
+      // Where they are, once they are: a directory this repository holds.
+      if (staged && snapshot.observed.stage != null) {
+        output.line(
+          'in ${snapshot.observed.stage!.directory.repositoryRelativePath}/'
+          '${ReleaseAssets.producerRoot(localProject)}/archives',
+          depth: 3,
+          role: VisualRole.secondary,
         );
       }
     }
