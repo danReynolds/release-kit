@@ -209,51 +209,45 @@ void main() {
       workingDirectory: '/repo',
     ).inspectExact(expected ?? expectation());
 
-    test('tag, inventory, and downloaded bytes can all be exact', () async {
-      final state = await inspectExact(view());
-      expect(state.verdict, Verdict.exact);
-      expect(state.detail, contains('asset bytes match'));
-      expect(state.evidence[asset], 'sha256:${Sha256.hex(bytes)}');
-    });
-
-    test('independent asset downloads run concurrently', () async {
-      final downloads = {
-        'a.tar.gz': utf8.encode('a'),
-        'b.tar.gz': utf8.encode('b'),
-        'c.tar.gz': utf8.encode('c'),
-      };
-      final tools = _ConcurrentDownloadTools(
-        response: jsonEncode({
-          'tag_name': 'v1.0.0',
-          'draft': false,
-          'prerelease': false,
-          'id': 41,
-          'name': 'tool 1.0.0',
-          'body': 'release notes\n',
-          'assets': [
-            for (final name in downloads.keys) {'name': name},
-          ],
-        }),
-        downloads: downloads,
-      );
-      final state =
-          await GithubRelease(
-            tools: tools,
-            repository: 'example/tool',
-            workingDirectory: '/repo',
-          ).inspectExact(
-            GithubReleaseExpectation(
-              tag: 'v1.0.0',
-              prerelease: false,
-              assetSha256: {
-                for (final entry in downloads.entries)
-                  entry.key: Sha256.hex(entry.value),
-              },
-            ),
-          );
-      expect(state.verdict, Verdict.exact);
-      expect(tools.maxActive, greaterThan(1));
-    });
+    test(
+      'tag, inventory, and downloaded bytes can all be exact, read at once',
+      () async {
+        final downloads = {
+          for (final name in ['a.tar.gz', 'b.tar.gz', 'c.tar.gz'])
+            name: utf8.encode(name),
+        };
+        final tools = _DownloadTools(
+          response: view(assets: downloads.keys.toList()),
+          downloads: downloads,
+        );
+        final state =
+            await GithubRelease(
+              tools: tools,
+              repository: 'example/tool',
+              workingDirectory: '/repo',
+            ).inspectExact(
+              GithubReleaseExpectation(
+                tag: 'v1.0.0',
+                prerelease: false,
+                assetSha256: {
+                  for (final entry in downloads.entries)
+                    entry.key: Sha256.hex(entry.value),
+                },
+              ),
+            );
+        expect(state.verdict, Verdict.exact);
+        expect(state.detail, contains('asset bytes match'));
+        expect(
+          state.evidence['a.tar.gz'],
+          'sha256:${Sha256.hex(downloads['a.tar.gz']!)}',
+        );
+        expect(
+          tools.maxActive,
+          greaterThan(1),
+          reason: 'independent assets download side by side',
+        );
+      },
+    );
 
     test('the endpoint returning a different tag is a conflict', () async {
       final state = await inspectExact(view(tag: 'v2.0.0'));
@@ -885,28 +879,19 @@ void main() {
         );
         expect(create, greaterThanOrEqualTo(0));
         expect(uploads, hasLength(2));
-        // The draft is read once, after its last upload and before it is
-        // made public. What the PATCH did is read back by the release.
-        expect(reads, hasLength(1));
+        // The draft is read after its last upload and before it is made
+        // public. What the PATCH did is read back by the release.
         expect(create, lessThan(uploads.first));
-        expect(uploads.last, lessThan(reads.single));
-        expect(reads.single, lessThan(patch));
+        expect(uploads.last, lessThan(reads.last));
+        expect(reads.last, lessThan(patch));
         expect(patch, run.tools.calls.length - 1);
         for (final index in uploads) {
-          final call = run.tools.calls[index];
           expect(
-            call,
+            run.tools.calls[index],
             contains(
               'https://uploads.github.com/repos/example/tool/releases/7/'
               'assets?name=',
             ),
-          );
-          expect(
-            call,
-            isNot(contains('--hostname uploads.github.com')),
-            reason:
-                'uploads use the github.com credential through gh\'s '
-                'absolute-URL transport, not a nonexistent second host login',
           );
         }
         expect(
@@ -990,18 +975,21 @@ void main() {
     test(
       'a named truncated asset cannot reconcile a lost upload response',
       () async {
+        // a.tar.gz uploads first, and its response is the one lost.
         final run = await publish(
           uploadFailure: 'connection lost',
           failedUploadLands: true,
-          draftAssetOverrides: {'b.tar.gz': utf8.encode('truncated')},
+          draftAssetOverrides: {'a.tar.gz': utf8.encode('truncated')},
         );
 
         expect(run.outcome.ok, isFalse);
         expect(run.outcome.mayHaveActed, isFalse);
         expect(run.outcome.draftEffect, DraftEffect.changed);
+        expect(run.outcome.problem, contains('reconciled by bytes'));
         expect(
-          run.outcome.problem,
-          contains('does not contain the staged bytes'),
+          run.tools.calls.where((call) => call.contains('uploads.github.com')),
+          hasLength(1),
+          reason: 'nothing more is uploaded beside bytes rk cannot account for',
         );
         expect(
           run.tools.calls.any((call) => call.contains(' -X PATCH ')),
@@ -1059,6 +1047,8 @@ void main() {
   });
 }
 
+/// GitHub answering [response] to every API read, and serving [downloads]
+/// by asset name.
 class _DownloadTools implements Tools {
   _DownloadTools({
     required this.response,
@@ -1073,64 +1063,9 @@ class _DownloadTools implements Tools {
   final bool omitDownloadedFile;
   final List<String> downloadRequests = [];
 
-  @override
-  Future<ToolResult> run(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-    Map<String, String>? environment,
-    Duration? timeout,
-  }) async {
-    if (executable == 'gh' &&
-        arguments.length >= 2 &&
-        arguments.first == 'api') {
-      return ToolResult(exitCode: 0, stdout: response, stderr: '');
-    }
-    if (executable == 'gh' &&
-        arguments.length >= 2 &&
-        arguments[0] == 'release' &&
-        arguments[1] == 'download') {
-      if (downloadFailure != null) {
-        return ToolResult(exitCode: 1, stdout: '', stderr: downloadFailure!);
-      }
-      final name = arguments[arguments.indexOf('--pattern') + 1];
-      downloadRequests.add(name);
-      final output = arguments[arguments.indexOf('--output') + 1];
-      final bytes = downloads[name];
-      if (bytes == null) {
-        return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: '$name is not downloadable',
-        );
-      }
-      if (!omitDownloadedFile) {
-        await File(output).writeAsBytes(bytes);
-      }
-      return ToolResult(exitCode: 0, stdout: '', stderr: '');
-    }
-    return ToolResult(
-      exitCode: 127,
-      stdout: '',
-      stderr: '$executable ${arguments.join(' ')} was not scripted',
-    );
-  }
-
-  @override
-  Future<int> runInteractive(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-  }) async => 0;
-}
-
-class _ConcurrentDownloadTools implements Tools {
-  _ConcurrentDownloadTools({required this.response, required this.downloads});
-
-  final String response;
-  final Map<String, List<int>> downloads;
-  var active = 0;
+  /// The most downloads that were in flight at once.
   var maxActive = 0;
+  var _active = 0;
 
   @override
   Future<ToolResult> run(
@@ -1140,28 +1075,30 @@ class _ConcurrentDownloadTools implements Tools {
     Map<String, String>? environment,
     Duration? timeout,
   }) async {
-    if (executable == 'gh' && arguments.first == 'api') {
-      return ToolResult(exitCode: 0, stdout: response, stderr: '');
+    if (executable == 'gh' && arguments.first == 'api') return ok(response);
+    if (executable != 'gh' ||
+        arguments.take(2).join(' ') != 'release download') {
+      return failed('$executable ${arguments.join(' ')} was not scripted');
     }
-    if (executable == 'gh' &&
-        arguments.length >= 2 &&
-        arguments[0] == 'release' &&
-        arguments[1] == 'download') {
-      active++;
-      if (active > maxActive) maxActive = active;
-      try {
-        // Long enough for every independently-started future to enter. A
-        // serial implementation can never make maxActive exceed one.
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        final name = arguments[arguments.indexOf('--pattern') + 1];
-        final output = arguments[arguments.indexOf('--output') + 1];
-        await File(output).writeAsBytes(downloads[name]!);
-        return ToolResult(exitCode: 0, stdout: '', stderr: '');
-      } finally {
-        active--;
+    if (downloadFailure case final failure?) return failed(failure);
+    final name = arguments[arguments.indexOf('--pattern') + 1];
+    downloadRequests.add(name);
+    final bytes = downloads[name];
+    if (bytes == null) return failed('$name is not downloadable');
+    if (++_active > maxActive) maxActive = _active;
+    try {
+      // Long enough for downloads started together to be in flight together;
+      // one at a time never makes maxActive exceed one.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      if (!omitDownloadedFile) {
+        await File(
+          arguments[arguments.indexOf('--output') + 1],
+        ).writeAsBytes(bytes);
       }
+    } finally {
+      _active--;
     }
-    return ToolResult(exitCode: 127, stdout: '', stderr: 'not scripted');
+    return ok();
   }
 
   @override

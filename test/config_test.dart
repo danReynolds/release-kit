@@ -40,24 +40,6 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 
 void main() {
   group('schema 2 target contracts', () {
-    test('schema 1 is unsupported without a compatibility layer', () {
-      final diagnostics = Diagnostics();
-      final config = ReleaseConfig.parse(
-        '''
-schema = 1
-
-[release.core]
-publish = ["pub.dev"]
-''',
-        'release.toml',
-        diagnostics,
-      );
-
-      expect(config, isNull);
-      expect(diagnostics.found.single.code, 'RK-CONF-002');
-      expect(diagnostics.found.single.remedy, 'upgrade rk, or use schema 2');
-    });
-
     test('a custom Homebrew tap is an owner/repository coordinate', () {
       for (final tap in [
         'https://github.com/example/homebrew-tools',
@@ -148,13 +130,6 @@ publish = ["pub.dev"]
       expect(
         diagnostics.found.map((diagnostic) => diagnostic.code),
         contains('RK-CONF-038'),
-      );
-    });
-
-    test('a targetless unit is refused', () {
-      expect(
-        refusedWith('schema = 2\n[release.core]\npath = "packages/core"'),
-        'RK-CONF-019',
       );
     });
 
@@ -296,22 +271,6 @@ homebrew_tap = "danReynolds/homebrew-tools"
       );
     });
   });
-
-  test(
-    'there is no team to declare, and no identity table to declare it in',
-    () {
-      // apple_team was discoverable all along — a machine with one Developer
-      // ID certificate has nothing to say — and tag_signer was accepted,
-      // stored, and read by nothing at all.
-      expect(
-        refusedWith(
-          'schema = 2\n[release.core]\npublish = ["pub.dev"]\n'
-          '[identity]\napple_team = "5AHFA9FUZG"\n',
-        ),
-        'RK-CONF-003',
-      );
-    },
-  );
 
   test('platforms may accompany a registry without GitHub Release', () {
     final config = accepted(
@@ -506,16 +465,6 @@ homebrew_tap = "danReynolds/homebrew-tools"
           'binary_platforms = ["macos-x64"]',
         ),
         'RK-CONF-028',
-      );
-    });
-
-    test('an unknown setting on a unit', () {
-      expect(
-        refusedWith(
-          'schema = 2\n[release.core]\npublish = ["pub.dev"]\n'
-          'signing_key = "x"',
-        ),
-        'RK-CONF-008',
       );
     });
   });

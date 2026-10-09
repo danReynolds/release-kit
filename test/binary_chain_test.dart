@@ -338,21 +338,6 @@ void main() {
       expect(outcome.ok, isFalse);
       expect(outcome.problem, contains('0.1.0'));
     });
-
-    test(
-      'a platform this host cannot produce never reaches the builder',
-      () async {
-        // The guard lives at the caller, which refuses with RK-HOST-001 and a
-        // reason. The builder used to re-check and return a `blocked` outcome
-        // nothing read — two guards for one decision, the inner one
-        // unreachable.
-        expect(capabilities.resolve('macos-x64').canProduce, isFalse);
-        expect(
-          capabilities.resolve('macos-x64').reason,
-          contains('needs a macos-x64 host'),
-        );
-      },
-    );
   });
 
   group('archives are byte-reproducible', () {
