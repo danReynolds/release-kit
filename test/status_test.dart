@@ -13,12 +13,10 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/engine/release_asset.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
-import 'package:rk/src/engine/stage_archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/targets.dart';
@@ -2150,17 +2148,7 @@ Future<ReleaseStage> _completedStage({
       type: 'archive',
     );
     archives.add(archive);
-    steps.add(
-      StageStep(
-        name: 'archive:$platform',
-        outputs: [archive],
-        evidence: {
-          'inventory': StageArchiveInventory.evidence(
-            StageArchiveInventory.parse(bytes),
-          ),
-        },
-      ),
-    );
+    steps.add(StageStep(name: 'archive:$platform', outputs: [archive]));
   }
   final formula = ReleaseAssets.formulaName(executable);
   if (public.contains(formula)) {
@@ -2183,9 +2171,8 @@ Future<ReleaseStage> _completedStage({
   return stage;
 }
 
-List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
-  for (final path in paths)
-    ReleaseAssetSpec(stagedPath: path, publicName: path),
+List<ReleaseAsset> _fixtureReleaseAssets(Iterable<String> paths) => [
+  for (final path in paths) (publicName: path, stagedPath: path),
 ];
 
 /// Whether a unit can be released, and what status suggests doing next.

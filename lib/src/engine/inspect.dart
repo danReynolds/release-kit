@@ -1,6 +1,5 @@
 import '../targets/catalog.dart';
 import '../targets/target_module.dart';
-import 'assets.dart';
 import 'checklist.dart';
 import 'diagnostic.dart';
 import 'git.dart';
@@ -99,13 +98,6 @@ class Inspector {
     Verdict.absent => step.kind == StepKind.prerequisite,
     Verdict.exact => false,
   };
-
-  /// The asset names a release of [unit] is expected to carry.
-  ///
-  /// Public and static so a test can hold the set itself to account: emptied,
-  /// every release inspects exact, and nothing else notices.
-  static Set<String> expectedAssets(ResolvedUnit unit) =>
-      ReleaseAssets.expectedForUnit(unit).toSet();
 
   Future<Inspection> inspect(Step step, ResolvedUnit unit) =>
       Timings.span('check ${step.id}', () => _inspect(step, unit));

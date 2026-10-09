@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -614,7 +615,7 @@ void targetReads() {
   test('the expected asset set is derived, and derives everything', () async {
     final unit = await _binaryUnit();
     expect(
-      Inspector.expectedAssets(unit),
+      ReleaseAssets.expectedForUnit(unit),
       {
         'example-tool-1.0.0-linux-x64.tar.gz',
         'example-tool-1.0.0-macos-arm64.tar.gz',

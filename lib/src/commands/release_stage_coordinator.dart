@@ -37,7 +37,6 @@ final class ReleaseStageCoordinator {
     required this.tools,
     required this.capabilities,
     required this.stageFor,
-    required this.stageOnly,
   });
 
   final GitState initialGit;
@@ -45,7 +44,6 @@ final class ReleaseStageCoordinator {
   final Tools tools;
   final HostCapabilities capabilities;
   final ReleaseStage Function(ResolvedUnit unit) stageFor;
-  final bool stageOnly;
 
   Diagnostic? preparationProblem(
     ResolvedUnit unit,
@@ -460,14 +458,7 @@ final class ReleaseStageCoordinator {
       ProgressActivity(running: 'assembling', failed: 'assembly failed'),
     );
     try {
-      stage.finalize(
-        releaseAssets: ReleaseAssets.bundleFor(unit),
-        evidence: {
-          'requested_mode': stageOnly ? 'stage' : 'one-shot',
-          'source_commit': stage.directory.identity.headCommit,
-          'source_tree': stage.directory.identity.headTree,
-        },
-      );
+      stage.finalize(releaseAssets: ReleaseAssets.bundleFor(unit));
     } on Object catch (error) {
       stageProgress.conclude();
       output.problem(

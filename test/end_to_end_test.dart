@@ -1808,7 +1808,7 @@ executables:
       json:
           jsonDecode(output.report.encode(exit: code)) as Map<String, Object?>,
       notes: notesAtCreate,
-      expected: Inspector.expectedAssets(resolution.unit('cli')!),
+      expected: ReleaseAssets.expectedForUnit(resolution.unit('cli')!),
     );
   }
 
@@ -2025,8 +2025,8 @@ executables:
           uploaded,
           equals(run.expected),
           reason:
-              'the release publishes exactly the set Inspector.'
-              'expectedAssets derives — any difference is a conflict verdict '
+              'the release publishes exactly the set ReleaseAssets.'
+              'expectedForUnit derives — any difference is a conflict verdict '
               'on the next run, and a published release cannot be edited',
         );
         expect(

@@ -1,7 +1,7 @@
 import 'dart:io';
 
+import 'assets.dart';
 import 'canonical_json.dart';
-import 'release_asset.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
 import 'stage.dart';
@@ -265,7 +265,7 @@ class ReleaseStage {
   /// The manifest does not list itself, avoiding a self-digest cycle; the
   /// receipt records it like every other staged file.
   StageReceipt finalize({
-    required Iterable<ReleaseAssetSpec> releaseAssets,
+    required Iterable<ReleaseAsset> releaseAssets,
     Map<String, Object?> evidence = const {},
   }) {
     final inspected = inspect();

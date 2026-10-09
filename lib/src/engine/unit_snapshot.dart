@@ -2,10 +2,10 @@ import '../targets/target_module.dart';
 import 'checklist.dart';
 import 'diagnostic.dart';
 import 'inspect.dart';
+import 'publish_target.dart';
 import 'release_stage.dart';
 import 'resolve.dart';
 import 'stage_inspection.dart';
-import 'stage_recovery.dart';
 import 'targets.dart';
 import 'verdict.dart';
 
@@ -204,12 +204,19 @@ final class UnitSnapshot {
 
   /// Whether public bytes already bind this unit's stage, and it is gone:
   /// built assets partly published on a GitHub release or in a formula.
+  ///
+  /// Only built release assets bind a stage: on a GitHub release, in a
+  /// Homebrew formula that names their hashes, and in the release manifest a
+  /// tag annotation records. A unit without them stages the same manifest
+  /// again from its commit, and a published package binds nothing.
   bool get partialStageLoss =>
       !stageReusable &&
       !releasedElsewhere &&
-      hasRecoveryCriticalPublicProgress(unit, [
-        for (final step in publicSteps) (step, states[step.id]!),
-      ]);
+      unit.buildsReleaseAssets &&
+      publicSteps.any(
+        (step) =>
+            step.target != PublishTarget.pubDev && states[step.id]!.isExact,
+      );
 
   /// Whether every target a unit has left can finish from authenticated
   /// public inputs without its stage, as a moving channel may. One versioned

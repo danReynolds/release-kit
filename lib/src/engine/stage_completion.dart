@@ -1,6 +1,5 @@
 import 'assets.dart';
 import 'publish_target.dart';
-import 'release_asset.dart';
 import 'release_manifest.dart';
 import 'resolve.dart';
 import 'stage_receipt.dart';
@@ -13,9 +12,9 @@ final class StageCompletion {
     required String? repository,
     required String? commit,
     required Iterable<StageArtifact> artifacts,
-    required Iterable<ReleaseAssetSpec> releaseAssets,
+    required Iterable<ReleaseAsset> releaseAssets,
   }) {
-    final specs = validateReleaseAssetSpecs(releaseAssets).toList()
+    final specs = releaseAssets.toList()
       ..sort((a, b) => a.publicName.compareTo(b.publicName));
     final byPath = {for (final artifact in artifacts) artifact.path: artifact};
     final homebrew = homebrewFor(unit, repository);

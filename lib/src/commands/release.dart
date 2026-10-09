@@ -159,7 +159,6 @@ class ReleaseCommand {
     tools: tools,
     capabilities: capabilities,
     stageFor: _stageFor,
-    stageOnly: stageOnly,
   );
 
   late final ReleasePublicationCoordinator _publication =

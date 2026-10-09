@@ -814,18 +814,6 @@ class StatusCommand {
 
     _renderPublication(snapshot);
     _renderStage(snapshot);
-    if (snapshot.stage?.incomplete == true &&
-        snapshot.stageState.evidence.containsKey('native authorization')) {
-      final producers = snapshot.stage!.receipt!.steps.length;
-      output.line(
-        'Saved progress',
-        note: producers == 0
-            ? 'source preparation incomplete'
-            : '$producers recorded producers; stage incomplete',
-        depth: 1,
-        role: VisualRole.secondary,
-      );
-    }
   }
 
   /// Where each target stands publicly.
