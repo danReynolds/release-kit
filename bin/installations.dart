@@ -11,7 +11,6 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/timings.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/installations/discovery.dart';
 import 'package:rk/src/installations/local.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';

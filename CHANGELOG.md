@@ -166,6 +166,12 @@ published finishes with 0.1.14.
   `RK-USE-001`, like every other refused installation; `RK-USE-002` is
   gone. Bad metadata reads "The installation metadata is invalid.", and a
   command that cannot start is named instead of "the package manager".
+- A GitHub download keeps the archive's file modes (0755 for executables,
+  0644 otherwise) rather than 0700 and 0600. It follows the redirects GitHub
+  gives it, and is checked against the release manifest's size and SHA-256
+  as before; rk no longer limits which hosts it may be redirected to, caps
+  archive sizes, or verifies macOS code signatures again at install.
+- A `bin/` script that links outside its package can be selected.
 - rk's bin directory on PATH written with a trailing slash, or through a
   link, counts as first: `rk use` no longer says to put it there.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.

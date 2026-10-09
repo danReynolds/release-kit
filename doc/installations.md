@@ -145,10 +145,10 @@ and arguments.
 GitHub archives must use RK's current release manifest and supported single-file
 or Dart bundle layout. The installer checks the manifest's unit, version and
 tag, archive size and SHA-256, and the complete file inventory. It rejects
-links, traversal, duplicate entries and unknown files. macOS code signatures
-are checked, and the command must successfully report the released version
-before the installation is accepted. Checksums prove consistency with that
-GitHub release; they are not independent publisher authentication.
+links, traversal, duplicate entries and unknown files, and keeps the
+archive's file modes. The command must successfully report the released
+version before the installation is accepted. Checksums prove consistency
+with that GitHub release; they are not independent publisher authentication.
 
 ## Routing and recovery
 
@@ -230,10 +230,10 @@ The TUI dependency raises RK's minimum SDK to Dart 3.10.4. Fleury is confined to
 and `yaml`: SHA-256 digests, Pub's version semantics (the Pub installation
 adapter evaluates SDK constraints with them), and pubspecs read as Pub reads
 them. A test in `test/end_to_end_test.dart` keeps it that way. One HTTPS fetch
-serves the pub.dev and GitHub checks and downloads. The GitHub adapter limits
-download and decompression sizes, then reuses the release engine's exact
-archive inventory validator. `RK_TIMINGS=1` traces where an installation
-command's time goes.
+serves the pub.dev and GitHub checks and downloads, following their
+redirects. The GitHub adapter reuses the release engine's exact archive
+inventory validator. `RK_TIMINGS=1` traces where an installation command's
+time goes.
 
 The [qualification record](archive/installation-qualification.md) lists the
 checks run when installations were built.

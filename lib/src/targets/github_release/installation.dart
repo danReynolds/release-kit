@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import '../../builds/binary_artifact.dart';
 import '../../engine/assets.dart';
@@ -10,7 +9,6 @@ import '../../engine/stage_archive.dart';
 import '../../engine/tools.dart';
 import '../../engine/version.dart';
 import '../../installations/model.dart';
-import '../../installations/metadata.dart';
 import '../../installations/provider.dart';
 import '../../installations/store.dart';
 import '../../transforms/digest.dart';
@@ -156,7 +154,7 @@ class GithubInstallationProvider implements InstallationProvider {
         final metadata = manifest.artifacts
             .where((a) => a.name == archiveName)
             .firstOrNull;
-        if (metadata == null || metadata.size > 128 * 1024 * 1024) continue;
+        if (metadata == null) continue;
         return AvailableInstallation(
           version,
           url: asset(archiveName),
@@ -206,24 +204,14 @@ class GithubInstallationProvider implements InstallationProvider {
         final file = File('${temporary.path}/${entry.key}');
         file.parent.createSync(recursive: true);
         file.writeAsBytesSync(entry.value, flush: true);
-        final mode =
-            decoded.artifact.files
-                    .where((f) => f.path == entry.key)
-                    .firstOrNull
-                    ?.executable ==
-                true
-            ? '700'
-            : '600';
-        await checked(tools, '/bin/chmod', [mode, file.path]);
-      }
-      if (platform.startsWith('macos-')) {
-        for (final file in decoded.artifact.signedFiles) {
-          await checked(tools, '/usr/bin/codesign', [
-            '--verify',
-            '--strict',
-            '${temporary.path}/${file.path}',
-          ]);
-        }
+        // The archive's own modes: 0755 for its executables, 0644 otherwise.
+        final executable = decoded.artifact.files.any(
+          (f) => f.path == entry.key && f.executable,
+        );
+        await checked(tools, '/bin/chmod', [
+          executable ? '755' : '644',
+          file.path,
+        ]);
       }
       final smoke = await tools.run(
         '${temporary.path}/${decoded.artifact.entryPoint}',
@@ -256,24 +244,15 @@ class InstallationArchive {
   final Map<String, List<int>> files;
 }
 
-/// Validate the whole inventory before writing any path. Never extract archive
-/// permissions, links, device nodes, arbitrary paths, or unknown bundle layouts.
+/// Validate the whole inventory before writing any path. Never extract links,
+/// device nodes, arbitrary paths, or unknown bundle layouts.
 Future<InstallationArchive> decodeInstallationArchive(
   List<int> compressed,
   String command,
 ) async {
-  const limit = 512 * 1024 * 1024;
-  final bytes = BytesBuilder(copy: false);
-  await for (final chunk in gzip.decoder.bind(Stream.value(compressed))) {
-    if (bytes.length + chunk.length > limit) {
-      throw const InstallationFailure(
-        'The unpacked archive exceeds the installation limit.',
-      );
-    }
-    bytes.add(chunk);
-  }
+  final tar = gzip.decode(compressed);
   try {
-    final decoded = StageArchiveInventory.decodeTar(bytes.takeBytes());
+    final decoded = StageArchiveInventory.decodeTar(tar);
     if (decoded.artifact.entryPoint != command) {
       throw const FormatException('The archive exports a different command.');
     }

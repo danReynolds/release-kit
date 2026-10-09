@@ -4,7 +4,6 @@ import 'dart:io';
 import '../../engine/tools.dart';
 import '../../builds/capability.dart';
 import '../../engine/version.dart';
-import '../../installations/metadata.dart';
 import '../../transforms/digest.dart';
 import '../../installations/model.dart';
 import '../../installations/provider.dart';

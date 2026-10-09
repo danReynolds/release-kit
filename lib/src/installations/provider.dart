@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
 import '../engine/tools.dart';
 import 'model.dart';
 
@@ -107,4 +111,57 @@ final class AvailableInstallation {
   final Uri? url;
   final int? size;
   final String? sha256;
+}
+
+/// Reads one public resource; a [check] can cancel it. Providers take this as
+/// a parameter so tests can serve releases without a network.
+typedef HttpsFetch =
+    Future<Uint8List> Function(
+      Uri uri,
+      int maxBytes, {
+      InstallationCancellation? check,
+    });
+
+/// Reads a public pub.dev or GitHub resource over HTTPS, following its
+/// redirects, bounded in size and time. A check gives up after 15 seconds; a
+/// download may take three minutes.
+Future<Uint8List> fetchHttps(
+  Uri uri,
+  int maxBytes, {
+  InstallationCancellation? check,
+}) async {
+  final client = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 20)
+    ..userAgent = 'rk-installation';
+  void close() => client.close(force: true);
+  final unregister = check?.onCancel(close);
+  final deadline = Timer(
+    check == null ? const Duration(minutes: 3) : const Duration(seconds: 15),
+    close,
+  );
+  try {
+    final request = await client
+        .getUrl(uri)
+        .timeout(const Duration(seconds: 30));
+    final response = await request.close().timeout(const Duration(seconds: 30));
+    if (response.statusCode != 200) {
+      throw InstallationFailure(
+        '${uri.host} returned HTTP ${response.statusCode}.',
+        'Installed versions are still available. Retry later, or check the '
+            'public release. Private GitHub downloads are not supported yet.',
+      );
+    }
+    final data = BytesBuilder(copy: false);
+    await for (final chunk in response.timeout(const Duration(seconds: 30))) {
+      if (data.length + chunk.length > maxBytes) {
+        throw const InstallationFailure('A download exceeded its size limit.');
+      }
+      data.add(chunk);
+    }
+    return data.takeBytes();
+  } finally {
+    unregister?.call();
+    deadline.cancel();
+    client.close(force: true);
+  }
 }

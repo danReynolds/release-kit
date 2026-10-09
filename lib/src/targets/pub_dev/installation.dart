@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:pub_semver/pub_semver.dart' as semver;
-import '../../installations/metadata.dart';
 
 import '../../engine/diagnostic.dart';
 import '../../engine/pubspec.dart';
