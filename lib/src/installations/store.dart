@@ -74,15 +74,34 @@ class InstallationStore {
     if (!file.existsSync()) return null;
     final text = file.readAsStringSync();
     final header = _header.firstMatch(text);
-    final source = InstallationSource.named(header?[2] ?? '');
-    final location = _location.firstMatch(text)?[1];
-    if (header == null || source == null || location == null) return null;
+    if (header == null) return null;
     final owner = header[1]!;
-    return (
-      project: _hash.hasMatch(owner) ? null : owner,
-      source: source,
-      location: location,
-    );
+    final legacy = _hash.hasMatch(owner);
+    if (header[2] == null) return legacy ? _legacy(owner) : null;
+    final source = InstallationSource.named(header[2]!);
+    final location = _location.firstMatch(text)?[1];
+    if (source == null || location == null) return null;
+    return (project: legacy ? null : owner, source: source, location: location);
+  }
+
+  /// What a launcher rk 0.1.14 wrote runs: it forwards to its project's
+  /// current generation, whose installation.json records the source.
+  Launcher? _legacy(String hash) {
+    final record = File('$root/projects/$hash/current/installation.json');
+    if (!record.existsSync()) return null;
+    try {
+      if (jsonDecode(record.readAsStringSync()) case {
+        'source': final String name,
+        'location': final String location,
+      }) {
+        if (InstallationSource.named(name) case final source?) {
+          return (project: null, source: source, location: location);
+        }
+      }
+    } on FormatException {
+      // Not a record 0.1.14 wrote; its launcher runs nothing rk can name.
+    }
+    return null;
   }
 
   /// What [project]'s commands run: each command whose launcher rk wrote for

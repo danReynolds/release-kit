@@ -171,7 +171,11 @@ A launcher names its project by package name and its source by name, as in
 own. RK refuses to overwrite a command in its bin directory that it did not
 write, or that it selected for another project; `rk use --list` reports a
 command another project's launcher holds. Changing a project's origin or
-moving its checkout does not lock rk out of its own commands.
+moving its checkout does not lock rk out of its own commands. A launcher rk
+0.1.14 wrote names its project by a hash and forwards to that project's
+`projects/<hash>/current`, which records the source: rk reads the selection
+from there, and the next `rk use` of a project exporting the command replaces
+it.
 
 Removing a source any of the project's commands runs is refused: select
 another first. Local is the checkout itself, so there is nothing to uninstall.

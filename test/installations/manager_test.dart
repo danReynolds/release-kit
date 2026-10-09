@@ -258,6 +258,71 @@ void main(List<String> args) {
   );
 
   test(
+    'a selection rk 0.1.14 made keeps running, and its source is not removed',
+    () async {
+      // What 0.1.14 wrote: a launcher per command that names the project by
+      // a hash and forwards to its current generation, which records the
+      // source in installation.json.
+      final hash = '0123456789abcdef' * 4;
+      final projects = '${store.root}/projects/$hash';
+      final generation = '$projects/generations/pub-1-1';
+      File('$generation/installation.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          jsonEncode({
+            'source': 'pub',
+            'version': '1.2.0',
+            'location': '/fixture',
+            'managed': false,
+            'exported_paths': <String>[],
+            'commands': <String, Object>{},
+          }),
+        );
+      Link('$projects/current').createSync('generations/pub-1-1');
+      for (final command in project.commands) {
+        final target = '$projects/current/bin/$command';
+        File('$generation/bin/$command')
+          ..createSync(recursive: true)
+          ..writeAsStringSync('#!/bin/sh\nexec /bin/echo legacy $command\n');
+        File('${store.bin}/$command')
+          ..createSync(recursive: true)
+          ..writeAsStringSync(
+            "#!/bin/sh\n# rk-managed:$hash\nif [ ! -x '$target' ]; then\n"
+            "  printf '%s\\n' 'rk: $command has no usable selection. Run rk use from its configured repository.' >&2\n"
+            "  exit 127\nfi\nexec '$target' \"\$@\"\n",
+          );
+        for (final file in [
+          '$generation/bin/$command',
+          '${store.bin}/$command',
+        ]) {
+          await Process.run('/bin/chmod', ['700', file]);
+        }
+      }
+      pub.installed = Installation(
+        source: pub.source,
+        version: '1.2.0',
+        location: '/fixture',
+        commands: const {},
+      );
+      expect((await manager.inspect(project)).selected, pub.source);
+      await expectLater(
+        act(pub.source, InstallationAction.uninstall),
+        throwsA(isA<InstallationFailure>()),
+      );
+      expect(pub.removals, 0);
+      expect(
+        (await Process.run('${store.bin}/orbit', [])).stdout,
+        'legacy orbit\n',
+      );
+      await act(local.source, InstallationAction.use);
+      expect(
+        (await Process.run('${store.bin}/orbit', [])).stdout,
+        'local orbit\n',
+      );
+    },
+  );
+
+  test(
     'a switch interrupted between commands keeps both sources it runs',
     () async {
       await act(pub.source, InstallationAction.use);
