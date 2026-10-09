@@ -38,6 +38,9 @@ void main() {
         ['use', 'local', 'extra'],
         ['use', 'pub', '--latest'],
         ['install', 'pub', '--yes'],
+        ['use', 'pub', '--live'],
+        ['use', '--live'],
+        ['uninstall', 'local', '--live'],
       ]) {
         expect(rk(project.directory, args).code, 2, reason: '$args');
       }
@@ -83,6 +86,11 @@ void main() {
       expect(used.code, 0, reason: used.all);
       final state = installations(used)['projects'].single;
       expect(state['selected'], 'local');
+      expect(state['sources']['local']['mode'], 'compiled');
+      expect(
+        state['sources']['local']['checkout'],
+        Directory(project.directory).resolveSymbolicLinksSync(),
+      );
       expect(state['routing_problems'], hasLength(2));
       final entry = '${installations(used)['managed_bin']}/orbit';
       final result = await Process.run(

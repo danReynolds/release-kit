@@ -156,8 +156,8 @@ class InstallationManager {
       }
       if (action == InstallationAction.install && release == null) {
         store.retire(project, installation);
-        // Local is the checkout itself: it counts as installed once selected.
-        return source == InstallationSource.local
+        return source == InstallationSource.local &&
+                installation.checkout == null
             ? '${project.name} prepared in this checkout. Selection unchanged.'
             : '${project.name} installed from ${source.label}. Selection unchanged.';
       }
@@ -178,7 +178,9 @@ class InstallationManager {
       }
       final path = await store.putFirstOnPath(project, environment);
       return [
-        '${project.name} → ${source.label} · ${installation.version}',
+        '${project.name} → ${source.label} · ${installation.version}${source == InstallationSource.local ? (installation.checkout == null ? ' · live source' : ' · compiled') : ''}',
+        if (installation.checkout != null)
+          'After source edits, run rk use local again to rebuild.',
         ?path,
       ].join('\n');
     } finally {

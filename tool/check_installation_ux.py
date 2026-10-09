@@ -90,6 +90,14 @@ def main():
         manifest = project / 'pubspec.yaml'
         manifest.write_text(manifest.read_text().replace('rk_dogfood', 'orbit'))
         run(executable, project, home, 'use', 'local', '--json')
+        # A selected compiled checkout can be rebuilt without switching away.
+        with Terminal(executable, 'use', project, home,
+                      environment={'PATH': str(home / 'data/rk/bin') + os.pathsep + os.environ['PATH']}) as terminal:
+            terminal.wait('Rebuild')
+            assert '✓ Default' in terminal.text()
+            terminal.focus('Rebuild')
+            terminal.send(b'\r')
+            terminal.finish()
         # An incomplete Pub activation gives an inspectable unavailable choice.
         (home / 'cache/global_packages/orbit').mkdir(parents=True)
         with Terminal(executable, 'use', project, home, cols=240) as terminal:
@@ -114,7 +122,7 @@ def main():
             assert 'Why?' not in terminal.text()
             terminal.focus('Use     ]')
             assert terminal.screen.buffer[row][col].bg == '2a4c6c'
-            name_row, name_col = locate(terminal, 'This checkout')
+            name_row, name_col = locate(terminal, '1.0.0 compiled')
             assert terminal.screen.buffer[name_row][name_col].bg == 'default', 'focus recolored the source row'
             shot(terminal, 'use-action-focus')
             terminal.send(b'\t')  # Blocked Pub is skipped; focus reaches Refresh.
@@ -142,7 +150,7 @@ def main():
             terminal.send(b'\t')
             settle(terminal)
             assert terminal.screen.buffer[row][col].reverse, 'Tab did not focus the first action'
-            name_row, name_col = locate(terminal, 'This checkout')
+            name_row, name_col = locate(terminal, '1.0.0 compiled')
             assert not terminal.screen.buffer[name_row][name_col].reverse
             terminal.focus('r Refresh')
             refresh_row, refresh_col = locate(terminal, 'r Refresh')

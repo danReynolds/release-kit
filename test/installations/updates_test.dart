@@ -252,6 +252,7 @@ void main() {
       tester.pump();
       expect(tester.renderToString(), contains('Checking…'));
       expect(tester.renderToString(), contains('✓ Default'));
+      expect(tester.renderToString(), contains('Rebuild'));
       tester.sendKey(const KeyEvent(KeyCode.enter));
       tester.pump();
       expect(uses, 0);

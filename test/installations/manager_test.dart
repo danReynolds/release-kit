@@ -152,6 +152,7 @@ void main(List<String> args) {
         TestTools((_, _, _, _) async => ok()),
         Platform.resolvedExecutable,
         store,
+        live: true,
       );
       final live = InstallationManager(
         store: store,
@@ -469,6 +470,7 @@ void main(List<String> args) {
         tools,
         Platform.resolvedExecutable,
         store,
+        live: true,
       );
       final live = InstallationManager(
         store: store,

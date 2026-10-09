@@ -29,6 +29,7 @@ rk uninstall [source] [-p project] remove an inactive installation
 Sources: local, homebrew, pub, github — only those configured for this project.
 No source: open the matrix in a terminal, or list sources when redirected.
 --latest        install: get the latest compatible version; keep the selected source
+--live          use/install local: run source directly; default Local compiles a snapshot
 --list          inspect available sources and current selection; no changes
 -p, --project   package name; required for an explicit source in a multi-app repo
 --json          one structured report, no TUI or prompts
@@ -78,18 +79,21 @@ Future<void> installationMain(List<String> args, String command) async {
   bool list,
   bool yes,
   bool latest,
+  bool live,
   bool help,
   String? error,
 })
 _arguments(List<String> args, String command) {
   String? project, source, error;
-  var list = false, yes = false, latest = false, help = false;
+  var list = false, yes = false, latest = false, live = false, help = false;
   final rest = [...args]..remove(command);
   for (var i = 0; i < rest.length && error == null; i++) {
     final arg = rest[i];
     switch (arg) {
       case '--latest':
         latest = true;
+      case '--live':
+        live = true;
       case '--list':
         list = true;
       case '--json': // Owned by the output.
@@ -122,6 +126,9 @@ _arguments(List<String> args, String command) {
     error = '--latest needs an explicit rk install source.';
   }
   if (latest && source == 'local') error = followsCheckout;
+  if (live && (source != 'local' || command == 'uninstall' || list)) {
+    error = '--live needs rk use local or rk install local.';
+  }
   if (yes && (command != 'uninstall' || source == null || list)) {
     error = '--yes needs an explicit rk uninstall source.';
   }
@@ -132,6 +139,7 @@ _arguments(List<String> args, String command) {
     list: list,
     yes: yes,
     latest: latest,
+    live: live,
     help: help,
     error: error,
   );
@@ -258,7 +266,12 @@ Future<int> _run(
     store: store,
     environment: environment,
     providers: {
-      InstallationSource.local: LocalInstallationProvider(tools, dart, store),
+      InstallationSource.local: LocalInstallationProvider(
+        tools,
+        dart,
+        store,
+        live: asked.live,
+      ),
       InstallationSource.pub: PubInstallationProvider(tools, dart, environment),
       InstallationSource.homebrew: HomebrewInstallationProvider(
         tools,
@@ -390,7 +403,7 @@ void _list(Output output, List<ProjectInstallations> states) {
       );
       if (e.key == InstallationSource.local && e.value.installation != null) {
         output.line(
-          e.value.installation!.location,
+          '${e.value.installation!.checkout == null ? 'Live' : 'Compiled'} · ${e.value.installation!.checkout ?? e.value.installation!.location}',
           depth: 2,
           role: VisualRole.secondary,
         );

@@ -1121,10 +1121,12 @@ publish = ["git-tag", "pub.dev"]
     // It advertised `--rehearse` for a whole branch after that flag started
     // exiting 2 — the one document the cut never touched, and the one where
     // being wrong is permanent.
-    final accepted = RegExp('r?\'(--[a-z-]+)')
-        .allMatches(File('bin/rk.dart').readAsStringSync())
-        .map((m) => m.group(1)!)
-        .toSet();
+    final accepted = {
+      for (final parser in ['bin/rk.dart', 'bin/installations.dart'])
+        ...RegExp(
+          'r?\'(--[a-z-]+)',
+        ).allMatches(File(parser).readAsStringSync()).map((m) => m.group(1)!),
+    };
     expect(accepted, contains('--json'), reason: 'the scrape still works');
 
     // Exactly the documents that describe rk's *current* surface. Widening
