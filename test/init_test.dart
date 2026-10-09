@@ -30,7 +30,7 @@ void main() {
       }, description: '/repo/demo'),
       output: Output(sink: buffer.write, isTerminal: false, useColor: false),
       write: (path, contents) => written[path] = contents,
-      confirm: (_) async => true,
+      yes: true,
     ).run();
 
     final config = written['release.toml']!;
@@ -77,7 +77,7 @@ executables:
       ),
       select: (plan) async => plan.toggle(0, ReleaseChoice.homebrew).plan,
       write: (path, contents) => written[path] = contents,
-      confirm: (_) async => true,
+      yes: true,
     ).run();
 
     expect(code, ExitCodes.ok);
@@ -101,7 +101,7 @@ executables:
       tree: MemorySourceTree({'release.toml': 'schema = 2\n'}),
       output: Output(sink: buffer.write, isTerminal: false, useColor: false),
       write: (path, contents) => written[path] = contents,
-      confirm: (_) async => true,
+      yes: true,
     ).run();
     expect(written, isEmpty);
     expect(buffer.toString(), contains('already exists'));
@@ -121,7 +121,7 @@ executables:
           return plan;
         },
         write: (_, __) {},
-        confirm: (_) async => true,
+        yes: true,
       ).run();
 
       expect(code, ExitCodes.ok);
@@ -129,19 +129,6 @@ executables:
       expect(problemCodes(output.report), contains('RK-INIT-003'));
     },
   );
-
-  test('declining writes nothing', () async {
-    final buffer = StringBuffer();
-    final written = <String, String>{};
-    await InitCommand(
-      tree: MemorySourceTree({'pubspec.yaml': 'name: a\nversion: 1.0.0\n'}),
-      output: Output(sink: buffer.write, isTerminal: false, useColor: false),
-      write: (path, contents) => written[path] = contents,
-      confirm: (_) async => false,
-    ).run();
-    expect(written, isEmpty);
-    expect(buffer.toString(), contains('nothing was written'));
-  });
 
   test(
     'cancelling a customized review retries selection, not defaults',
@@ -175,7 +162,6 @@ executables:
           return InitReviewDecision.cancel;
         },
         write: (path, contents) => written[path] = contents,
-        confirm: null,
       ).run();
 
       expect(code, ExitCodes.ok);
@@ -189,64 +175,29 @@ executables:
     },
   );
 
-  test('a concurrent .gitignore edit is never overwritten', () async {
+  test('a .gitignore edited during the review refuses the write', () async {
     final files = <String, String>{
       'pubspec.yaml': 'name: a\nversion: 1.0.0\n',
       '.gitignore': 'build/\n',
     };
     final written = <String, String>{};
+    var ignored = 0;
     final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
     final code = await InitCommand(
       tree: MemorySourceTree(files),
       output: output,
       write: (path, contents) => written[path] = contents,
-      confirm: (_) async {
+      updateGitignore: () => ignored++,
+      review: (_, _) async {
         files['.gitignore'] = 'build/\ncoverage/\n';
-        return true;
+        return InitReviewDecision.write;
       },
     ).run();
 
     expect(code, ExitCodes.refused);
     expect(written, isEmpty);
-    expect(problemCodes(output.report), contains('RK-INIT-005'));
-  });
-
-  test('proposal and prompt remain readable on a narrow terminal', () async {
-    const width = 36;
-    final buffer = StringBuffer();
-    late Output output;
-    output = Output(
-      sink: buffer.write,
-      isTerminal: true,
-      useColor: true,
-      terminalWidth: width,
-    );
-    await InitCommand(
-      tree: MemorySourceTree({
-        'pubspec.yaml':
-            'name: command_line_application\nversion: 1.0.0\nexecutables:\n  app: app\n',
-      }, description: '/repo/command-line-application'),
-      output: output,
-      write: (_, __) {},
-      confirm: (prompt) async {
-        output.prompt(prompt);
-        buffer.writeln(); // the terminal echoes Enter before init continues
-        return false;
-      },
-    ).run();
-
-    final visible = buffer
-        .toString()
-        .replaceAll(RegExp('\x1b\\[[0-9;]*[A-Za-z]'), '')
-        .replaceAll('\r', '')
-        .split('\n')
-        .where((line) => line.isNotEmpty)
-        .toList();
-    expect(visible.every((line) => line.runes.length <= width), isTrue);
-    expect(visible.join('\n'), contains('write release.toml'));
-    expect(visible.join('\n'), contains('[Y/n/b]'));
-    expect(visible.join('\n'), contains('nothing was written'));
-    expect(buffer.toString(), isNot(contains('…')));
+    expect(ignored, 0);
+    expect(problemCodes(output.report, exit: code), contains('RK-INIT-005'));
   });
 
   test('a repository with nothing releasable is not a failure', () async {
@@ -257,7 +208,7 @@ executables:
       }),
       output: Output(sink: buffer.write, isTerminal: false, useColor: false),
       write: (path, contents) {},
-      confirm: (_) async => true,
+      yes: true,
     ).run();
     expect(code, ExitCodes.ok);
     expect(buffer.toString(), contains('nothing here can be released'));
@@ -273,7 +224,7 @@ executables:
         }),
         output: Output(sink: (_) {}, isTerminal: false, useColor: false),
         write: (path, contents) => written[path] = contents,
-        confirm: (_) async => true,
+        yes: true,
       ).run();
       expect(written['release.toml'], contains('publish = ["pub.dev"]'));
       expect(written['release.toml'], isNot(contains('git-tag')));
@@ -293,12 +244,45 @@ executables:
       gitBound: false,
       output: Output(sink: (_) {}, isTerminal: false, useColor: false),
       write: (path, contents) => written[path] = contents,
-      confirm: (_) async => true,
+      yes: true,
     ).run();
 
     expect(written['release.toml'], contains('[release.member]'));
     expect(written['release.toml'], isNot(contains('accidental')));
-    expect(written.containsKey('.gitignore'), isFalse);
+  });
+
+  group('rk init --write in a Git repository', () {
+    late Directory scratch;
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-init-'));
+    tearDownAll(() => scratch.deleteSync(recursive: true));
+
+    /// The .gitignore `rk init --write` leaves, given the one it found.
+    String? ignoredAfterInit(String name, {String? gitignore}) {
+      final repo = Rk.repository(scratch, name, {
+        'pubspec.yaml': 'name: tool\nversion: 1.0.0\n',
+        '.gitignore': ?gitignore,
+      })..commit();
+      final run = repo(['init', '--write']);
+      expect(run.code, ExitCodes.ok, reason: run.all);
+      expect(File('${repo.root}/release.toml').existsSync(), isTrue);
+      final file = File('${repo.root}/.gitignore');
+      return file.existsSync() ? file.readAsStringSync() : null;
+    }
+
+    test('adds .rk/ on a line of its own, after what was there', () {
+      expect(
+        ignoredAfterInit('unterminated', gitignore: 'build/'),
+        'build/\n.rk/\n',
+      );
+      expect(ignoredAfterInit('absent'), '.rk/\n');
+    });
+
+    test('leaves a .gitignore that already ignores .rk/ as it was', () {
+      expect(
+        ignoredAfterInit('ignored', gitignore: 'build/\n.rk/\n'),
+        'build/\n.rk/\n',
+      );
+    });
   });
 }
 
@@ -318,7 +302,7 @@ void dogfoodRegressions() {
       }, description: '/repo/collide'),
       output: Output(sink: buffer.write, isTerminal: false, useColor: false),
       write: written.putIfAbsent2,
-      confirm: (_) async => true,
+      yes: true,
     ).run();
 
     expect(code, ExitCodes.refused);
@@ -344,7 +328,7 @@ workspace:
       tree: tree,
       output: Output(sink: (_) {}, isTerminal: false, useColor: false),
       write: (path, contents) => written[path] = contents,
-      confirm: (_) async => true,
+      yes: true,
     ).run();
     expect(code, ExitCodes.ok);
 
@@ -368,7 +352,6 @@ workspace:
       output: output,
       origin: 'example/solo',
       write: (_, __) {},
-      confirm: null, // nobody at a terminal — the fleet-sweep case
     ).run();
 
     expect(
@@ -404,34 +387,6 @@ Map<String, Object?> problemNamed(Report report, String code, {int exit = 0}) {
 
 /// Phase 6 review closeout: the findings, each pinned where it bit.
 void closeoutRegressions() {
-  test('EOF is not consent; enter at a real prompt is', () {
-    // `rk init < /dev/null` used to write the file: EOF read as null,
-    // null collapsed to the empty string, and empty means Yes. macOS
-    // reports a terminal for /dev/null, so hasTerminal never guarded it.
-    expect(
-      InitCommand.consented(null),
-      isFalse,
-      reason: 'nobody answering is not an answer',
-    );
-    expect(
-      InitCommand.consented(''),
-      isTrue,
-      reason: 'a bare enter takes the [Y/n] default',
-    );
-    expect(InitCommand.consented('  '), isTrue);
-    expect(InitCommand.consented('y'), isTrue);
-    expect(InitCommand.consented('Y'), isTrue);
-    expect(InitCommand.consented('yes'), isTrue);
-    expect(InitCommand.consented('n'), isFalse);
-    expect(InitCommand.consented('no'), isFalse);
-    expect(InitCommand.consented('q'), isFalse);
-    expect(
-      InitCommand.consented('yolo'),
-      isFalse,
-      reason: 'anything that is not a yes is a no',
-    );
-  });
-
   test('a refusal carries the refused proposal and its problems', () async {
     final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
     final written = <String, String>{};
@@ -442,7 +397,7 @@ void closeoutRegressions() {
       }, description: '/repo/collide'),
       output: output,
       write: (path, contents) => written[path] = contents,
-      confirm: (_) async => true,
+      yes: true,
     ).run();
 
     expect(code, ExitCodes.refused);
@@ -479,7 +434,6 @@ void closeoutRegressions() {
         tree: MemorySourceTree(files, description: '/repo/x'),
         output: output,
         write: (_, __) {},
-        confirm: null,
       ).run();
       return output.report;
     }
@@ -512,7 +466,6 @@ void closeoutRegressions() {
         }, description: '/repo/x'),
         output: output,
         write: (_, __) {},
-        confirm: null,
       ).run();
 
       final remedy =
@@ -532,7 +485,6 @@ void closeoutRegressions() {
           tree: MemorySourceTree(files, description: '/repo/x'),
           output: output,
           write: (_, __) {},
-          confirm: null,
         ).run();
         return output.report.attachments['release.toml']!;
       }
@@ -565,60 +517,11 @@ void closeoutRegressions() {
       }, description: '/repo/x'),
       output: output,
       write: (_, __) {},
-      confirm: null,
     ).run();
     expect(
       output.report.attachments['release.toml'],
       contains('[release.mycool-package_2]'),
     );
-  });
-
-  group('.gitignore', () {
-    Future<(Map<String, String>, String)> writeAccepting(
-      Map<String, String> files,
-    ) async {
-      final written = <String, String>{};
-      String prompt = '';
-      await InitCommand(
-        tree: MemorySourceTree(files, description: '/repo/x'),
-        output: Output(sink: (_) {}, isTerminal: false, useColor: false),
-        write: (path, contents) => written[path] = contents,
-        confirm: (p) async {
-          prompt = p;
-          return true;
-        },
-      ).run();
-      return (written, prompt);
-    }
-
-    test('is created when absent, and the prompt says so', () async {
-      final (written, prompt) = await writeAccepting({
-        'pubspec.yaml': 'name: a\nversion: 1.0.0\n',
-      });
-      expect(written['.gitignore'], '.rk/\n');
-      expect(prompt, contains('add .rk/ to .gitignore'));
-    });
-
-    test('is appended without eating the last line', () async {
-      final (written, _) = await writeAccepting({
-        'pubspec.yaml': 'name: a\nversion: 1.0.0\n',
-        '.gitignore': 'build/', // no trailing newline
-      });
-      expect(written['.gitignore'], 'build/\n.rk/\n');
-    });
-
-    test('is left alone when .rk/ is already ignored', () async {
-      final (written, prompt) = await writeAccepting({
-        'pubspec.yaml': 'name: a\nversion: 1.0.0\n',
-        '.gitignore': 'build/\n.rk/\n',
-      });
-      expect(written.containsKey('.gitignore'), isFalse);
-      expect(
-        prompt,
-        isNot(contains('.gitignore')),
-        reason: 'the prompt names what the Yes will do, and nothing else',
-      );
-    });
   });
 }
 
@@ -666,7 +569,6 @@ void realRepositoryRegressions() {
       tree: GitSourceTree(root.path),
       output: output,
       write: (_, __) {},
-      confirm: null,
     ).run();
     return (code, output.report, buffer.toString());
   }
@@ -741,7 +643,6 @@ void realRepositoryRegressions() {
         tree: GitSourceTree(bare.path),
         output: output,
         write: (_, __) {},
-        confirm: null,
       ).run();
 
       expect(code, ExitCodes.refused);
