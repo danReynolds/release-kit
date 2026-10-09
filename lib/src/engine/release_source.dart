@@ -162,8 +162,9 @@ final class Manifests {
   /// Throws [SourceUnreadable] for a file that is there and could not be
   /// read.
   String? text(String path) {
-    final (:text, :error) = read(path);
-    return error == null ? text : throw error;
+    final (:text, :unreadable) = read(path);
+    if (unreadable != null) throw SourceUnreadable(path, unreadable);
+    return text;
   }
 
   /// Whether anything is at [path], a file or a directory.
@@ -192,10 +193,10 @@ final class Manifests {
     for (final path in paths) {
       try {
         final text = tree.read(path);
-        read[path] = (text: text, error: null);
+        read[path] = (text: text, unreadable: null);
         if (text != null || tree.exists(path)) present.add(path);
       } on SourceUnreadable catch (error) {
-        read[path] = (text: null, error: error);
+        read[path] = (text: null, unreadable: error.reason);
         present.add(path);
       }
     }
@@ -248,12 +249,9 @@ final class Manifests {
         _ => null,
       };
       read[path] = switch ((refusal, object)) {
-        (final reason?, _) => (
-          text: null,
-          error: SourceUnreadable(path, reason),
-        ),
-        (_, final file?) when file.type == 'blob' => _decode(path, file.bytes),
-        _ => (text: null, error: null),
+        (final reason?, _) => (text: null, unreadable: reason),
+        (_, final file?) when file.type == 'blob' => _decode(file.bytes),
+        _ => (text: null, unreadable: null),
       };
     }
     return Manifests._(read, present);
@@ -288,14 +286,11 @@ final class Manifests {
     return {for (final link in links) link: read[files[link]]};
   }
 
-  static SourceText _decode(String path, List<int> bytes) {
+  static SourceText _decode(List<int> bytes) {
     try {
-      return (text: utf8.decode(bytes), error: null);
+      return (text: utf8.decode(bytes), unreadable: null);
     } on FormatException {
-      return (
-        text: null,
-        error: SourceUnreadable(path, 'it is not UTF-8 text'),
-      );
+      return (text: null, unreadable: 'it is not UTF-8 text');
     }
   }
 }

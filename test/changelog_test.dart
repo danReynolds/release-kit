@@ -1,6 +1,5 @@
 import 'package:rk/src/engine/changelog.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
@@ -86,7 +85,7 @@ void main() {
     test('passes when the entry is there', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        changelog: (text: '## 0.2.0\n\n- a change\n', error: null),
+        changelog: (text: '## 0.2.0\n\n- a change\n', unreadable: null),
         manifestDirectory: 'packages/keybay',
         packageName: 'keybay',
         version: v('0.2.0'),
@@ -114,7 +113,7 @@ void main() {
     test('reports a missing entry with the heading to add', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        changelog: (text: '## 0.1.0\n', error: null),
+        changelog: (text: '## 0.1.0\n', unreadable: null),
         manifestDirectory: '.',
         packageName: 'keybay',
         version: v('0.2.0'),
@@ -127,13 +126,7 @@ void main() {
     test('reports one that cannot be read, and why', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        changelog: (
-          text: null,
-          error: SourceUnreadable(
-            'packages/keybay/CHANGELOG.md',
-            'it is not UTF-8 text',
-          ),
-        ),
+        changelog: (text: null, unreadable: 'it is not UTF-8 text'),
         manifestDirectory: 'packages/keybay',
         packageName: 'keybay',
         version: v('0.2.0'),

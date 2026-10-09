@@ -367,9 +367,9 @@ class SourceUnreadable implements Exception {
   String toString() => '$path could not be read: $reason';
 }
 
-/// A file as a source holds it: its text, null when there is none, or why
-/// one that is there could not be read.
-typedef SourceText = ({String? text, SourceUnreadable? error});
+/// A file as a source holds it: its text, null when there is none; or, for
+/// one that is there and could not be read, why.
+typedef SourceText = ({String? text, String? unreadable});
 
 /// [path], in a commit whose symbolic links hold [links], with every link on
 /// the way to it followed, as a checkout reads it: a stage reads its source

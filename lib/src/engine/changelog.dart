@@ -34,13 +34,13 @@ class Changelog {
         ? 'CHANGELOG.md'
         : '$manifestDirectory/CHANGELOG.md';
 
-    if (changelog?.error case final error?) {
+    if (changelog?.unreadable case final reason?) {
       diagnostics.add(
         'RK-CHG-001',
         '"$packageName" has a changelog rk cannot read',
         source: SourceLocation(path),
         remedy:
-            '$path: ${error.reason}\n'
+            '$path: $reason\n'
             'make it a readable UTF-8 file in the repository, with an entry '
             'for $version',
       );

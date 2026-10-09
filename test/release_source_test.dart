@@ -153,7 +153,7 @@ publish = ["git-tag", "github-release"]
         final staged = stage.read('packages/$name/CHANGELOG.md');
         expect(changelog.text, staged, reason: name);
         expect(
-          changelog.error?.reason,
+          changelog.unreadable,
           staged == null
               ? 'it is a symbolic link to no file in the commit'
               : null,
@@ -195,7 +195,7 @@ publish = ["pub.dev"]
       expect(changelogs['tool']!.text, '## 1.0.0\n', reason: where);
       expect(changelogs['a']!.text, isNull, reason: where);
       expect(
-        changelogs['a']!.error!.reason,
+        changelogs['a']!.unreadable,
         'it is not UTF-8 text',
         reason: where,
       );
@@ -233,7 +233,7 @@ publish = ["pub.dev"]
     // A release reads it, and its unit is told it cannot.
     final releasing = Resolution.resolve(config, tree, Diagnostics())!;
     expect(
-      releasing.unit('tool')!.projects.single.changelog!.error!.reason,
+      releasing.unit('tool')!.projects.single.changelog!.unreadable,
       contains('symbolic link'),
     );
   });
