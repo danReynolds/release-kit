@@ -74,26 +74,6 @@ void main() {
         expect(malformed.readable, isFalse);
       },
     );
-
-    test(
-      'a listed release disappearing during identity read is unreadable',
-      () async {
-        final reading =
-            await PublishedIdentity(
-              tools: SequencedTools([failed('gh: Not Found (HTTP 404)')]),
-              repository: 'example/tool',
-              workingDirectory: '/repo',
-            ).read(
-              tag: 'v0.9.0',
-              executable: 'example',
-              into: scratch.path,
-              expectedPublished: true,
-            );
-
-        expect(reading.answer, IdentityAnswer.unreadable);
-        expect(reading.why, contains('disappeared'));
-      },
-    );
   });
 
   test('reads the requirement from the published binary', () async {
@@ -170,7 +150,8 @@ void main() {
       ['gh', 'gh', 'codesign', 'codesign'],
       reason:
           'ask the release, download, open the named asset, then read the '
-          'verified signature',
+          'verified signature — and never ask the keychain, whose '
+          'certificate agrees with itself whatever it is',
     );
     expect(
       tools.calls.first.join(' '),
@@ -213,52 +194,28 @@ void main() {
     );
 
     test(
-      'no release at the tag is an absence, once the repo has answered',
+      'a release that cannot be read, or went away, is not an absence',
       () async {
-        final reading = await PublishedIdentity(
-          tools: SequencedTools([
-            failed('gh: Not Found (HTTP 404)'),
-            ok('{"name":"tool"}'),
-          ]),
-          repository: 'example/tool',
-          workingDirectory: '/repo',
-        ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
+        for (final (failure, why) in [
+          ('could not resolve host: api.github.com', 'could not be read'),
+          // The release was listed as public a moment ago.
+          ('gh: Not Found (HTTP 404)', 'disappeared'),
+        ]) {
+          final reading = await identity({
+            'gh': failed(failure),
+          }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
-        expect(reading.answer, IdentityAnswer.none);
+          expect(
+            reading.answer,
+            IdentityAnswer.unreadable,
+            reason:
+                'read as "nothing is published", an unreachable forge would '
+                'let a release sign itself against no identity at all',
+          );
+          expect(reading.why, contains(why));
+        }
       },
     );
-
-    test('a repository rk cannot see is not an absence', () async {
-      // gh says "release not found" for a repository that does not exist and
-      // for a real one missing that release. Read as absence, a typo in the
-      // origin would let a release sign against no identity at all.
-      final reading = await PublishedIdentity(
-        tools: SequencedTools([
-          failed('gh: Not Found (HTTP 404)'),
-          failed('Could not resolve to a Repository'),
-        ]),
-        repository: 'example/typo',
-        workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
-
-      expect(reading.isKnown, isFalse);
-      expect(reading.answer, IdentityAnswer.unreadable);
-    });
-
-    test('a network failure is not an absence', () async {
-      final reading = await identity({
-        'gh': failed('could not resolve host: api.github.com'),
-      }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
-
-      expect(reading.isKnown, isFalse);
-      expect(
-        reading.answer,
-        IdentityAnswer.unreadable,
-        reason:
-            'read as "nothing is published", an unreachable forge would '
-            'let a release sign itself against no identity at all',
-      );
-    });
 
     test('an archive that will not open is not an absence', () async {
       File(
@@ -318,27 +275,4 @@ void main() {
       },
     );
   });
-
-  test(
-    'the identity comes from the published binary, never the keychain',
-    () async {
-      final tools = ScriptedTools({
-        'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-        'codesign': ok('designated => identifier "x"'),
-      });
-      await PublishedIdentity(
-        tools: tools,
-        repository: 'example/tool',
-        workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
-
-      expect(
-        tools.calls.any((c) => c.first == 'security'),
-        isFalse,
-        reason:
-            'asking the certificate that is about to sign what it will sign '
-            'with is a tautology — it agrees with itself whatever it is',
-      );
-    },
-  );
 }

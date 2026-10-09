@@ -172,15 +172,13 @@ void main() {
     });
 
     test('a release whose assets cannot be read', () async {
+      // A readable release in every other field, so only its inventory is
+      // in question.
+      final release = jsonDecode(view()) as Map;
       final state = await inspect([
         (
           code: 0,
-          out: jsonEncode({
-            'tagName': 'v1.0.0',
-            'isDraft': false,
-            'name': 'v1.0.0',
-            'assets': 'not a list',
-          }),
+          out: jsonEncode({...release, 'assets': 'not a list'}),
           err: '',
         ),
       ]);
@@ -189,6 +187,7 @@ void main() {
         Verdict.unknown,
         reason: 'no assets and no answer about assets are different facts',
       );
+      expect(state.detail, contains('asset inventory'));
     });
   });
 
