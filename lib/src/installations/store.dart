@@ -213,9 +213,16 @@ class InstallationStore {
           '$command is selected for $owner, not ${project.name}.'
         else if (launchers[command]?.source != selected.source)
           '$command is not switched to ${selected.source.label}; run rk use ${selected.source.name} again.'
-        else if (findExecutable(command, environment) != '$bin/$command')
+        else if (!routes(command, environment))
           '$command resolves to ${findExecutable(command, environment) ?? 'nothing'}; put $bin first in PATH.',
     ];
+  }
+
+  /// Whether [command] on [environment]'s PATH is its launcher, however PATH
+  /// spells the directory: with a trailing slash, or through a link.
+  bool routes(String command, Map<String, String> environment) {
+    final found = findExecutable(command, environment);
+    return found != null && sameFile(found, '$bin/$command');
   }
 
   /// Once [kept] is installed and routed, removes what it replaced: rk's own
@@ -231,6 +238,16 @@ class InstallationStore {
         entry.deleteSync(recursive: true);
       }
     }
+  }
+}
+
+/// Whether [a] and [b] are one file, once links and spelling are resolved.
+bool sameFile(String a, String b) {
+  try {
+    return File(a).resolveSymbolicLinksSync() ==
+        File(b).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    return false;
   }
 }
 

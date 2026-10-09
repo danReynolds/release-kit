@@ -146,6 +146,8 @@ published finishes with 0.1.14.
   deleted.
 - Local is the checkout itself: `rk install local` prepares it, and Local
   shows as installed only while it is selected.
+- rk's bin directory on PATH written with a trailing slash, or through a
+  link, counts as first: `rk use` no longer says to put it there.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.
 - `rk use local` runs Dart commands whose dependencies have build hooks
   (native assets) from any directory, through a small bootstrap. Select

@@ -177,6 +177,26 @@ void main(List<String> args) {
   );
 
   test(
+    'a PATH entry with a trailing slash still routes to the launchers',
+    () async {
+      final slashed = InstallationManager(
+        store: store,
+        providers: manager.providers,
+        environment: {'PATH': '${store.bin}/:/usr/bin:/bin'},
+      );
+      await slashed.act(
+        project,
+        local.source,
+        InstallationAction.use,
+        progress: (_) {},
+      );
+      final state = await slashed.inspect(project);
+      expect(state.routing, isEmpty);
+      expect(state.currentSource, local.source);
+    },
+  );
+
+  test(
     'failed or cancelled preparation leaves old selection runnable',
     () async {
       await act(local.source, InstallationAction.use);

@@ -56,14 +56,14 @@ class InstallationManager {
     };
     final current = <String, InstallationSource?>{};
     for (final entry in paths.entries) {
-      current[entry.key] = entry.value == '${store.bin}/${entry.key}'
+      current[entry.key] = store.routes(entry.key, environment)
           ? launchers[entry.key]?.source
           : states.entries
                 .where(
                   (s) =>
                       entry.value != null &&
                       (s.value.installation?.exportedPaths.any(
-                            (p) => _sameFile(p, entry.value!),
+                            (p) => sameFile(p, entry.value!),
                           ) ??
                           false),
                 )
@@ -224,7 +224,7 @@ class InstallationManager {
           final effective = findExecutable(command, environment);
           if (effective != null &&
               installation.exportedPaths.any(
-                (path) => _sameFile(path, effective),
+                (path) => sameFile(path, effective),
               )) {
             throw InstallationFailure(
               '${source.label} currently provides $command on PATH.',
@@ -263,15 +263,6 @@ class InstallationManager {
       lock.closeSync();
       _busy = false;
     }
-  }
-}
-
-bool _sameFile(String a, String b) {
-  try {
-    return File(a).resolveSymbolicLinksSync() ==
-        File(b).resolveSymbolicLinksSync();
-  } on FileSystemException {
-    return false;
   }
 }
 
