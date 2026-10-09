@@ -1,0 +1,165 @@
+diff --git a/pkg/dartdev/lib/src/commands/build.dart b/pkg/dartdev/lib/src/commands/build.dart
+index 2d4f294b..327564d0 100644
+--- a/pkg/dartdev/lib/src/commands/build.dart
++++ b/pkg/dartdev/lib/src/commands/build.dart
+@@ -109,6 +109,22 @@ bundle/
+               .toList()
+         : [];
+     argParser
++      ..addMultiOption(
++        defineOption.flag,
++        help:
++            'Define an environment declaration. Repeat this option or '
++            'use commas to specify multiple declarations.',
++        abbr: defineOption.abbr,
++        valueHelp: defineOption.valueHelp,
++      )
++      ..addOption(
++        BuildCommand.formatOptionName,
++        help:
++            'Generate an executable or a separate AOT snapshot. '
++            'Run an AOT snapshot with a matching dartaotruntime in bundle/bin/.',
++        allowed: const ['exe', 'aot-snapshot'],
++        defaultsTo: 'exe',
++      )
+       ..addOption(
+         'output',
+         abbr: 'o',
+@@ -305,6 +321,10 @@ then that is used instead.''',
+       dataAssetsExperimentEnabled: dataAssetsExperimentEnabled,
+       verbose: verbose,
+       verbosity: verbosity,
++      defines: args.multiOption(defineOption.flag),
++      kind: args.option(BuildCommand.formatOptionName) == 'aot-snapshot'
++          ? Kind.aot
++          : Kind.exe,
+       depFile: depFile,
+       sanitizer: sanitizer,
+       runPackageName: args.option('root-package'),
+@@ -324,6 +344,8 @@ then that is used instead.''',
+     required List<String> enabledExperiments,
+     required bool verbose,
+     required String verbosity,
++    List<String> defines = const [],
++    Kind kind = Kind.exe,
+     Sanitizer sanitizer = Sanitizer.none,
+     bool progressUpdatesOnStderr = false,
+     String? depFile,
+@@ -454,7 +476,9 @@ then that is used instead.''',
+           recordedUsagesPath = path.join(tempDir.path, 'recorded_usages.json');
+         }
+         final outputExeUri = binDirectory.uri.resolve(
+-          targetOS.executableFileName(e.name),
++          kind == Kind.aot
++              ? '${e.name}.aot'
++              : targetOS.executableFileName(e.name),
+         );
+         final generator = KernelGenerator(
+           genSnapshot: genSnapshotPath ?? sdk.genSnapshot,
+@@ -463,12 +487,12 @@ then that is used instead.''',
+               sdk.dartAotRuntimeFor(
+                 sanitizer: sanitizer.name,
+               ),
+-          kind: Kind.exe,
++          kind: kind,
+           sourceFile: e.sourceEntryPoint.toFilePath(),
+           outputFile: outputExeUri.toFilePath(),
+           verbose: verbose,
+           verbosity: verbosity,
+-          defines: [...sanitizer.defines],
++          defines: [...sanitizer.defines, ...defines],
+           packages: packageConfigUri.toFilePath(),
+           targetOS: targetOS,
+           enableExperiment: enabledExperiments.join(','),
+@@ -552,7 +576,7 @@ Use linkMode as dynamic library instead.""",
+           ],
+         );
+
+-        if (targetOS == OS.macOS) {
++        if (targetOS == OS.macOS && kind == Kind.exe) {
+           // The dylibs are opened with a relative path to the executable.
+           // MacOS prevents opening dylibs that are not on the include path.
+           await rewriteInstallPath(outputExeUri);
+diff --git a/pkg/dartdev/test/native_assets/build_test.dart b/pkg/dartdev/test/native_assets/build_test.dart
+index d9474cae..e7aee342 100644
+--- a/pkg/dartdev/test/native_assets/build_test.dart
++++ b/pkg/dartdev/test/native_assets/build_test.dart
+@@ -7,6 +7,8 @@
+ import 'dart:io';
+
+ import 'package:code_assets/code_assets.dart';
++import 'package:dartdev/src/native_assets_macos.dart';
++import 'package:dartdev/src/sdk.dart';
+ import 'package:test/test.dart';
+ import 'package:yaml_edit/yaml_edit.dart';
+
+@@ -91,6 +93,69 @@ void main([List<String> args = const []]) async {
+     });
+   }
+
++  for (final format in ['exe', 'aot-snapshot']) {
++    test('dart build $format with environment declarations and native assets',
++        timeout: longTimeout, () async {
++      await nativeAssetsTest('dart_app', (dartAppUri) async {
++        final source = File.fromUri(dartAppUri.resolve('bin/dart_app.dart'));
++        await source.writeAsString((await source.readAsString()).replaceFirst(
++          'void main() {',
++          """void main() {
++  const flavor = String.fromEnvironment('flavor');
++  const number = int.fromEnvironment('number');
++  const enabled = bool.fromEnvironment('enabled');
++  if (flavor != 'release=value' || number != 17 || !enabled) {
++    throw StateError('Environment declarations did not reach compilation');
++  }
++""",
++        ));
++        await runDart(
++          arguments: [
++            if (fromDartdevSource) dartDevEntryScriptUri.toFilePath(),
++            'build',
++            'cli',
++            '--format=$format',
++            '-Dflavor=release=value,number=17',
++            '--define=enabled=true',
++          ],
++          workingDirectory: dartAppUri,
++          logger: logger,
++        );
++        await _withTempDir((tempUri) async {
++          final relocated = tempUri.resolve('bundle/');
++          await copyDirectory(
++            Directory.fromUri(dartAppUri.resolveUri(relativeBundleUri)),
++            Directory.fromUri(relocated),
++          );
++          final Uri executable;
++          final arguments = <String>[];
++          if (format == 'aot-snapshot') {
++            executable = relocated.resolve('bin/').resolve(
++                  OS.current.executableFileName('dartaotruntime'),
++                );
++            await File(sdk.dartAotRuntime).copy(executable.toFilePath());
++            if (OS.current == OS.macOS) {
++              await rewriteInstallPath(executable);
++            }
++            arguments.add(relocated.resolve('bin/dart_app.aot').toFilePath());
++          } else {
++            executable = relocated.resolve('bin/').resolve(
++                  OS.current.executableFileName('dart_app'),
++                );
++          }
++          final result = await runProcess(
++            executable: executable,
++            arguments: arguments,
++            workingDirectory: tempUri,
++            logger: logger,
++            throwOnUnexpectedExitCode: true,
++          );
++          expectDartAppStdout(result.stdout);
++        });
++      });
++    });
++  }
++
+   test('dart build native assets build failure', timeout: longTimeout,
+       () async {
+     await nativeAssetsTest('dart_app', (dartAppUri) async {
