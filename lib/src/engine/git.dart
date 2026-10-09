@@ -312,8 +312,18 @@ class GitState {
       tagList,
       config,
       containing,
+      origin,
     ] = await Future.wait([
-      ask(const ['status', '--porcelain=v2', '--branch', '-z']),
+      // A submodule's own untracked or modified files are not this commit's
+      // to commit, and no stage reads them; a moved submodule commit still
+      // shows.
+      ask(const [
+        'status',
+        '--porcelain=v2',
+        '--branch',
+        '-z',
+        '--ignore-submodules=dirty',
+      ]),
       ask(const ['rev-parse', '--verify', '--quiet', 'HEAD^{tree}']),
       ask(const ['show-ref', '--tags', '-d']),
       ask(const ['tag', '--list']),
@@ -324,6 +334,9 @@ class GitState {
       ]),
       // A commit is fetchable when some remote branch contains it.
       ask(const ['branch', '-r', '--contains', 'HEAD']),
+      // Read as git resolves it: an `insteadOf` alias such as `gh:owner/repo`
+      // is the GitHub repository it stands for.
+      ask(const ['remote', 'get-url', 'origin']),
     ]);
     final branch = _StatusV2.parse(status.ok ? status.stdout : '');
     final statusError = status.ok
@@ -361,7 +374,7 @@ class GitState {
       // is required and no key is set.
       signingConfigured: (settings['user.signingkey'] ?? '').isNotEmpty,
       tagSigningRequested: _gitBoolean(settings['tag.gpgsign']),
-      originUrl: _originSlug(settings['remote.origin.url'] ?? ''),
+      originUrl: _originSlug(text(origin)),
     );
   }
 

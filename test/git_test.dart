@@ -216,6 +216,57 @@ void main() {
       expect(detached.head, ahead.head);
     });
 
+    test(
+      'origin is read as git resolves it, through an insteadOf alias',
+      () async {
+        for (final args in [
+          ['config', 'url.git@github.com:.insteadOf', 'gh:'],
+          ['remote', 'add', 'origin', 'gh:owner/repo'],
+        ]) {
+          Process.runSync('git', args, workingDirectory: root.path);
+        }
+        expect((await GitState.read(root.path)).originUrl, 'owner/repo');
+      },
+    );
+
+    test('a submodule\'s own changes leave the commit clean', () async {
+      final module = Directory.systemTemp.createTempSync('rk-git-module-');
+      addTearDown(() => module.deleteSync(recursive: true));
+      for (final args in [
+        ['init', '-q'],
+        [
+          '-c',
+          'user.email=a@b.c',
+          '-c',
+          'user.name=T',
+          'commit',
+          '-q',
+          '--allow-empty',
+          '-m',
+          'x',
+        ],
+      ]) {
+        Process.runSync('git', args, workingDirectory: module.path);
+      }
+      write('a.txt', 'one\n');
+      Process.runSync('git', [
+        '-c',
+        'protocol.file.allow=always',
+        'submodule',
+        'add',
+        '-q',
+        module.path,
+        'third_party/sub',
+      ], workingDirectory: root.path);
+      commit();
+      // Build output inside the submodule: nothing this commit can hold.
+      write('third_party/sub/build.log', 'built\n');
+
+      final state = await GitState.read(root.path);
+      expect(state.uncommitted, isEmpty);
+      expect(state.isClean, isTrue);
+    });
+
     test('tag.gpgSign is read as git reads a boolean', () async {
       expect((await GitState.read(root.path)).tagSigningRequested, isFalse);
       for (final (value, expected) in [
