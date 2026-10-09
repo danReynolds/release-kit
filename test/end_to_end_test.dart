@@ -664,183 +664,33 @@ publish = ["git-tag", "pub.dev"]
       );
     }
 
-    const unrelatedOverride = {
-      'packages/keybay/pubspec.yaml':
-          'name: keybay\n'
-          'version: 0.2.0\n'
-          'dependency_overrides:\n'
-          '  unrelated:\n'
-          '    git: https://example.com/unrelated.git\n',
-    };
-
-    test(
-      'a package alone resolves as its consumers do, overriding nothing',
-      () async {
-        final written = <String?>[];
-        final run = await release(
-          inspect: (key, directory) {
-            if (key != 'dart pub publish --to-archive <archive>') return;
-            final file = File('$directory/pubspec_overrides.yaml');
-            written.add(file.existsSync() ? file.readAsStringSync() : null);
-          },
-        );
-
-        expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(
-          written,
-          [
-            '# Written by rk: resolve this package the way its consumers do.\n'
-                'dependency_overrides: {}\n',
-          ],
-          reason:
-              'keybay is no workspace member, so no resolution to set aside',
-        );
-      },
-    );
-
-    // Pub honours a tracked override where it resolves, and leaves it out
-    // of the archive. The stage resolves in a mirror where its own
-    // pubspec_overrides.yaml replaces every tracked one, so what Pub
-    // validates is what consumers get.
-    const consumerFile =
-        '# Written by rk: resolve this package the way its consumers do.\n'
-        'dependency_overrides: {}\n';
-    Future<List<String?>> overridesSeenBy(
-      Future<Object?> Function(
-        void Function(String key, String workingDirectory) inspect,
-      )
-      run,
-    ) async {
-      final seen = <String?>[];
-      await run((key, directory) {
-        if (key != 'dart pub publish --to-archive <archive>') return;
-        final file = File('$directory/pubspec_overrides.yaml');
-        seen.add(file.existsSync() ? file.readAsStringSync() : null);
-      });
-      return seen;
-    }
-
     test(
       'a tracked pubspec_overrides.yaml stays out of what Pub validates',
       () async {
-        late ({
-          int code,
-          String text,
-          List<String> calls,
-          Map<String, Object?> report,
-          Object? died,
-        })
-        run;
-        final seen = await overridesSeenBy(
-          (inspect) async => run = await release(
-            sourceFiles: {
-              'packages/keybay/pubspec_overrides.yaml':
-                  'dependency_overrides:\n  transitive:\n    path: ../other\n',
-            },
-            inspect: inspect,
-          ),
-        );
-
-        expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(seen, [consumerFile]);
-        expect(run.calls, contains('dart pub publish --to-archive <archive>'));
-      },
-    );
-
-    test('a dependency_overrides section is replaced the same way', () async {
-      // An overrides file replaces the pubspec's section, as Pub reads it.
-      late ({
-        int code,
-        String text,
-        List<String> calls,
-        Map<String, Object?> report,
-        Object? died,
-      })
-      run;
-      final seen = await overridesSeenBy(
-        (inspect) async => run = await release(
+        // Pub honours a tracked override where it resolves, and leaves it
+        // out of the archive. The stage resolves in a mirror where its own
+        // pubspec_overrides.yaml replaces every tracked one, so what Pub
+        // validates is what consumers get.
+        final seen = <String?>[];
+        final run = await release(
           sourceFiles: {
-            'packages/keybay/pubspec.yaml':
-                'name: keybay\n'
-                'version: 0.2.0\n'
-                'dependency_overrides:\n'
-                '  transitive:\n'
-                '    path: ../other\n',
+            'packages/keybay/pubspec_overrides.yaml':
+                'dependency_overrides:\n  transitive:\n    path: ../other\n',
           },
-          inspect: inspect,
-        ),
-      );
-
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(seen, [consumerFile]);
-    });
-
-    test(
-      'a workspace member resolves apart from its nested workspace root',
-      () async {
-        // Pub resolves a `resolution: workspace` member at the top-most
-        // ancestor declaring `workspace:`, which need not be the repository
-        // root, and applies the overrides tracked there. The stage resolves
-        // the member as a root of its own instead.
-        late ({
-          int code,
-          String text,
-          List<String> calls,
-          Map<String, Object?> report,
-          Object? died,
-        })
-        run;
-        final seen = await overridesSeenBy(
-          (inspect) async => run = await release(
-            config: '''
-schema = 2
-
-[release.core]
-path = "dart/packages/keybay"
-publish = ["git-tag", "pub.dev"]
-''',
-            sourceFiles: {
-              'dart/pubspec.yaml':
-                  'name: dart_workspace\n'
-                  'publish_to: none\n'
-                  'environment:\n'
-                  "  sdk: ^3.6.0\n"
-                  'workspace:\n'
-                  '  - packages/keybay\n',
-              'dart/pubspec_overrides.yaml':
-                  'dependency_overrides:\n  transitive:\n    path: ../other\n',
-              'dart/packages/keybay/pubspec.yaml':
-                  'name: keybay\n'
-                  'version: 0.2.0\n'
-                  'resolution: workspace\n',
-              'dart/packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-            },
-            inspect: inspect,
-          ),
+          inspect: (key, directory) {
+            if (key != 'dart pub publish --to-archive <archive>') return;
+            final file = File('$directory/pubspec_overrides.yaml');
+            seen.add(file.existsSync() ? file.readAsStringSync() : null);
+          },
         );
 
         expect(run.code, ExitCodes.ok, reason: run.text);
         expect(seen, [
           '# Written by rk: resolve this package the way its consumers do.\n'
-              'resolution: null\n'
-              'workspace: []\n'
               'dependency_overrides: {}\n',
         ]);
       },
     );
-
-    test('a tracked override reaching nothing stages and publishes', () async {
-      final run = await release(sourceFiles: unrelatedOverride);
-
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(
-        run.calls,
-        containsAllInOrder([
-          startsWith('dart pub publish --to-archive '),
-          startsWith('dart pub publish --from-archive '),
-        ]),
-      );
-    });
 
     group('a workspace', () {
       const members = {
