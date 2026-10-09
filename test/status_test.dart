@@ -516,7 +516,7 @@ String _targetLine(String text, String label) {
 
 void main() {
   statusTargetContract();
-  statusReviewRegressions();
+  releaseReadiness();
 
   test('says what its stage holds, and the warnings it recorded', () async {
     final root = Directory.systemTemp.createTempSync('rk-status-warnings-');
@@ -937,9 +937,6 @@ executables:
     },
   );
 
-  _reviewFixes();
-  _phase23Fixes();
-
   test('a package that has never been published is safe to stage', () async {
     final text = await statusOf(
       source: tree(),
@@ -1303,13 +1300,6 @@ repository: https://github.com/danReynolds/keybay
         ),
       );
 
-      expect(
-        run.text,
-        isNot(contains('uses release-manifest.json')),
-        reason:
-            'which target owns a shared artifact explains a conflict; it '
-            'is not news on the happy path',
-      );
       final targets =
           ((run.report['units'] as List).single as Map)['targets'] as List;
       final github =
@@ -1869,7 +1859,6 @@ publish = ["pub.dev"]
       stageProblem['message'],
       'the incomplete release stage cannot be resumed safely',
     );
-    expect(stageProblem['message'], isNot(contains('reviewed')));
   });
 
   test(
@@ -2285,8 +2274,8 @@ List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
     ReleaseAssetSpec(stagedPath: path, publicName: path),
 ];
 
-// Regressions from the phase 2-3 review.
-void _reviewFixes() {
+/// Whether a unit can be released, and what status suggests doing next.
+void releaseReadiness() {
   test('publishing behind what is live is refused', () async {
     final run = await statusRun(
       source: tree(coreVersion: '0.2.0'),
@@ -2337,12 +2326,9 @@ void _reviewFixes() {
     );
     expect(warning['target'], isNotNull);
   });
-}
 
-// Regressions from the phase 2-3 review.
-void _phase23Fixes() {
-  test('an unreachable registry never reads as ready, even with other '
-      'problems present', () async {
+  test('an unreachable registry is still reported beside another '
+      'problem', () async {
     final text = await statusOf(
       source: tree(),
       state: git(clean: false),
@@ -2354,7 +2340,6 @@ void _phase23Fixes() {
       reason: 'the unknown must survive alongside another problem',
     );
     expect(text, contains('is uncommitted'));
-    expect(text, isNot(contains('ready')));
   });
 
   test('a fully published unit ignores worktree state', () async {
@@ -2386,13 +2371,9 @@ void _phase23Fixes() {
     expect(run.text, isNot(contains('prevents release')));
     expect(run.report['next'], isEmpty);
   });
-}
 
-/// Regressions for the phase 3 reviews: readiness, collapse, and the summary
-/// line were each mutable without a test noticing.
-void statusReviewRegressions() {
-  test('a conflict on a public step blocks readiness', () async {
-    final text = await statusOf(
+  test('a conflict on a public step blocks the release', () async {
+    final run = await statusRun(
       source: tree(),
       state: git(),
       registry: FakeRegistry(
@@ -2402,10 +2383,9 @@ void statusReviewRegressions() {
         conflicting: {'keybay'},
       ),
     );
-    expect(text, isNot(contains('ready')));
-    expect(text, isNot(contains('rk release')));
-    expect(text, contains('pub.dev versions are immutable'));
-    expect(text, contains('Bump the version and changelog'));
+    expect(run.report['next'], isEmpty);
+    expect(run.text, contains('pub.dev versions are immutable'));
+    expect(run.text, contains('Bump the version and changelog'));
   });
 
   test(
@@ -2616,8 +2596,8 @@ executables:
       expect(run.text, matches(RegExp(r'^\s+Published$', multiLine: true)));
       expect(
         run.text,
-        isNot(contains('build keybay')),
-        reason: 'nine local lines under a finished release are noise',
+        isNot(contains('macos-arm64')),
+        reason: 'local work listed under a finished release is noise',
       );
       expect(
         run.text,

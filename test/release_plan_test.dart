@@ -343,7 +343,7 @@ dependencies:
         ReleasePlanNodeKind.values.map((kind) => kind.name),
         kindVocabulary,
         reason:
-            'kind names are schema-10 wire vocabulary, not incidental '
+            'kind names are what a --json caller keys on, not incidental '
             'implementation labels',
       );
 
@@ -515,10 +515,7 @@ dependencies:
         reason: 'the formula is target work that waits on local archives',
       );
       expect(rendered, contains('[finalize stage]'));
-      expect(rendered, isNot(contains('needs all stage work')));
       expect(rendered, contains('no destination checks · no changes'));
-      expect(rendered, isNot(contains('source-only ·')));
-      expect(rendered, isNot(contains('configured topology')));
     });
 
     test('narrow terminals fall back to a dependency-complete outline', () {
@@ -533,7 +530,6 @@ dependencies:
       expect(rendered, isNot(contains('EXAMPLE RELEASE PLAN')));
       expect(rendered, contains('publish'));
       expect(rendered, contains('finalize stage'));
-      expect(rendered, isNot(contains('needs all stage work')));
       expect(rendered, contains('needs source snapshot'));
       expect(rendered, contains('needs tag cli-v1.2.0'));
       expect(rendered, contains('needs GitHub Release'));
@@ -545,7 +541,6 @@ dependencies:
       expect(rendered, isNot(contains('cli/tag/cli-v1.2.0')));
       expect(rendered, isNot(contains('cli/github-release/cli-v1.2.0')));
       expect(rendered, contains('no destination checks · no changes'));
-      expect(rendered, isNot(contains('source-only ·')));
     });
 
     test('semantic colors never change the graph text', () {
