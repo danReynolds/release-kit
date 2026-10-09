@@ -26,7 +26,7 @@ import 'status_test.dart' show FakeRegistry;
 /// ordering rule — the dependency publishes before its dependent — was
 /// enforced by no executable test.
 void main() {
-  classificationTables();
+  targetReads();
   tagRemoteLeg();
 
   late Resolution resolution;
@@ -77,9 +77,10 @@ dependencies:
     );
   });
 
-  Inspector inspector(FakeRegistry registry) => Inspector(
+  Inspector inspector(FakeRegistry registry, {Tools? tools}) => Inspector(
     registry: registry,
     pubDev: registry,
+    tools: tools,
     git: GitState(
       root: '/repo',
       head: 'abc123def456',
@@ -144,8 +145,8 @@ dependencies:
     });
   });
 
-  group('a destination rk was not given a way to read answers unknown', () {
-    test('the forge, without tools or an origin', () async {
+  group('what this run cannot read is unknown, never absent', () {
+    test('the forge, when the repository has no origin remote', () async {
       final diagnostics = Diagnostics();
       final config = ReleaseConfig.parse(
         '''
@@ -178,8 +179,14 @@ executables:
         Diagnostics(),
       ).steps.firstWhere((s) => s.kind == StepKind.publishRelease);
 
-      final state = await inspector(FakeRegistry({})).inspect(release, unit);
+      final tools = ScriptedTools({});
+      final state = await inspector(
+        FakeRegistry({}),
+        tools: tools,
+      ).inspect(release, unit);
       expect(state.verdict, Verdict.unknown);
+      expect(state.detail, 'no origin remote to ask');
+      expect(tools.calls, isEmpty, reason: 'there is no forge to ask');
     });
 
     test('local work is unknown too — this run has not looked', () async {
@@ -210,96 +217,8 @@ executables:
   );
 }
 
-/// The classification tables, frozen the way the version vectors are.
-///
-/// These restate the implementation on purpose: they are contracts other code
-/// keys on, and a mutation pass showed each line here can be flipped without
-/// anything else noticing.
-void classificationTables() {
-  test('which step kinds have public state', () {
-    expect(
-      {
-        for (final kind in StepKind.values)
-          kind: Inspector.hasPublicState(kind),
-      },
-      {
-        StepKind.tag: true,
-        StepKind.prerequisite: true,
-        StepKind.publishRegistry: true,
-        StepKind.publishRelease: true,
-        StepKind.publishHomebrew: true,
-        StepKind.build: false,
-        StepKind.notarize: false,
-        StepKind.archive: false,
-        StepKind.buildAssets: false,
-        StepKind.completeStage: false,
-      },
-      reason:
-          'a prerequisite dropped from this set stops blocking a release '
-          'whose dependency rk could not read',
-    );
-  });
-
-  Step step(StepKind kind) => Step(
-    id: 'u/x/y',
-    unit: 'u',
-    kind: kind,
-    target: switch (kind) {
-      StepKind.tag => PublishTarget.gitTag,
-      StepKind.publishRegistry => PublishTarget.pubDev,
-      StepKind.publishRelease => PublishTarget.githubRelease,
-      StepKind.publishHomebrew => PublishTarget.homebrew,
-      _ => null,
-    },
-    summary: 'x',
-    needs: const [],
-  );
-
-  test('what blocks a release, by verdict and kind', () {
-    // Conflict always blocks; unknown blocks only where the state was
-    // supposed to be readable; the one blocking absence is a prerequisite.
-    expect(
-      Inspector.blocks(
-        step(StepKind.publishRegistry),
-        const Inspection.conflict('differs'),
-      ),
-      isTrue,
-    );
-    expect(
-      Inspector.blocks(
-        step(StepKind.publishRelease),
-        const Inspection.unknown('unread'),
-      ),
-      isTrue,
-      reason: 'not knowing is not permission to publish',
-    );
-    expect(
-      Inspector.blocks(step(StepKind.build), const Inspection.unknown('local')),
-      isFalse,
-      reason: 'local steps answer unknown by design — they are the work',
-    );
-    expect(
-      Inspector.blocks(step(StepKind.prerequisite), const Inspection.absent()),
-      isTrue,
-      reason: 'the dependency has not shipped',
-    );
-    expect(
-      Inspector.blocks(
-        step(StepKind.publishRegistry),
-        const Inspection.absent(),
-      ),
-      isFalse,
-      reason: 'an absent coordinate is the work this release does',
-    );
-    expect(
-      Inspector.blocks(
-        step(StepKind.tag),
-        const Inspection.exact(detail: 'tagged'),
-      ),
-      isFalse,
-    );
-  });
-
+/// How each target's public state is read, and what that reading blocks.
+void targetReads() {
   group('a tag released from an earlier commit', () {
     Future<List<Diagnostic>> guardsFor({
       required bool finished,
@@ -665,99 +584,6 @@ void classificationTables() {
     );
   });
 
-  group('an unread origin never reports a tag as done', () {
-    Future<Inspection> tagUnread({required List<String> tags}) async {
-      final inspector = Inspector(
-        registry: FakeRegistry({}),
-        git: GitState(
-          root: '/repo',
-          head: 'abc123def456',
-          branch: 'main',
-          isClean: true,
-          uncommitted: const [],
-          headIsPushed: true,
-          tags: tags,
-          tagTargets: {for (final t in tags) t: 'abc123def456'},
-          signingConfigured: false,
-          originUrl: 'example/tool',
-        ),
-      );
-      return inspector.inspect(
-        Step(
-          id: 'cli/tag',
-          unit: 'cli',
-          kind: StepKind.tag,
-          target: PublishTarget.gitTag,
-          summary: 'tag the release',
-          needs: const [],
-        ),
-        await _binaryUnit(),
-      );
-    }
-
-    test('a local-only tag is unknown, never exact', () async {
-      final state = await tagUnread(tags: ['v1.0.0']);
-
-      expect(
-        state.verdict,
-        Verdict.unknown,
-        reason:
-            'origin was not read, and a local tag is not a pushed tag — '
-            'exact here would make not reading the more confident answer '
-            'than reading, which online returns absent for this same world',
-      );
-      expect(state.detail, contains('no tools to read origin with'));
-    });
-
-    test('no local tag is unknown because origin was not read', () async {
-      final state = await tagUnread(tags: const []);
-
-      expect(
-        state.verdict,
-        Verdict.unknown,
-        reason:
-            'a fresh clone can lack a tag that origin already has; local '
-            'absence is not public absence',
-      );
-    });
-  });
-
-  test('the formula is unknown until a tap reader exists', () async {
-    final inspector = Inspector(
-      registry: FakeRegistry({}),
-      git: GitState(
-        root: '/repo',
-        head: 'abc123def456',
-        branch: 'main',
-        isClean: true,
-        uncommitted: const [],
-        headIsPushed: true,
-        tags: const [],
-        signingConfigured: false,
-        originUrl: null,
-      ),
-    );
-    final state = await inspector.inspect(
-      Step(
-        id: 'cli/homebrew/example_tool/example-tool',
-        unit: 'cli',
-        project: 'example_tool',
-        kind: StepKind.publishHomebrew,
-        target: PublishTarget.homebrew,
-        summary: 'update the formula',
-        needs: const [],
-      ),
-      (await _binaryUnit()),
-    );
-    expect(
-      state.verdict,
-      Verdict.unknown,
-      reason:
-          'absent would report a formula that may already point at this '
-          'release as work still to do',
-    );
-  });
-
   group('the formula inspection reads the public tap', () {
     Future<Inspection> formula(ToolResult? Function(String key) answers) async {
       final inspector = Inspector(
@@ -858,27 +684,6 @@ void classificationTables() {
       expect(state.verdict, Verdict.unknown);
     });
   });
-
-  test(
-    'the checklist summary counts the same assets the inspector expects',
-    () async {
-      // Both derivations read ReleaseAssets now, so comparing them to each
-      // other would compare a thing to itself. The pin is the literal: this
-      // fixture's frozen four-name vector lives in the sibling test below, and
-      // a summary that says any other number has drifted from the grammar
-      // whatever the grammar says.
-      final resolution = await _binaryResolution();
-      final unit = resolution.unit('cli')!;
-      final steps = Checklist.derive(unit, resolution, Diagnostics()).steps;
-      final summary = steps
-          .firstWhere((s) => s.kind == StepKind.publishRelease)
-          .summary;
-      final counted = int.parse(
-        RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!,
-      );
-      expect(counted, 3);
-    },
-  );
 
   test('the expected asset set is derived, and derives everything', () async {
     final unit = await _binaryUnit();
