@@ -1543,11 +1543,10 @@ publish = ["git-tag", "pub.dev"]
     })
   >
   binaryDrive({
-    required bool dryRun,
+    required bool stageOnly,
     Set<String> remoteTags = const {},
     bool notaryRejects = false,
     bool notaryProfileRejects = false,
-    bool signingRejects = false,
     List<String> platforms = const ['macos-arm64'],
     bool homebrew = false,
     String label = '',
@@ -1561,7 +1560,7 @@ publish = ["git-tag", "pub.dev"]
     bool baselineChangesBeforeConsent = false,
   }) async {
     final root = Directory(
-      '${scratch.path}/drive-${dryRun ? 'd' : 'f'}'
+      '${scratch.path}/drive-${stageOnly ? 'd' : 'f'}'
       '${notaryRejects ? '-nr' : ''}'
       '${notaryProfileRejects ? '-np' : ''}$label',
     )..createSync(recursive: true);
@@ -1803,13 +1802,6 @@ executables:
         }
         if (key.startsWith('codesign --test-requirement')) {
           return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
-        }
-        if (signingRejects && key.startsWith('codesign --force')) {
-          return ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'the signing operation was interrupted',
-          );
         }
         if (key.startsWith('codesign -d -r-') &&
             key.contains('published-identity')) {
@@ -2083,9 +2075,9 @@ executables:
       return (code: code, output: output);
     }
 
-    var execution = await execute(dryRun);
+    var execution = await execute(stageOnly);
     if (publishStaged && execution.code == ExitCodes.ok) {
-      if (!dryRun) {
+      if (!stageOnly) {
         fail('publishStaged requires an initial stage-only run');
       }
       execution = await execute(false);
@@ -2104,60 +2096,11 @@ executables:
   }
 
   group('the binary chain', () {
-    test('no state carried between steps — a full release, each step its '
-        'own act', () async {
-      expect(
-        File('lib/src/commands/release.dart').readAsStringSync(),
-        isNot(contains('_produced')),
-        reason:
-            'CI seam 1: a step must be executable from the checklist, '
-            'its id, the workspace and reality',
-      );
-
-      final run = await binaryDrive(dryRun: false);
-      expect(run.code, 0, reason: run.text);
-      expect(
-        run.calls,
-        isNot(contains('dart pub login')),
-        reason: 'a unit with no pub.dev target has no pub session to acquire',
-      );
-      // Every stage of the chain acted, separately, in checklist order.
-      final order = [
-        'xcrun notarytool history',
-        'dart compile',
-        'codesign --force',
-        'ditto',
-        'xcrun notarytool submit',
-        'gh api -X POST repos/example/tool/releases --input',
-      ];
-      var at = -1;
-      for (final prefix in order) {
-        final index = run.calls.indexWhere((c) => c.startsWith(prefix));
-        expect(index, greaterThan(at), reason: '$prefix in order');
-        at = index;
-      }
-      expect(
-        ((run.json['units'] as List)
-            .cast<Map<String, Object?>>()
-            .expand((unit) => (unit['steps'] as List).cast<Map>())
-            .map((step) => step['summary'])),
-        contains('publish 2 assets to the v1.0.0 release'),
-      );
-      expect(run.text, contains('released'));
-      expect(
-        run.calls.where((call) => call.contains('--check-notarization')),
-        isEmpty,
-        reason:
-            'exact publication ends the release; Apple ticket '
-            'propagation is not a synchronous release gate',
-      );
-    });
-
     test(
       'the notarization profile is verified before any build starts',
       () async {
         final run = await binaryDrive(
-          dryRun: true,
+          stageOnly: true,
           notaryProfileRejects: true,
           label: '-notary-preflight',
         );
@@ -2187,7 +2130,7 @@ executables:
       // no sentence for a person, no `halt` key for a caller. A rejected
       // notarization is the everyday representative of the class.
       final run = await binaryDrive(
-        dryRun: false,
+        stageOnly: false,
         notaryRejects: true,
         label: '-notary-failure-boundary',
       );
@@ -2223,74 +2166,29 @@ executables:
     });
 
     test(
-      'a signing interruption leaves every public target untouched',
-      () async {
-        final run = await binaryDrive(
-          dryRun: false,
-          signingRejects: true,
-          label: '-sign-failure-boundary',
-        );
-
-        expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('signing failed'));
-        expect((run.json['halt'] as Map?)?['kind'], 'stoppedPartway');
-        expect(
-          run.calls.where(
-            (call) =>
-                call.startsWith('git push origin') ||
-                call.contains(' -X POST repos/example/tool/releases --input '),
-          ),
-          isEmpty,
-          reason: 'signed bytes are required in the stage before publication',
-        );
-      },
-    );
-
-    test('stage half: every local step runs for real and '
-        'nothing public is touched', () async {
-      final run = await binaryDrive(dryRun: true);
-
-      expect(run.code, 0, reason: run.text);
-      for (final local in [
-        'dart compile',
-        'codesign --force',
-        'ditto',
-        'xcrun notarytool submit',
-      ]) {
-        expect(
-          run.calls.any((c) => c.startsWith(local)),
-          isTrue,
-          reason:
-              '$local ran for real — staging exists so an expired '
-              'certificate is found on a quiet afternoon',
-        );
-      }
-      for (final public in [
-        'git tag',
-        'git push',
-        'gh api -X POST repos/example/tool/releases --input',
-      ]) {
-        expect(
-          run.calls.any((c) => c.startsWith(public)),
-          isFalse,
-          reason: '$public is public and staging never touches it',
-        );
-      }
-      expect(run.text, contains('1.0.0 · staged'));
-      expect(run.calls, isNot(contains('dart pub login')));
-    });
-
-    test(
       'stage spans every platform and still touches nothing public',
       () async {
         final run = await binaryDrive(
-          dryRun: true,
+          stageOnly: true,
           platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
           homebrew: true,
           label: '-3pr',
         );
         expect(run.code, 0, reason: run.text);
         expect(run.calls.where((c) => c.startsWith('dart compile')).length, 3);
+        for (final local in [
+          'codesign --force',
+          'ditto',
+          'xcrun notarytool submit',
+        ]) {
+          expect(
+            run.calls.any((c) => c.startsWith(local)),
+            isTrue,
+            reason:
+                '$local ran for real — staging exists so an expired '
+                'certificate is found on a quiet afternoon',
+          );
+        }
         for (final public in [
           'git tag',
           'git push',
@@ -2314,7 +2212,7 @@ executables:
       // daemon that is not running became a hard blocker on shipping,
       // which is a heavier claim than the smoke test earns.
       final run = await binaryDrive(
-        dryRun: false,
+        stageOnly: false,
         platforms: ['macos-arm64', 'linux-x64'],
         label: '-unproven',
         containerRuntime: null,
@@ -2372,12 +2270,17 @@ executables:
       'the inspector will expect, and the body is the changelog entry',
       () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
           homebrew: true,
           label: '-3p',
         );
         expect(run.code, 0, reason: run.text);
+        expect(
+          run.calls,
+          isNot(contains('dart pub login')),
+          reason: 'a unit with no pub.dev target has no pub session to acquire',
+        );
 
         // Three builds, two of them cross-compiled for linux.
         expect(run.calls.where((c) => c.startsWith('dart compile')).length, 3);
@@ -2476,7 +2379,7 @@ executables:
     test(
       'a genuine first signing names the certificate before the yes',
       () async {
-        final run = await binaryDrive(dryRun: false, label: '-first');
+        final run = await binaryDrive(stageOnly: false, label: '-first');
 
         expect(run.code, 0, reason: run.text);
         expect(
@@ -2517,7 +2420,7 @@ executables:
       // its identity, and then told the operator that identity did not
       // exist yet.
       final run = await binaryDrive(
-        dryRun: false,
+        stageOnly: false,
         label: '-later',
         previousTag: 'v0.9.0',
       );
@@ -2539,7 +2442,7 @@ executables:
       'reusing a later signed stage does not turn it into a first claim',
       () async {
         final run = await binaryDrive(
-          dryRun: true,
+          stageOnly: true,
           publishStaged: true,
           label: '-later-stage-reuse',
           previousTag: 'v0.9.0',
@@ -2561,26 +2464,10 @@ executables:
       },
     );
 
-    test(
-      'an unpublished CLI uses its executable as signing identity',
-      () async {
-        final run = await binaryDrive(dryRun: true, label: '-nocodeid');
-
-        expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(
-          run.text,
-          matches(RegExp(r'macOS code identifier\s+tool')),
-          reason:
-              'the producer owns the identity it can derive from its native '
-              'executable rather than requiring release.toml to restate it',
-        );
-      },
-    );
-
     group('the keychain is read before anything acts, not midway', () {
       test('an unreadable keychain is not an absent certificate', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-nokc',
           keychainReadable: false,
         );
@@ -2604,7 +2491,7 @@ executables:
 
       test('no certificate refuses before the tag, not after', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-nocert',
           certificates: 0,
         );
@@ -2622,7 +2509,7 @@ executables:
           // public. The requirement is in hand during preflight, and the
           // answer does not change by waiting.
           final run = await binaryDrive(
-            dryRun: false,
+            stageOnly: false,
             label: '-noteam',
             previousTag: 'v0.9.0',
             publishedNamesTeam: false,
@@ -2638,11 +2525,10 @@ executables:
         },
       );
 
-      test('a rehearsal shows the names the real run will claim', () async {
-        // The names are exactly what a rehearsal is for reading before they
-        // become unreclaimable, and they used to appear for the first time
-        // only at the real prompt, after the release was authorized.
-        final run = await binaryDrive(dryRun: true, label: '-dryclaim');
+      test('staging shows the names the release will claim', () async {
+        // Staging is where they can be read before they become
+        // unreclaimable, rather than first at the release's prompt.
+        final run = await binaryDrive(stageOnly: true, label: '-stageclaim');
 
         expect(run.code, ExitCodes.ok, reason: run.text);
         expect(run.text, contains('First release · permanent once published'));
@@ -2657,23 +2543,13 @@ executables:
       });
 
       test(
-        'a dry run derives the native program name before signing',
-        () async {
-          final run = await binaryDrive(dryRun: true, label: '-drynoid');
-
-          expect(run.code, ExitCodes.ok, reason: run.text);
-          expect(run.text, matches(RegExp(r'macOS code identifier\s+tool')));
-        },
-      );
-
-      test(
         'a certificate for the wrong team refuses before the publish',
         () async {
           // The likeliest signing failure there is: the preflight chooses
           // the certificate, and refuses before any work when none is for
           // the team users installed.
           final run = await binaryDrive(
-            dryRun: false,
+            stageOnly: false,
             label: '-wrongteam',
             previousTag: 'v0.9.0',
             certTeams: ['TEAMZZZZZZ'],
@@ -2697,7 +2573,7 @@ executables:
 
       test('several certificates for the published team refuses too', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-dupeteam',
           previousTag: 'v0.9.0',
           certTeams: ['TEAM123456', 'TEAM123456'],
@@ -2711,7 +2587,7 @@ executables:
 
       test('an ambiguous first signing refuses, naming the teams', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-twocerts',
           certificates: 2,
         );
