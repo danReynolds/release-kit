@@ -2827,6 +2827,21 @@ publish = ["pub.dev"]
     );
   });
 
+  test('staged before origin has the commit, it says to push before '
+      'releasing', () async {
+    // The tag a release pushes needs a commit origin can fetch: a release
+    // now would refuse, so it is not offered as the next command.
+    final ran = await release(dryRun: true, state: _git(pushed: false));
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.text, contains('once origin has this commit: rk release core'));
+    expect(ran.report['next'], isEmpty);
+    expect(
+      (ran.report['warnings'] as List).cast<Map>().map((w) => w['code']),
+      contains('RK-GIT-003'),
+    );
+  });
+
   test('a tag only this clone has names the command that removes it', () async {
     // The operator ran `git tag v0.2.0` before releasing. Origin has no such
     // tag, so moving a public tag is not the question: deleting the local

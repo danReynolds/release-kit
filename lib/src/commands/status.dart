@@ -116,11 +116,13 @@ class StatusCommand {
     if (uniqueIssues.isEmpty && unfinished.isNotEmpty) {
       // A repository release takes every unit, in dependency order — and is
       // the only one that takes a unit with the sibling it releases after:
-      // that unit alone would wait for the sibling to be on pub.dev.
+      // that unit alone would wait for the sibling to be on pub.dev. Staging
+      // it alone works, taking the sibling from this source.
+      final verb = unfinished.every(readyToRelease) ? 'release' : 'stage';
       final repositoryWide =
           unfinished.length > 1 ||
-          unfinished.single.observed.releasesAfterSibling;
-      final verb = unfinished.every(readyToRelease) ? 'release' : 'stage';
+          (verb == 'release' &&
+              unfinished.single.observed.releasesAfterSibling);
       nextCommand = repositoryWide
           ? 'rk $verb'
           : 'rk $verb ${unfinished.single.unit.name}';

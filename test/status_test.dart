@@ -2403,7 +2403,7 @@ publish = ["pub.dev"]
       );
     });
 
-    test('is released with it, by the repository command', () async {
+    test('is staged alone, and released with it', () async {
       final run = await statusRun(
         withConfig: cliFirst,
         source: siblings(),
@@ -2419,8 +2419,10 @@ publish = ["pub.dev"]
       expect(run.report['problems'], isEmpty);
       expect(
         run.report['next'],
-        ['rk stage'],
-        reason: 'rk stage cli and rk release cli would wait for core',
+        ['rk stage cli'],
+        reason:
+            'cli stages alone, taking core from this source; only its '
+            'release waits for core, and releases with it',
       );
     });
   });

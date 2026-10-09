@@ -782,8 +782,24 @@ class ReleaseCommand {
     final command = staged.length == 1 && !staged.single.releasesAfterSibling
         ? 'rk release ${staged.single.unit.name}'
         : 'rk release';
-    output.report.next(command);
+    // Only the tag a release pushes needs a commit origin can fetch. Until
+    // origin has it, the release would refuse (RK-GIT-003), so that comes
+    // first, and nothing is offered that would refuse.
+    final unpushed =
+        staged.any((read) => read.unit.publish.contains(PublishTarget.gitTag))
+        ? git.unpushedProblem()
+        : null;
     output.blank();
+    if (unpushed != null) {
+      output.warning(unpushed, depth: 1);
+      output.line(
+        'Ready to publish once origin has this commit: $command',
+        depth: 1,
+        role: VisualRole.operatorAction,
+      );
+      return;
+    }
+    output.report.next(command);
     output.line(
       'Ready to publish: $command',
       depth: 1,
