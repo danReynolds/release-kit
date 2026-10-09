@@ -236,22 +236,28 @@ void main() {
     });
 
     test('a link leads into refuses the export too', () async {
-      final snapshot = await _committed(
-        files,
-        links: {'packages/app/native': '../../third_party'},
-        submodules: ['third_party/vendor'],
-      );
-      final root = Directory.systemTemp.createTempSync('rk-source-sub-');
-      addTearDown(() => root.deleteSync(recursive: true));
+      for (final links in [
+        {'packages/app/native': '../../third_party'},
+        {'packages/app/lib/vendor.dart': '../../../third_party/vendor/x.dart'},
+      ]) {
+        final snapshot = await _committed(
+          files,
+          links: links,
+          submodules: ['third_party/vendor'],
+        );
+        final root = Directory.systemTemp.createTempSync('rk-source-sub-');
+        addTearDown(() => root.deleteSync(recursive: true));
 
-      expect(
-        () => snapshot.export(
-          root.path,
-          only: snapshot.dartBuildInputs('packages/app'),
-          reader: 'app',
-        ),
-        throwsA(refusal('third_party/vendor')),
-      );
+        expect(
+          () => snapshot.export(
+            root.path,
+            only: snapshot.dartBuildInputs('packages/app'),
+            reader: 'app',
+          ),
+          throwsA(refusal('third_party/vendor')),
+          reason: '$links',
+        );
+      }
     });
 
     test('that no lane reads is left out', () async {
