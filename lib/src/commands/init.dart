@@ -21,7 +21,7 @@ class InitCommand {
     required this.tree,
     required this.output,
     required this.write,
-    required this.confirm,
+    this.yes = false,
     HostCapabilities? capabilities,
     this.origin,
     this.gitBound = true,
@@ -46,41 +46,17 @@ class InitCommand {
   final Future<InitReviewDecision> Function(String proposal, bool needsIgnore)?
   review;
 
-  /// Merge-safe filesystem update used by the real command. Tests may omit
-  /// it and observe the complete proposed file through [write].
+  /// Adds `.rk/` to `.gitignore`, keeping what is there. The real command
+  /// passes it in every Git repository; a test may leave it out.
   final void Function()? updateGitignore;
   final String? ambientPubHostedUrl;
 
   /// Writes the file, so the command is testable without a filesystem.
   final void Function(String path, String contents) write;
 
-  /// Asks the operator, or null when nobody is there to ask.
-  final Future<bool> Function(String prompt)? confirm;
-
-  /// Whether a typed answer consents.
-  ///
-  /// Null is EOF — nobody answered — and nobody answering is not consent:
-  /// `rk init < /dev/null` used to write the file, because EOF collapsed to
-  /// the empty string and empty means Yes at a real prompt (the [Y/n]
-  /// default, with Back available in TTY mode). The two are different facts
-  /// and this is the one mutating act
-  /// rk has that ever read them as one.
-  static bool consented(String? answer) {
-    if (answer == null) return false;
-    final normalized = answer.trim().toLowerCase();
-    return normalized.isEmpty || normalized == 'y' || normalized == 'yes';
-  }
-
-  static InitReviewDecision reviewed(String? answer) {
-    if (answer == null) return InitReviewDecision.cancel;
-    final normalized = answer.trim().toLowerCase();
-    if (normalized == 'b' || normalized == 'back') {
-      return InitReviewDecision.back;
-    }
-    return consented(answer)
-        ? InitReviewDecision.write
-        : InitReviewDecision.cancel;
-  }
+  /// The yes given up front: `rk init --write`. Without it, and without
+  /// [review], init proposes and writes nothing.
+  final bool yes;
 
   Future<int> run() async {
     // The three exit-0 states — already configured, nothing releasable, and
@@ -229,20 +205,15 @@ class InitCommand {
         }
       }
 
-      if (confirm == null && review == null) {
+      if (!yes && review == null) {
         output.blank();
         output.say('nothing was written — there is no terminal to confirm in.');
         output.next('rk init --write');
         return ExitCodes.ok;
       }
 
-      final prompt = needsIgnore
-          ? 'write release.toml and add .rk/ to .gitignore? [Y/n/b] '
-          : 'write release.toml? [Y/n/b] ';
       final decision = review == null
-          ? await confirm!(prompt)
-                ? InitReviewDecision.write
-                : InitReviewDecision.cancel
+          ? InitReviewDecision.write
           : await review!(proposal, needsIgnore);
       if (decision == InitReviewDecision.back && selector != null) continue;
       if (decision != InitReviewDecision.write) {
@@ -253,10 +224,10 @@ class InitCommand {
         return ExitCodes.ok;
       }
 
-      String? currentGitignore = gitignore;
       if (needsIgnore) {
+        final String? current;
         try {
-          currentGitignore = tree.read('.gitignore');
+          current = tree.read('.gitignore');
         } on SourceUnreadable catch (error) {
           output.problem(
             Diagnostic(
@@ -269,7 +240,7 @@ class InitCommand {
           );
           return ExitCodes.refused;
         }
-        if (currentGitignore != gitignore) {
+        if (current != gitignore) {
           output.problem(
             const Diagnostic(
               code: 'RK-INIT-005',
@@ -296,17 +267,7 @@ class InitCommand {
       output.report.acted = true;
       if (needsIgnore) {
         try {
-          final update = updateGitignore;
-          if (update != null) {
-            update();
-          } else {
-            final lead = currentGitignore == null
-                ? ''
-                : currentGitignore.endsWith('\n')
-                ? currentGitignore
-                : '$currentGitignore\n';
-            write('.gitignore', '$lead.rk/\n');
-          }
+          updateGitignore?.call();
         } on Object catch (error) {
           output.problem(
             Diagnostic(

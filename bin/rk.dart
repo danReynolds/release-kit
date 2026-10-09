@@ -644,22 +644,13 @@ Future<int> _init(
       review: interaction?.review,
       updateGitignore: git != null ? () => _ensureRkIgnored(root) : null,
       write: (path, contents) {
-        if (path == 'release.toml') {
-          final file = File('$root/$path')..createSync(exclusive: true);
-          file.writeAsStringSync(contents, flush: true);
-        } else {
-          File('$root/$path').writeAsStringSync(contents);
-        }
+        final file = File('$root/$path')..createSync(exclusive: true);
+        file.writeAsStringSync(contents, flush: true);
       },
-      // A prompt would be written straight to stdout, past the sink that --json
-      // silences, so asking is not an option when a caller is parsing the
-      // answer. init already refuses when nobody can confirm. The answer is
-      // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
-      // alone does not guard that, because macOS reports a terminal for
-      // `rk init < /dev/null`.
-      // --write is the typed yes, carried as a flag: the door for scripts and
-      // agents, named in the refusal a terminal-less run prints.
-      confirm: write ? (_) async => true : null,
+      // At a terminal the selector's review asks. --write is the typed yes,
+      // carried as a flag: the door for scripts and agents, named in what a
+      // run with no terminal prints.
+      yes: write,
     ).run();
   } finally {
     try {
