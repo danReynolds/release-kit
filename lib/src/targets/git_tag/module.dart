@@ -111,11 +111,15 @@ final class GitTagTargetModule extends TargetModule {
         'could not read the expected local tag object',
       );
     }
+    // A tag only this clone has is the operator's to remove: the conflict
+    // says so, and so does its remedy.
+    final notOnOrigin = {'origin': 'has no $tag'};
     if (commit.toLowerCase() != context.git.head.toLowerCase()) {
       return Inspection.conflict(
         'the local release tag points at a different source commit',
         evidence: {
           'source commit': 'local $commit, expected ${context.git.head}',
+          ...notOnOrigin,
         },
       );
     }
@@ -125,7 +129,13 @@ final class GitTagTargetModule extends TargetModule {
       expectedCommit: commit,
       expectedManifestSha256: manifestSha256,
     );
-    return local.isExact ? remote : local;
+    if (local.isExact) return remote;
+    return local.verdict == Verdict.conflict
+        ? Inspection.conflict(
+            local.detail!,
+            evidence: {...local.evidence, ...notOnOrigin},
+          )
+        : local;
   }
 
   @override
@@ -210,6 +220,16 @@ final class GitTagTargetModule extends TargetModule {
         remedy:
             'To release these changes, bump the version and add its '
             'changelog entry, then run rk stage ${unit.name}.',
+      );
+    }
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    if (conflict.evidence['origin'] == 'has no $tag') {
+      return Diagnostic(
+        code: 'RK-REL-001',
+        message: '${target.label}: ${conflict.detail}',
+        remedy:
+            '$tag is only in this clone, and is not one rk made for this '
+            'commit. Delete it with git tag -d $tag, then re-run',
       );
     }
     return Diagnostic(

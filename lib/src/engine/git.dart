@@ -290,7 +290,8 @@ class GitState {
   ///
   /// `git status --porcelain=v2 --branch` answers HEAD, its branch, upstream
   /// and ahead count beside the uncommitted paths; one config read answers
-  /// the signing key, `tag.gpgSign`, and the remotes. Tags are listed apart
+  /// the signing key, `tag.gpgSign`, and whether a remote exists, and
+  /// `git remote get-url` answers origin as git resolves it. Tags are listed apart
   /// from the peeled `show-ref`, which fails whole on one unreachable tag
   /// object: a tag rk can see but not place is RK-GIT-007, never absent.
   static Future<GitState> read(

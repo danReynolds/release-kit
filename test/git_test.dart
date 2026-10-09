@@ -290,12 +290,15 @@ void main() {
       }
     });
 
-    test('git is asked six things at once, through the given tools', () async {
-      final asked = <String>[];
-      await GitState.read(root.path, tools: _Asked(asked));
-      expect(asked, hasLength(6));
-      expect(asked, everyElement(startsWith('git ')));
-    });
+    test(
+      'git is asked seven things at once, through the given tools',
+      () async {
+        final asked = <String>[];
+        await GitState.read(root.path, tools: _Asked(asked));
+        expect(asked, hasLength(7));
+        expect(asked, everyElement(startsWith('git ')));
+      },
+    );
 
     test(
       'a commit source tree holds the commit\'s paths, not the worktree\'s',

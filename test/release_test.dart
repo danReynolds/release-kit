@@ -2827,6 +2827,24 @@ publish = ["pub.dev"]
     );
   });
 
+  test('a tag only this clone has names the command that removes it', () async {
+    // The operator ran `git tag v0.2.0` before releasing. Origin has no such
+    // tag, so moving a public tag is not the question: deleting the local
+    // one is.
+    final ran = await release(
+      state: _git(
+        tags: const ['v0.2.0'],
+        tagObjects: const {
+          'v0.2.0': '1111111111111111111111111111111111111111',
+        },
+      ),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused, reason: ran.text);
+    expect(ran.text, contains('git tag -d v0.2.0'));
+    expect(ran.text, isNot(contains('do not move the public tag')));
+  });
+
   test('an old tag that names no version does not stop a release', () async {
     final ran = await release(
       results: {
