@@ -769,7 +769,7 @@ Future<int> _release(
     final stages = ReleaseStages(
       source: tree,
       git: git,
-      stageContracts: targets.stageContractResolver(resolution),
+      resolution: resolution,
     );
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
@@ -885,7 +885,6 @@ Future<int> _plan(Output output, String? unit) async {
     resolution: prepared.resolution!,
     git: prepared.source!.git,
     output: output,
-    targets: TargetCatalog.builtIn(),
   ).run(only: unit);
 }
 
@@ -910,7 +909,7 @@ Future<int> _status(
     final stages = ReleaseStages(
       source: tree,
       git: git,
-      stageContracts: targets.stageContractResolver(resolution),
+      resolution: resolution,
     );
     final targetTools = SystemTools(
       timeout: const Duration(minutes: 2),

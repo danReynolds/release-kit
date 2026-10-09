@@ -4,14 +4,12 @@ import 'dart:io';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/release_asset.dart';
 import 'package:rk/src/engine/release_bundle.dart';
 import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
-import 'package:rk/src/engine/stage_archive.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/transforms/archive.dart';
@@ -228,7 +226,7 @@ void main() {
     final archive = finalized.steps.singleWhere(
       (step) => step.name == 'archive:$_asset',
     );
-    expect(archive.evidence['inventory'], isNotEmpty);
+    expect(archive.evidence['smoke'], {'status': 'passed'});
   });
 
   test('a complete filesystem fixture records every artifact type', () async {
@@ -592,15 +590,7 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     path: _asset,
     type: 'archive',
   );
-  final archiveStep = StageStep(
-    name: 'archive:$_asset',
-    outputs: [archive],
-    evidence: {
-      'inventory': StageArchiveInventory.evidence(
-        StageArchiveInventory.parse(archiveBytes),
-      ),
-    },
-  );
+  final archiveStep = StageStep(name: 'archive:$_asset', outputs: [archive]);
 
   release.directory.writeBytesAtomically(
     'release-notes.md',
@@ -643,9 +633,8 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
   );
 }
 
-List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
-  for (final path in paths)
-    ReleaseAssetSpec(stagedPath: path, publicName: path),
+List<ReleaseAsset> _fixtureReleaseAssets(Iterable<String> paths) => [
+  for (final path in paths) (publicName: path, stagedPath: path),
 ];
 
 Future<void> _recordArchives(
@@ -702,9 +691,7 @@ Future<void> _recordArchives(
         name: 'archive:${entry.key}',
         outputs: [artifact],
         evidence: {
-          'inventory': StageArchiveInventory.evidence(
-            StageArchiveInventory.parse(bytes),
-          ),
+          'smoke': {'status': 'passed'},
         },
       ),
     );

@@ -1,6 +1,5 @@
 import '../builds/capability.dart';
 import '../engine/changelog.dart';
-import '../engine/checklist.dart';
 import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
@@ -10,7 +9,7 @@ import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
-import '../engine/targets.dart';
+import '../engine/unit_release.dart';
 import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
@@ -197,11 +196,8 @@ class StatusCommand {
     final stage = unit.stage;
     if (stage == null || !stage.reusable) return const [];
     final stages = {
-      for (final targetStage in inspector.targets.stages(
-        unit: unit.unit,
-        targets: unit.observed.targets,
-      ))
-        targetStage.contract.name: targetStage.target.step.id,
+      for (final target in unit.release.targets)
+        if (target.preparedBy case final work?) work.name: target.id,
     };
     return [
       for (final step in stage.receipt!.steps)
@@ -224,9 +220,8 @@ class StatusCommand {
       stageFor: stageFor ?? inspector.stageFor,
     );
     final stageResult = _stageResult(observed);
-    final checklist = observed.checklist;
     final diagnostics = Diagnostics();
-    observed.checklistProblems.forEach(diagnostics.report);
+    observed.releaseProblems.forEach(diagnostics.report);
 
     for (final project in unit.projects) {
       Changelog.check(
@@ -239,9 +234,9 @@ class StatusCommand {
     }
 
     final expectations = observed.targets;
-    final artifactProblems = _artifactProductionProblems(unit, expectations);
+    final artifactProblems = _artifactProductionProblems(unit);
     for (final expectation in expectations) {
-      checking?.add(expectation.step.id, expectation.label, group: group);
+      checking?.add(expectation.id, expectation.label, group: group);
     }
 
     // Each row settles as its own reads answer, in whatever order they do;
@@ -252,26 +247,22 @@ class StatusCommand {
           final target = _publicationObservation(
             _observeTarget(
               expectation,
-              await observed.reads[expectation.step.id]!,
-              await observed.historyReads[expectation.step.id]!,
+              await observed.reads[expectation.id]!,
+              await observed.historyReads[expectation.id]!,
               stageResult.inspection,
               artifactProblems,
             ),
           );
-          checking?.finish(expectation.step.id, target.inspection.verdict);
+          checking?.finish(expectation.id, target.inspection.verdict);
           return target;
         }(),
     ]);
     await observed.settle();
     final releasedSource = _releasedSourceMismatch(targets);
-    final prerequisiteSteps = checklist.steps
-        .where((step) => step.kind == StepKind.prerequisite)
-        .toList();
 
     final states = <String, Inspection>{
       ...observed.states,
-      for (final target in targets)
-        target.expectation.step.id: target.inspection,
+      for (final target in targets) target.expectation.id: target.inspection,
     };
 
     final tagGuardProblems = [
@@ -330,7 +321,6 @@ class StatusCommand {
                     )
                     .firstOrNull
                     ?.expectation
-                    .step
                     .id
               : null,
           diagnostic: diagnostic,
@@ -339,7 +329,7 @@ class StatusCommand {
         StatusIssue(
           unit: unit.name,
           diagnostic: inspector.targets
-              .moduleForTarget(releasedSource.target.expectation)
+              .moduleFor(releasedSource.target.expectation.target)
               .diagnoseConflict(
                 unit,
                 releasedSource.target.expectation,
@@ -354,7 +344,7 @@ class StatusCommand {
         for (final diagnostic in target.historyProblems)
           StatusIssue(
             unit: unit.name,
-            target: target.expectation.step.id,
+            target: target.expectation.id,
             diagnostic: diagnostic,
           ),
       for (final target in targets)
@@ -367,11 +357,11 @@ class StatusCommand {
       // its version is an issue; a lane that keeps no history is not.
       for (final target in targets)
         if (!target.currentKnown &&
-            observed.histories[target.expectation.step.id] != null &&
+            observed.histories[target.expectation.id] != null &&
             target.inspection.verdict != Verdict.unknown &&
             target.inspection.verdict != Verdict.conflict)
           _currentVersionIssue(unit, target),
-      for (final step in prerequisiteSteps)
+      for (final step in observed.release.requirements)
         if (Inspector.blocks(step, states[step.id]!) &&
             observed.releasedFirstBy(step) == null)
           _prerequisiteIssue(unit, step, states[step.id]!),
@@ -499,7 +489,7 @@ class StatusCommand {
   }
 
   TargetObservation _observeTarget(
-    TargetPlan expectation,
+    Target expectation,
     Inspection inspection,
     TargetHistory? history,
     StageInspection? stage,
@@ -544,7 +534,7 @@ class StatusCommand {
   }
 
   ArtifactObservation _observeArtifact(
-    TargetPlan target,
+    Target target,
     String name,
     StageInspection? stage,
     String? productionProblem,
@@ -610,10 +600,7 @@ class StatusCommand {
     return ArtifactObservation(name: name, status: ArtifactStatus.staged);
   }
 
-  Map<String, String> _artifactProductionProblems(
-    ResolvedUnit unit,
-    List<TargetPlan> targets,
-  ) {
+  Map<String, String> _artifactProductionProblems(ResolvedUnit unit) {
     final blocked = <String, String>{};
     for (final project in unit.projects) {
       for (final platform in project.binaryPlatforms) {
@@ -645,21 +632,6 @@ class StatusCommand {
           .join('; ');
       problems[ReleaseAssets.manifest] =
           'cannot be finalized until every release artifact exists: $summary';
-    }
-    for (final stage in inspector.targets.stages(
-      unit: unit,
-      targets: targets,
-    )) {
-      final blockedInputs = stage.contract.inputs
-          .where(problems.containsKey)
-          .toList();
-      if (blockedInputs.isEmpty) continue;
-      final reason = blockedInputs
-          .map((input) => '$input: ${problems[input]}')
-          .join('; ');
-      for (final output in stage.contract.outputs.keys) {
-        problems[output] = 'cannot be produced until $reason';
-      }
     }
     return Map.unmodifiable(problems);
   }
@@ -698,7 +670,7 @@ class StatusCommand {
     final label = target.expectation.label;
     final diagnostic = state.verdict == Verdict.conflict
         ? inspector.targets
-              .moduleForTarget(target.expectation)
+              .moduleFor(target.expectation.target)
               .diagnoseConflict(unit, target.expectation, state)
         : Diagnostic(
             code: 'RK-REL-001',
@@ -709,7 +681,7 @@ class StatusCommand {
           );
     return StatusIssue(
       unit: unit.name,
-      target: target.expectation.step.id,
+      target: target.expectation.id,
       diagnostic: diagnostic,
       evidence: state.evidence,
     );
@@ -720,7 +692,7 @@ class StatusCommand {
     TargetObservation target,
   ) => StatusIssue(
     unit: unit.name,
-    target: target.expectation.step.id,
+    target: target.expectation.id,
     diagnostic: Diagnostic(
       code: 'RK-REL-001',
       message:
@@ -787,7 +759,7 @@ class StatusCommand {
       display: displayedTag == null ? movement : '$movement · $displayedTag',
     );
     final first = {
-      for (final step in snapshot.checklist.steps)
+      for (final step in snapshot.release.requirements)
         if (snapshot.observed.releasedFirstBy(step) case final project?)
           '${project.unitName} ${project.version}',
     };
@@ -800,12 +772,12 @@ class StatusCommand {
         role: VisualRole.secondary,
       );
     }
-    for (final step in snapshot.checklist.steps) {
+    for (final step in snapshot.release.steps) {
       // Public targets are recorded once, in targets[], where the settled
       // observation lives; recording them under steps[] too made two
       // spellings of the same fact and left a caller guessing which one is
       // canonical.
-      if (step.target != null) continue;
+      if (step is Target) continue;
       _record(step, snapshot.states[step.id]!);
     }
     for (final target in snapshot.targets) {
@@ -814,18 +786,6 @@ class StatusCommand {
 
     _renderPublication(snapshot);
     _renderStage(snapshot);
-    if (snapshot.stage?.incomplete == true &&
-        snapshot.stageState.evidence.containsKey('native authorization')) {
-      final producers = snapshot.stage!.receipt!.steps.length;
-      output.line(
-        'Saved progress',
-        note: producers == 0
-            ? 'source preparation incomplete'
-            : '$producers recorded producers; stage incomplete',
-        depth: 1,
-        role: VisualRole.secondary,
-      );
-    }
   }
 
   /// Where each target stands publicly.
@@ -863,7 +823,7 @@ class StatusCommand {
 
     for (final target in snapshot.targets) {
       final state = target.inspection;
-      final linked = linkedTargets.contains(target.expectation.step.id);
+      final linked = linkedTargets.contains(target.expectation.id);
       final visualState = linked
           ? RuntimeState.failure
           : RuntimeState.of(state.verdict);
@@ -944,7 +904,7 @@ class StatusCommand {
     final rows = <(TargetObservation, String, ArtifactStatus)>[
       for (final target in snapshot.targets)
         if (!target.inspection.isExact)
-          if (target.expectation.kind == 'pubDev')
+          if (target.expectation.target == PublishTarget.pubDev)
             (
               target,
               '${target.identity} package archive',
@@ -1068,8 +1028,8 @@ class StatusCommand {
     final state = target.inspection;
     output.report.target(
       unit: snapshot.unit.name,
-      id: target.expectation.step.id,
-      kind: target.expectation.kind,
+      id: target.expectation.id,
+      kind: target.expectation.target.wireName,
       label: target.expectation.label,
       coordinate: target.expectation.coordinate,
       targetVersion: target.expectation.targetVersion,
@@ -1248,7 +1208,7 @@ class StatusUnitSnapshot {
   /// What was read, shared with `rk release`.
   final UnitSnapshot observed;
   ResolvedUnit get unit => observed.unit;
-  Checklist get checklist => observed.checklist;
+  UnitRelease get release => observed.release;
   StageInspection? get stage => observed.stageInspection;
   final Map<String, Inspection> states;
   final List<TargetObservation> targets;
@@ -1314,4 +1274,82 @@ class _CurrentVersion {
 
   final String? value;
   final bool known;
+}
+
+enum ArtifactStatus { notStaged, staged, invalid }
+
+/// What the exact stage inspection established about one expected filename.
+class ArtifactObservation {
+  const ArtifactObservation({
+    required this.name,
+    required this.status,
+    this.problem,
+  });
+
+  final String name;
+  final ArtifactStatus status;
+  final String? problem;
+}
+
+/// One public observation, kept in configured order by its caller.
+class TargetObservation {
+  TargetObservation({
+    required this.expectation,
+    required this.inspection,
+    required this.currentVersion,
+    required this.currentKnown,
+    this.currentDetail,
+    Iterable<Diagnostic> historyProblems = const [],
+    required Iterable<ArtifactObservation> artifacts,
+  }) : historyProblems = List<Diagnostic>.unmodifiable(historyProblems),
+       artifacts = List<ArtifactObservation>.unmodifiable(artifacts);
+
+  final Target expectation;
+  final Inspection inspection;
+
+  /// Null with [currentKnown] true means the provider definitively has no
+  /// current release. Null with it false means the read could not answer.
+  final String? currentVersion;
+  final bool currentKnown;
+  final String? currentDetail;
+  final List<Diagnostic> historyProblems;
+
+  final List<ArtifactObservation> artifacts;
+
+  /// The kind of destination, without the thing it points at.
+  String get kindLabel => expectation.kindLabel;
+
+  /// What this row is about, when the section heading has already said what
+  /// state it is in — a tag name, a package, a repository. A row that
+  /// carried neither state nor identity read as unfinished.
+  String get identity => expectation.identity;
+
+  /// What this target has waiting for it here.
+  String get stagedSummary => artifacts.length == 1
+      ? artifacts.single.name
+      : '${artifacts.length} artifacts';
+}
+
+/// A report issue linked to its unit but independent of rendering.
+class StatusIssue {
+  StatusIssue({
+    required this.diagnostic,
+    this.unit,
+    this.target,
+    Map<String, String> evidence = const {},
+  }) : evidence = Map<String, String>.unmodifiable(evidence);
+
+  final String? unit;
+  final String? target;
+  final Diagnostic diagnostic;
+  final Map<String, String> evidence;
+
+  String get deduplicationKey => [
+    unit ?? '',
+    target ?? '',
+    diagnostic.code,
+    diagnostic.source?.toString() ?? '',
+    diagnostic.message,
+    diagnostic.remedy ?? '',
+  ].join('\u0000');
 }

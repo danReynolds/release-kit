@@ -1,17 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:rk/src/engine/checklist.dart';
+import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/targets/target_module.dart';
 import 'package:test/test.dart';
 
@@ -68,13 +67,9 @@ dependencies:
     )!;
     cli = resolution.unit('cli')!;
 
-    final checklist = Checklist.derive(cli, resolution, Diagnostics());
-    prerequisite = checklist.steps.firstWhere(
-      (s) => s.kind == StepKind.prerequisite,
-    );
-    publish = checklist.steps.firstWhere(
-      (s) => s.kind == StepKind.publishRegistry,
-    );
+    final release = _derive(cli, resolution);
+    prerequisite = release.requirements.single;
+    publish = release.packages.single;
   });
 
   Inspector inspector(FakeRegistry registry, {Tools? tools}) => Inspector(
@@ -173,11 +168,7 @@ executables:
         diagnostics,
       )!;
       final unit = binary.unit('cli')!;
-      final release = Checklist.derive(
-        unit,
-        binary,
-        Diagnostics(),
-      ).steps.firstWhere((s) => s.kind == StepKind.publishRelease);
+      final release = _derive(unit, binary).github!;
 
       final tools = ScriptedTools({});
       final state = await inspector(
@@ -190,15 +181,11 @@ executables:
     });
 
     test('local work is unknown too — this run has not looked', () async {
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!;
       final state = await inspector(FakeRegistry({})).inspect(
-        Step(
-          id: 'cli/build/macos-arm64',
-          kind: StepKind.build,
-          unit: 'cli',
-          summary: 'build',
-          needs: const [],
-        ),
-        cli,
+        _derive(unit, resolution).step('cli/build/example_tool/macos-arm64')!,
+        unit,
       );
       expect(state.verdict, Verdict.unknown);
     });
@@ -239,11 +226,11 @@ void targetReads() {
         originUrl: 'example/tool',
       );
       final inspector = Inspector(registry: FakeRegistry({}), git: git);
-      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      final release = _derive(unit, resolution);
       // What the tag inspection answers when the unit's own files are
       // unchanged since the tagged commit.
       final states = {
-        for (final s in checklist.steps)
+        for (final s in release.steps)
           s.id: s.kind == StepKind.tag
               ? const Inspection.exact(
                   detail: 'nothing this unit releases has changed since',
@@ -253,7 +240,7 @@ void targetReads() {
               ? const Inspection.exact(detail: 'published')
               : rest,
       };
-      return inspector.tagGuards(unit, checklist, states);
+      return inspector.tagGuards(unit, release, states);
     }
 
     test('is released once everything it publishes is out', () async {
@@ -311,13 +298,13 @@ void targetReads() {
         originUrl: 'example/tool',
       );
       final inspector = Inspector(registry: FakeRegistry({}), git: git);
-      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      final release = _derive(unit, resolution);
       // The version is not published yet, so the publish step is absent —
       // which is what arms both placement guards.
       final states = {
-        for (final s in checklist.steps) s.id: const Inspection.absent(),
+        for (final s in release.steps) s.id: const Inspection.absent(),
       };
-      return inspector.tagGuards(unit, checklist, states);
+      return inspector.tagGuards(unit, release, states);
     }
 
     test('unread refuses rather than reading as "at HEAD"', () async {
@@ -366,11 +353,7 @@ void targetReads() {
           ),
         }),
       );
-      final tag = Checklist.derive(
-        unit,
-        resolution,
-        Diagnostics(),
-      ).steps.firstWhere((s) => s.kind == StepKind.tag);
+      final tag = _derive(unit, resolution).tag!;
 
       final state = await inspector.inspect(tag, unit);
       expect(
@@ -409,12 +392,11 @@ void targetReads() {
       );
       final resolution = await _binaryResolution();
       final unit = resolution.unit('cli')!;
-      final checklist = Checklist.derive(unit, resolution, Diagnostics());
-      final targets = TargetCatalog.builtIn().derive(
+      final targets = _derive(
         unit,
-        checklist,
+        resolution,
         repository: 'example/tool',
-      );
+      ).targets;
       // The unit is 1.0.0, so a v2.0.0 tag is a namespace already ahead.
       return _history(
         inspector,
@@ -441,18 +423,12 @@ void targetReads() {
   });
 
   group('release monotonicity reads complete public histories', () {
-    Future<({ResolvedUnit unit, List<TargetPlan> targets})>
-    releaseTargets() async {
+    Future<({ResolvedUnit unit, List<Target> targets})> releaseTargets() async {
       final resolution = await _binaryResolution();
       final unit = resolution.unit('cli')!;
-      final checklist = Checklist.derive(unit, resolution, Diagnostics());
       return (
         unit: unit,
-        targets: TargetCatalog.builtIn().derive(
-          unit,
-          checklist,
-          repository: 'example/tool',
-        ),
+        targets: _derive(unit, resolution, repository: 'example/tool').targets,
       );
     }
 
@@ -528,17 +504,11 @@ void targetReads() {
         tools: RecordingTools(answers: answers),
         repository: 'example/tool',
       );
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!;
       return inspector.inspect(
-        Step(
-          id: 'cli/homebrew/example_tool/example-tool',
-          unit: 'cli',
-          project: 'example_tool',
-          kind: StepKind.publishHomebrew,
-          target: PublishTarget.homebrew,
-          summary: 'update the formula',
-          needs: const [],
-        ),
-        (await _binaryUnit()),
+        _derive(unit, resolution, repository: 'example/tool').homebrew!,
+        unit,
       );
     }
 
@@ -614,7 +584,7 @@ void targetReads() {
   test('the expected asset set is derived, and derives everything', () async {
     final unit = await _binaryUnit();
     expect(
-      Inspector.expectedAssets(unit),
+      ReleaseAssets.expectedForUnit(unit),
       {
         'example-tool-1.0.0-linux-x64.tar.gz',
         'example-tool-1.0.0-macos-arm64.tar.gz',
@@ -637,7 +607,7 @@ Future<ResolvedUnit> _binaryUnit() async =>
 Future<List<Diagnostic>> _history(
   Inspector inspector,
   ResolvedUnit unit,
-  Iterable<TargetPlan> targets,
+  Iterable<Target> targets,
 ) async {
   final listed = targets.toList();
   final read = await Future.wait([
@@ -671,15 +641,16 @@ class _LatestInspector extends Inspector {
 
   @override
   Future<TargetHistory?> inspectHistory(
-    TargetPlan target,
+    Target target,
     ResolvedUnit unit,
   ) async {
-    if (target.kind == 'homebrew') return null;
-    final inspection = answers[target.kind] ?? const Inspection.absent();
+    final kind = target.target.wireName;
+    if (kind == 'homebrew') return null;
+    final inspection = answers[kind] ?? const Inspection.absent();
     return TargetHistory.versioned(
       inspection: inspection,
       target: target,
-      regressionDiagnostic: target.kind == 'pubDev'
+      regressionDiagnostic: kind == 'pubDev'
           ? (publicVersion) => Diagnostic(
               code: 'RK-MONO-002',
               message:
@@ -785,11 +756,7 @@ publish = ["git-tag", "pub.dev"]
       diagnostics,
     )!;
     final unit = resolution.unit('core')!;
-    final step = Checklist.derive(
-      unit,
-      resolution,
-      Diagnostics(),
-    ).steps.firstWhere((s) => s.kind == StepKind.tag);
+    final step = _derive(unit, resolution).tag!;
 
     return Inspector(
       registry: FakeRegistry({}),
@@ -960,3 +927,15 @@ publish = ["git-tag", "pub.dev"]
     expect(state.detail, contains('lightweight release tag'));
   });
 }
+
+/// [unit]'s release, as every command derives it.
+UnitRelease _derive(
+  ResolvedUnit unit,
+  Resolution resolution, {
+  String? repository,
+}) => UnitRelease.derive(
+  unit,
+  resolution,
+  repository: repository,
+  problems: Diagnostics(),
+);

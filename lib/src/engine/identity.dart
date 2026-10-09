@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'stage_archive.dart';
-
+import '../transforms/archive.dart';
 import '../transforms/macos.dart';
 import 'tools.dart';
 import 'version.dart';
@@ -198,9 +197,7 @@ class PublishedIdentity {
     final archive = '$into/$assetName';
     Directory? extracted;
     try {
-      final contents = StageArchiveInventory.decode(
-        File(archive).readAsBytesSync(),
-      );
+      final contents = ArchiveReader.decode(File(archive).readAsBytesSync());
       if (contents.artifact.entryPoint != executable) {
         return const IdentityReading.unreadable(
           'the published archive names a different executable',

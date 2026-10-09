@@ -4,13 +4,13 @@ import 'bundle_tools.dart';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/binary_chain.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/workspace.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
@@ -77,8 +77,13 @@ executables:
 
   final unit = resolution.unit('cli')!;
   final project = unit.projects.single;
-  final steps = Checklist.derive(unit, resolution, Diagnostics()).steps;
-  Step step(StepKind kind) => steps.firstWhere((s) => s.kind == kind);
+  final work = UnitRelease.derive(
+    unit,
+    resolution,
+    repository: null,
+    problems: Diagnostics(),
+  ).work;
+  Work step(StepKind kind) => work.firstWhere((w) => w.kind == kind);
 
   /// A fresh chain per call — deliberately. Sharing one would let state ride
   /// along in memory, which is exactly what must be impossible.

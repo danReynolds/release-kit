@@ -5,12 +5,12 @@ import '../../builds/binary_artifact.dart';
 import '../../engine/assets.dart';
 import '../../engine/git.dart';
 import '../../engine/release_manifest.dart';
-import '../../engine/stage_archive.dart';
 import '../../engine/tools.dart';
 import '../../engine/version.dart';
 import '../../installations/model.dart';
 import '../../installations/provider.dart';
 import '../../installations/store.dart';
+import '../../transforms/archive.dart';
 import '../../transforms/digest.dart';
 
 /// Public release assets, verified against RK's release manifest before use.
@@ -252,7 +252,7 @@ Future<InstallationArchive> decodeInstallationArchive(
 ) async {
   final tar = gzip.decode(compressed);
   try {
-    final decoded = StageArchiveInventory.decodeTar(tar);
+    final decoded = ArchiveReader.decodeTar(tar);
     if (decoded.artifact.entryPoint != command) {
       throw const FormatException('The archive exports a different command.');
     }

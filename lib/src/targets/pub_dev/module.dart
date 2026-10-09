@@ -1,11 +1,10 @@
 import 'dart:io';
 
-import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
-import '../../engine/targets.dart';
 import '../../engine/tools.dart';
+import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
@@ -28,41 +27,13 @@ final class PubDevTargetModule extends TargetModule {
   @override
   TargetSessionProvider get authentication => PubDevSession(endpoint: endpoint);
 
-  @override
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
-  }) {
-    final project = unit.projects.firstWhere(
-      (project) => project.name == step.project,
-    );
-    return TargetPlan(
-      label: 'pub.dev · ${project.name}',
-      kindLabel: 'pub.dev',
-      identity: project.name,
-      planNote: '${project.name} ${project.version.canonical}',
-      coordinate: project.name,
-      targetVersion: project.version.canonical,
-      step: step,
-      project: project,
-      packageProducer: 'pub-archive:${project.name}',
-      permanenceNotice:
-          'pub.dev never deletes a version. a version can be retracted, '
-          'which hides it and removes nothing.',
-      // pub publishes the staged archive under its own name. There is no
-      // honest public archive filename to invent for this row.
-      artifacts: const [],
-    );
-  }
-
   /// A version on pub.dev is published: what is there is what its consumers
   /// get, whatever bytes a stage holds now.
   @override
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
   ) => _inspect(context, unit, target, againstStage: false);
 
   /// After rk's own upload, the archive pub.dev reports must be the one it
@@ -70,7 +41,7 @@ final class PubDevTargetModule extends TargetModule {
   Future<Inspection> _inspect(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target, {
+    Target target, {
     required bool againstStage,
   }) {
     final reader = context.registry;
@@ -113,7 +84,7 @@ final class PubDevTargetModule extends TargetModule {
   Future<TargetHistory> inspectHistory(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
   ) async {
     final reader = context.registry;
     if (reader == null) {
@@ -217,7 +188,7 @@ final class PubDevTargetModule extends TargetModule {
   @override
   Diagnostic diagnoseConflict(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection conflict,
   ) => Diagnostic(
     code: 'RK-REL-001',
@@ -264,7 +235,7 @@ final class PubDevTargetModule extends TargetModule {
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection inspected,
   ) async {
     final project = target.project!;
@@ -336,7 +307,7 @@ final class PubDevTargetModule extends TargetModule {
   Future<Inspection> confirmPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     TargetActOutcome act,
   ) async {
     // pub.dev can take minutes to list an upload it accepted. One it refused,
@@ -378,7 +349,7 @@ final class PubDevTargetModule extends TargetModule {
   @override
   ({String code, String message, String? next}) nameUnconfirmed(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection state,
     TargetActOutcome act,
   ) => state.verdict == Verdict.conflict
@@ -398,10 +369,8 @@ final class PubDevTargetModule extends TargetModule {
         );
 
   @override
-  TargetStage stageInput({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-  }) => pubDevPackageStage(target: target, unit: unit);
+  Future<TargetStageOutcome> prepare(TargetStageContext context, Work work) =>
+      preparePubArchive(context, work);
 }
 
 String? _repositoryIdentity(String? value) {

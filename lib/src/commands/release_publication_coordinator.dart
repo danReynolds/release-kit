@@ -1,5 +1,4 @@
 import '../engine/canonical_json.dart';
-import '../engine/checklist.dart';
 import '../engine/dependency_graph.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
@@ -7,8 +6,8 @@ import '../engine/inspect.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/targets.dart';
 import '../engine/tools.dart';
+import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
@@ -31,25 +30,19 @@ enum ReleaseAction {
 /// Everything public publication receives after private preparation settles.
 final class PublicationPlan {
   PublicationPlan({
-    required this.unit,
-    required Iterable<Step> steps,
-    required Iterable<Step> publicSteps,
-    required Iterable<TargetPlan> targets,
+    required this.release,
     required Map<String, Inspection> states,
     required Map<String, ReleaseAction> actions,
     required this.prepared,
     required this.stage,
     required this.recoversWithoutStage,
-  }) : steps = List.unmodifiable(steps),
-       publicSteps = List.unmodifiable(publicSteps),
-       targets = List.unmodifiable(targets),
-       states = Map.of(states),
+  }) : states = Map.of(states),
        actions = Map.of(actions);
 
-  final ResolvedUnit unit;
-  final List<Step> steps;
-  final List<Step> publicSteps;
-  final List<TargetPlan> targets;
+  final UnitRelease release;
+  ResolvedUnit get unit => release.unit;
+  late final List<Step> steps = release.steps.toList();
+  List<Target> get targets => release.targets;
   final Map<String, Inspection> states;
   final Map<String, ReleaseAction> actions;
   final PreparedRelease prepared;
@@ -58,9 +51,9 @@ final class PublicationPlan {
 
   /// The targets this release still publishes: those the snapshot taken
   /// before staging did not find exact.
-  List<TargetPlan> get remaining => [
+  List<Target> get remaining => [
     for (final target in targets)
-      if (!states[target.step.id]!.isExact) target,
+      if (!states[target.id]!.isExact) target,
   ];
 }
 
@@ -105,11 +98,11 @@ final class ReleasePublicationCoordinator {
   /// private work is spent on it.
   Future<bool> checkReadiness({
     required ResolvedUnit unit,
-    required List<TargetPlan> targets,
+    required List<Target> targets,
     required Map<String, Inspection> states,
   }) async {
     final outstanding = targets
-        .where((target) => !states[target.step.id]!.isExact)
+        .where((target) => !states[target.id]!.isExact)
         .toList();
     if (outstanding.isEmpty) return true;
     final progress = TargetReleaseProgress(
@@ -123,7 +116,7 @@ final class ReleasePublicationCoordinator {
       final grouped = outstanding
           .where((item) => item.target == targetKind)
           .toList();
-      final module = inspector.targets.moduleForTarget(grouped.first);
+      final module = inspector.targets.moduleFor(targetKind);
       for (final target in grouped) {
         progress.begin(target, CommonProgressActivities.checking);
       }
@@ -154,14 +147,11 @@ final class ReleasePublicationCoordinator {
     return true;
   }
 
-  void showActions(
-    List<TargetPlan> targets,
-    Map<String, ReleaseAction> actions,
-  ) {
+  void showActions(List<Target> targets, Map<String, ReleaseAction> actions) {
     output.blank();
     output.heading('Release targets');
     for (final target in targets) {
-      final action = actions[target.step.id] ?? ReleaseAction.notAttempted;
+      final action = actions[target.id] ?? ReleaseAction.notAttempted;
       final mark = switch (action) {
         ReleaseAction.completed => Mark.done,
         ReleaseAction.alreadyPublished => Mark.satisfied,
@@ -185,13 +175,8 @@ final class ReleasePublicationCoordinator {
   }
 
   /// Stops before anything acts on [step], whose snapshot read refuses it.
-  void haltForState(
-    ResolvedUnit unit,
-    Step step,
-    Inspection state, {
-    TargetPlan? target,
-  }) {
-    final refusal = _refusal(step, target, unit, state, acted: false);
+  void haltForState(ResolvedUnit unit, Step step, Inspection state) {
+    final refusal = _refusal(step, unit, state, acted: false);
     output.problem(refusal.diagnostics.single, unit: unit.name);
     output.halt(refusal.halt);
   }
@@ -270,7 +255,7 @@ final class ReleasePublicationCoordinator {
     }
     _authorized = {
       for (final plan in asking)
-        plan.unit.name: {for (final target in plan.remaining) target.step.id},
+        plan.unit.name: {for (final target in plan.remaining) target.id},
     };
     output.blank();
     return true;
@@ -287,9 +272,8 @@ final class ReleasePublicationCoordinator {
     final targets = plan.targets;
     final publicActions = plan.actions;
     final accepted = authorized[unit.name] ?? const <String>{};
-    final targetByStep = {for (final target in targets) target.step.id: target};
     if (accepted.isEmpty) {
-      if (plan.publicSteps.isNotEmpty) {
+      if (targets.isNotEmpty) {
         output.line(
           '${unit.name} ${unit.version}',
           mark: Mark.satisfied,
@@ -300,7 +284,7 @@ final class ReleasePublicationCoordinator {
     }
     final publishing = [
       for (final target in targets)
-        if (accepted.contains(target.step.id)) target,
+        if (accepted.contains(target.id)) target,
     ];
     if (!await _acquireSessions(unit, publishing)) {
       showActions(targets, publicActions);
@@ -312,7 +296,7 @@ final class ReleasePublicationCoordinator {
       targets: targets,
     );
     for (final target in targets.where(
-      (target) => !accepted.contains(target.step.id),
+      (target) => !accepted.contains(target.id),
     )) {
       releaseProgress.complete(
         target,
@@ -324,7 +308,7 @@ final class ReleasePublicationCoordinator {
     final graph = DependencyGraph<Step>(
       plan.steps,
       idOf: (step) => step.id,
-      dependenciesOf: (step) => step.needs,
+      dependenciesOf: (step) => [for (final need in step.needs) need.id],
     );
     final completed = <String>{
       for (final step in plan.steps)
@@ -340,11 +324,9 @@ final class ReleasePublicationCoordinator {
           completed: completed,
           active: active.keys.toSet(),
         );
-        for (final step in ready.where((step) => step.isPublic)) {
-          final target = targetByStep[step.id]!;
+        for (final target in ready.whereType<Target>()) {
           if (!activeTargets.add(target.target)) continue;
-          active[step.id] = _publishPublicTarget(
-            step: step,
+          active[target.id] = _publishPublicTarget(
             target: target,
             unit: unit,
             publicActions: publicActions,
@@ -361,26 +343,25 @@ final class ReleasePublicationCoordinator {
         active: active.keys.toSet(),
         activeTargets: activeTargets,
         authorizedStepIds: accepted,
-        targetByStep: targetByStep,
         progress: releaseProgress,
       );
 
       if (active.isEmpty) {
         if (failures.isNotEmpty) break;
-        final unresolved = plan.publicSteps
-            .where((step) => !completed.contains(step.id))
-            .map((step) => step.id)
+        final unresolved = targets
+            .where((target) => !completed.contains(target.id))
+            .map((target) => target.id)
             .join(', ');
         throw StateError('publication graph made no progress: $unresolved');
       }
 
       final completion = await Future.any(active.values);
-      active.remove(completion.step.id);
-      activeTargets.remove(completion.step.target);
+      active.remove(completion.target.id);
+      activeTargets.remove(completion.target.target);
       if (completion.failure case final failure?) {
         failures.add(failure);
       } else {
-        completed.add(completion.step.id);
+        completed.add(completion.target.id);
       }
     }
 
@@ -400,11 +381,13 @@ final class ReleasePublicationCoordinator {
   /// first act that needs it.
   Future<bool> _acquireSessions(
     ResolvedUnit unit,
-    List<TargetPlan> publishing,
+    List<Target> publishing,
   ) async {
-    final byProvider = <String, (TargetSessionProvider, List<TargetPlan>)>{};
+    final byProvider = <String, (TargetSessionProvider, List<Target>)>{};
     for (final target in publishing) {
-      final provider = inspector.targets.moduleForTarget(target).authentication;
+      final provider = inspector.targets
+          .moduleFor(target.target)
+          .authentication;
       if (provider == null || _sessions.contains(provider.id)) continue;
       final (_, grouped) = byProvider[provider.id] ??= (provider, []);
       grouped.add(target);
@@ -458,22 +441,19 @@ final class ReleasePublicationCoordinator {
     required Set<String> active,
     required Set<PublishTarget> activeTargets,
     required Set<String> authorizedStepIds,
-    required Map<String, TargetPlan> targetByStep,
     required TargetReleaseProgress progress,
   }) {
-    for (final step in graph.values.where(
-      (step) =>
-          step.isPublic &&
-          authorizedStepIds.contains(step.id) &&
-          !completed.contains(step.id) &&
-          !active.contains(step.id),
+    for (final target in graph.values.whereType<Target>().where(
+      (target) =>
+          authorizedStepIds.contains(target.id) &&
+          !completed.contains(target.id) &&
+          !active.contains(target.id),
     )) {
-      final target = targetByStep[step.id]!;
       final blockers = graph
-          .unmet(step, completed)
+          .unmet(target, completed)
           .map((id) => graph[id])
-          .where((dependency) => dependency.isPublic)
-          .map((dependency) => targetByStep[dependency.id]!.label)
+          .whereType<Target>()
+          .map((dependency) => dependency.label)
           .toSet();
       final note = blockers.isNotEmpty
           ? 'waiting for ${blockers.join(', ')}'
@@ -486,42 +466,35 @@ final class ReleasePublicationCoordinator {
   }
 
   Future<_PublicTargetCompletion> _publishPublicTarget({
-    required Step step,
-    required TargetPlan target,
+    required Target target,
     required ResolvedUnit unit,
     required Map<String, ReleaseAction> publicActions,
     required TargetReleaseProgress releaseProgress,
     required ReleaseStage stage,
     required bool recoversWithoutStage,
   }) async {
-    final module = inspector.targets.moduleForTarget(target);
+    final module = inspector.targets.moduleFor(target.target);
     releaseProgress.begin(target, CommonProgressActivities.checking);
     // The target is read again right before its act: another run or person
     // may have published it since the snapshot.
-    var state = await inspector.inspect(step, unit);
+    var state = await inspector.inspect(target, unit);
     output.step(
-      step,
+      target,
       verdict: state.verdict,
       detail: state.detail,
       evidence: state.evidence,
-      action: publicActions[step.id]!.wire,
+      action: publicActions[target.id]!.wire,
       show: false,
     );
     if (state.isExact) {
-      _completeExistingTarget(
-        step,
-        target,
-        state,
-        publicActions,
-        releaseProgress,
-      );
-      return _PublicTargetCompletion.completed(step);
+      _completeExistingTarget(target, state, publicActions, releaseProgress);
+      return _PublicTargetCompletion.completed(target);
     }
     if (!state.isAbsent) {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
-        step,
-        _refusal(step, target, unit, state, acted: output.report.actedPublicly),
+        target,
+        _refusal(target, unit, state, acted: output.report.actedPublicly),
       );
     }
     final halt = output.report.actedPublicly
@@ -530,14 +503,14 @@ final class ReleasePublicationCoordinator {
     if (recoversWithoutStage && !module.recoversWithoutStage(state)) {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
-        step,
+        target,
         _PublicationFailure(
-          step: step,
+          step: target,
           diagnostics: [
             Diagnostic(
               code: 'RK-STAGE-005',
               message:
-                  '${step.summary} can no longer recover without its '
+                  '${target.summary} can no longer recover without its '
                   'stage',
               remedy:
                   'its public inputs changed. Re-run so rk can inspect the '
@@ -559,15 +532,15 @@ final class ReleasePublicationCoordinator {
           activity: CommonProgressActivities.checking,
         );
         return _PublicTargetCompletion.failed(
-          step,
+          target,
           _PublicationFailure(
-            step: step,
+            step: target,
             diagnostics: [
               Diagnostic(
                 code: 'RK-STAGE-002',
                 message:
                     'the reviewed release stage changed before '
-                    '${step.summary}',
+                    '${target.summary}',
                 remedy:
                     '${inspected.issues.join('\n')}\n'
                     'rebuild it explicitly: rk stage ${unit.name}',
@@ -623,15 +596,15 @@ final class ReleasePublicationCoordinator {
         '${target.kindLabel} verification threw: $error',
       );
     }
-    publicActions[step.id] = state.isExact
+    publicActions[target.id] = state.isExact
         ? ReleaseAction.completed
         : ReleaseAction.failed;
     output.step(
-      step,
+      target,
       verdict: state.verdict,
       detail: state.detail,
       evidence: state.evidence,
-      action: publicActions[step.id]!.wire,
+      action: publicActions[target.id]!.wire,
       show: false,
     );
     if (!act.ok && state.isExact) {
@@ -641,7 +614,7 @@ final class ReleasePublicationCoordinator {
       final note =
           '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
       releaseProgress.complete(target, note: note);
-      return _PublicTargetCompletion.completed(step);
+      return _PublicTargetCompletion.completed(target);
     }
     if (!act.ok || !state.isExact) {
       releaseProgress.fail(
@@ -664,8 +637,8 @@ final class ReleasePublicationCoordinator {
         actedBefore: actedBefore,
       );
       return _PublicTargetCompletion.failed(
-        step,
-        _PublicationFailure.fromTarget(step, failure),
+        target,
+        _PublicationFailure.fromTarget(target, failure),
       );
     }
 
@@ -674,24 +647,23 @@ final class ReleasePublicationCoordinator {
       if (act.includeInspectionDetail) ?state.detail,
     ].join(' · ');
     releaseProgress.complete(target, note: note.isEmpty ? 'published' : note);
-    return _PublicTargetCompletion.completed(step);
+    return _PublicTargetCompletion.completed(target);
   }
 
   void _completeExistingTarget(
-    Step step,
-    TargetPlan target,
+    Target target,
     Inspection state,
     Map<String, ReleaseAction> actions,
     TargetReleaseProgress progress,
   ) {
-    actions[step.id] = ReleaseAction.alreadyPublished;
+    actions[target.id] = ReleaseAction.alreadyPublished;
     progress.complete(target, note: 'already published', satisfied: true);
     output.step(
-      step,
+      target,
       mark: Mark.satisfied,
       verdict: state.verdict,
       note: state.detail ?? 'already done',
-      action: actions[step.id]!.wire,
+      action: actions[target.id]!.wire,
       show: false,
     );
   }
@@ -701,7 +673,6 @@ final class ReleasePublicationCoordinator {
   /// read. [acted] is whether this run has already changed something public.
   _PublicationFailure _refusal(
     Step step,
-    TargetPlan? target,
     ResolvedUnit unit,
     Inspection state, {
     required bool acted,
@@ -710,10 +681,10 @@ final class ReleasePublicationCoordinator {
     return _PublicationFailure(
       step: step,
       diagnostics: [
-        if (conflict && target != null)
+        if (conflict && step is Target)
           inspector.targets
-              .moduleForTarget(target)
-              .diagnoseConflict(unit, target, state)
+              .moduleFor(step.target)
+              .diagnoseConflict(unit, step, state)
         else
           Diagnostic(
             code: 'RK-REL-001',
@@ -767,7 +738,7 @@ final class ReleasePublicationCoordinator {
 
   /// A row for each of [remaining], saying which are permanent and which
   /// claim a name for the first time.
-  void showTargets(List<TargetPlan> remaining, List<TargetClaim> claims) {
+  void showTargets(List<Target> remaining, List<TargetClaim> claims) {
     // Grouped by destination, the way status and staging read. What is
     // permanent is said on the row it belongs to: a paragraph explaining
     // that publishing is forever tells an operator what they already know,
@@ -787,15 +758,15 @@ final class ReleasePublicationCoordinator {
   }
 
   /// What [target]'s row says: what arrives there, and its marks.
-  String targetNote(TargetPlan target, List<TargetClaim> claims) =>
+  String targetNote(Target target, List<TargetClaim> claims) =>
       [target.planNote, ..._marks(target, claims)].join(' · ');
 
   // Keyed by what is claimed, not by where: a unit publishing several
   // packages to pub.dev has one row each, and marking them all because one
   // name is new would tell the operator they are permanently taking names
   // that were taken releases ago.
-  static List<String> _marks(TargetPlan target, List<TargetClaim> claims) => [
-    if (target.step.isPermanent) 'permanent',
+  static List<String> _marks(Target target, List<TargetClaim> claims) => [
+    if (target.isPermanent) 'permanent',
     if (claims.any(
       (claim) =>
           claim.registrar == target.kindLabel &&
@@ -810,14 +781,14 @@ final class ReleasePublicationCoordinator {
   /// [firstStep] says which permanent step is the first a yes lets happen,
   /// which only the question itself knows when it covers several units.
   List<String> disclosureFor(
-    List<TargetPlan> remaining,
+    List<Target> remaining,
     List<TargetClaim> claims, {
     ReleaseSigningContext? firstSigning,
     bool firstStep = true,
   }) {
     final permanent = [
       for (final target in remaining)
-        if (target.step.isPermanent) target,
+        if (target.isPermanent) target,
     ];
     final notices = {
       for (final target in permanent)
@@ -829,7 +800,7 @@ final class ReleasePublicationCoordinator {
           ...notices,
           if (firstStep)
             'everything before this yes re-runs safely. after it, the first '
-                'permanent step is: ${permanent.first.step.summary}.',
+                'permanent step is: ${permanent.first.summary}.',
         ].join('\n'),
       ..._recordClaims(claims, firstSigning),
     ];
@@ -837,7 +808,7 @@ final class ReleasePublicationCoordinator {
 
   void _showAuthorization(
     ResolvedUnit unit,
-    List<TargetPlan> remaining, {
+    List<Target> remaining, {
     required ReleaseStage stage,
     required ReleaseSigningContext? signing,
     required List<TargetClaim> claims,
@@ -960,11 +931,11 @@ final class ReleasePublicationCoordinator {
 }
 
 final class _PublicTargetCompletion {
-  const _PublicTargetCompletion.completed(this.step) : failure = null;
+  const _PublicTargetCompletion.completed(this.target) : failure = null;
 
-  const _PublicTargetCompletion.failed(this.step, this.failure);
+  const _PublicTargetCompletion.failed(this.target, this.failure);
 
-  final Step step;
+  final Target target;
   final _PublicationFailure? failure;
 }
 

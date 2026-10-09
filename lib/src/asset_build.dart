@@ -3,10 +3,10 @@ import 'dart:io';
 
 import 'binary_chain.dart';
 import 'engine/assets.dart';
-import 'engine/checklist.dart';
 import 'engine/diagnostic.dart';
 import 'engine/resolve.dart';
 import 'engine/tools.dart';
+import 'engine/unit_release.dart';
 import 'engine/workspace.dart';
 import 'output/output.dart';
 import 'output/progress.dart';
@@ -54,7 +54,7 @@ final class AssetBuild {
   /// carries the facts a build may need about the release it is part of.
   /// While it runs, the first of [progress]'s rows shows its latest line.
   Future<LocalProducerOutcome> build(
-    Step step,
+    Work step,
     ResolvedProject project, {
     Map<String, String> environment = const {},
     ProgressHandle? progress,

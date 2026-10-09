@@ -1,7 +1,6 @@
-import '../engine/stage_board.dart';
 import '../engine/stage_receipt.dart';
-import '../engine/targets.dart';
 import '../engine/tools.dart';
+import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
@@ -15,7 +14,7 @@ final class TargetReleaseProgress {
   TargetReleaseProgress(
     Output output, {
     required String title,
-    required Iterable<TargetPlan> targets,
+    required Iterable<Target> targets,
     Duration delay = const Duration(milliseconds: 80),
   }) : _output = output,
        live = output.progressBoard(
@@ -24,8 +23,8 @@ final class TargetReleaseProgress {
          emitSlowToNonTerminal: true,
        ) {
     for (final target in targets) {
-      _controllers[target.step.id] = live.addRow(
-        id: target.step.id,
+      _controllers[target.id] = live.addRow(
+        id: target.id,
         label: target.kindLabel,
         coordinate: target.coordinate,
       );
@@ -36,28 +35,27 @@ final class TargetReleaseProgress {
   final LiveProgress live;
   final Map<String, ProgressRowController> _controllers = {};
 
-  ProgressRowController _row(TargetPlan target) =>
-      _controllers[target.step.id]!;
+  ProgressRowController _row(Target target) => _controllers[target.id]!;
 
-  ProgressHandle handle(TargetPlan target) => _row(target).handle;
+  ProgressHandle handle(Target target) => _row(target).handle;
 
-  ProgressHandle combined(Iterable<TargetPlan> targets) =>
+  ProgressHandle combined(Iterable<Target> targets) =>
       ProgressHandle.combine(targets.map(handle));
 
-  void waiting(TargetPlan target, {required String note}) {
+  void waiting(Target target, {required String note}) {
     final row = _row(target);
     if (row.state != ProgressRowState.pending) return;
     row.wait(note: note);
   }
 
-  void begin(TargetPlan target, ProgressActivity activity, {String? detail}) {
+  void begin(Target target, ProgressActivity activity, {String? detail}) {
     final row = _row(target);
     if (row.state == ProgressRowState.complete) return;
     row.handle.begin(activity, detail: detail);
   }
 
   void complete(
-    TargetPlan target, {
+    Target target, {
     required String note,
     bool satisfied = false,
     bool restore = false,
@@ -72,7 +70,7 @@ final class TargetReleaseProgress {
     }
   }
 
-  void observe(TargetPlan target, Inspection inspection) {
+  void observe(Target target, Inspection inspection) {
     final row = _row(target);
     if (row.state != ProgressRowState.active) return;
     if (inspection.isExact) {
@@ -90,17 +88,14 @@ final class TargetReleaseProgress {
     }
   }
 
-  void fail(TargetPlan target, {ProgressActivity? activity, String? note}) {
+  void fail(Target target, {ProgressActivity? activity, String? note}) {
     final row = _row(target);
     if (row.state == ProgressRowState.active) {
       row.fail(activity: activity, note: note);
     }
   }
 
-  void failAll(
-    Iterable<TargetPlan> targets, {
-    required ProgressActivity activity,
-  }) {
+  void failAll(Iterable<Target> targets, {required ProgressActivity activity}) {
     for (final target in targets) {
       fail(target, activity: activity);
     }
@@ -164,7 +159,7 @@ final class StageReleaseProgress {
   }
 
   void _addRows(String? unit) {
-    for (final group in board.groups) {
+    for (final group in board) {
       for (final row in group.rows) {
         _controllers[row] = live.addRow(
           id: row.id,
@@ -175,26 +170,29 @@ final class StageReleaseProgress {
     }
   }
 
-  final StageBoard board;
+  /// The rows this stage fills, by destination: see [UnitRelease.board].
+  final List<BoardGroup> board;
   final LiveProgress live;
   final bool _owned;
-  final Map<StageBoardRow, ProgressRowController> _controllers = {};
+  final Map<BoardRow, ProgressRowController> _controllers = {};
   final Map<String, StageStep> _recorded = {};
 
+  /// The rows [producer] fills, in board order. Work whose output reaches
+  /// no destination — the release notes — fills none, and says nothing.
+  List<BoardRow> _rowsFor(String producer) => [
+    for (final group in board)
+      for (final row in group.rows)
+        if (row.filledBy.any((work) => work.name == producer)) row,
+  ];
+
   ProgressHandle? handleFor(String producer) {
-    final rows = board.rowsFor(producer);
+    final rows = _rowsFor(producer);
     if (rows.isEmpty) return null;
     return ProgressHandle.combine(rows.map((row) => _controllers[row]!.handle));
   }
 
-  Map<String, ProgressHandle> handlesFor(TargetStage stage) => {
-    for (final view in stage.progress)
-      view.id: _controllers[board.progressRow(stage.contract.name, view.id)!]!
-          .handle,
-  };
-
   void begin(String producer, ProgressActivity activity) {
-    for (final row in board.rowsFor(producer)) {
+    for (final row in _rowsFor(producer)) {
       final controller = _controllers[row]!;
       if (controller.state == ProgressRowState.complete) continue;
       controller.handle.begin(activity);
@@ -207,9 +205,9 @@ final class StageReleaseProgress {
     for (final step in steps) {
       _recorded[step.name] = step;
     }
-    for (final group in board.groups) {
+    for (final group in board) {
       for (final row in group.rows) {
-        final expected = board.producersFor(row);
+        final expected = {for (final work in row.filledBy) work.name};
         if (expected.isEmpty || !expected.every(_recorded.containsKey)) {
           continue;
         }
@@ -249,7 +247,7 @@ final class StageReleaseProgress {
   }
 
   void fail(String producer) {
-    for (final row in board.rowsFor(producer)) {
+    for (final row in _rowsFor(producer)) {
       final controller = _controllers[row]!;
       if (controller.state == ProgressRowState.active) {
         controller.fail();
@@ -277,7 +275,7 @@ final class StageReleaseProgress {
   }
 
   void concludeStopped() {
-    for (final group in board.groups) {
+    for (final group in board) {
       for (final row in group.rows) {
         final controller = _controllers[row]!;
         if (controller.state == ProgressRowState.active) {

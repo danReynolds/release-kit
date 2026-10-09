@@ -7,7 +7,6 @@ import 'package:rk/src/builds/dart_cli.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/stage_archive.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
@@ -43,7 +42,7 @@ void main() {
     test(
       '${artifact.isBundle ? 'bundle' : 'single'} archive extracts its exact inventory',
       () {
-        final contents = StageArchiveInventory.decode(archive(artifact));
+        final contents = ArchiveReader.decode(archive(artifact));
         final root = Directory.systemTemp.createTempSync('rk-artifact-test-');
         addTearDown(() => root.deleteSync(recursive: true));
         contents.extractTo(root);
@@ -64,14 +63,13 @@ void main() {
   for (final file in bundle.files) {
     test('bundle rejects missing ${file.path}', () {
       expect(
-        () => StageArchiveInventory.decode(archive(bundle, omit: file.path)),
+        () => ArchiveReader.decode(archive(bundle, omit: file.path)),
         throwsFormatException,
       );
     });
     test('bundle rejects changed mode on ${file.path}', () {
       expect(
-        () =>
-            StageArchiveInventory.decode(archive(bundle, wrongMode: file.path)),
+        () => ArchiveReader.decode(archive(bundle, wrongMode: file.path)),
         throwsFormatException,
       );
     });
@@ -88,7 +86,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => StageArchiveInventory.decode(
+      () => ArchiveReader.decode(
         archive(
           bundle,
           extra: [

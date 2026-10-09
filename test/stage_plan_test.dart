@@ -7,7 +7,6 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/stage_plan.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 import 'support/memory_source_tree.dart';
 
@@ -80,7 +79,7 @@ executables:
   }) => ReleaseStages(
     source: MemorySourceTree(toolFiles),
     git: state,
-    stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
+    resolution: resolution,
     sdk: sdk,
   )(resolution.units.single).directory.identity.id;
 

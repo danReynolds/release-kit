@@ -2,7 +2,7 @@ import 'dart:io';
 
 import '../../engine/diagnostic.dart';
 import '../../engine/resolve.dart';
-import '../../engine/targets.dart';
+import '../../engine/unit_release.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'endpoint.dart';
@@ -23,7 +23,7 @@ final class PubDevSession extends TargetSessionProvider {
   Future<TargetReadinessOutcome> acquire(
     TargetReadinessContext context,
     ResolvedUnit unit,
-    List<TargetPlan> targets,
+    List<Target> targets,
   ) async {
     // An environment-backed token needs no second durable credential.
     if (await _tokenConfigured(context)) {

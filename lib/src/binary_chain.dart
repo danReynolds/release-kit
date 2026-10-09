@@ -3,19 +3,19 @@ import 'dart:io';
 import 'builds/capability.dart';
 import 'builds/dart_cli.dart';
 import 'engine/assets.dart';
-import 'engine/checklist.dart';
 import 'engine/diagnostic.dart';
 import 'output/output.dart';
 import 'output/progress.dart';
 import 'engine/resolve.dart';
 import 'engine/release_stage.dart';
 import 'engine/tools.dart';
+import 'engine/unit_release.dart';
 import 'engine/verdict.dart';
 import 'engine/workspace.dart';
 import 'transforms/archive.dart';
 import 'transforms/macos.dart';
 
-/// The local half of shipping binaries, one checklist step at a time.
+/// The local half of shipping binaries, one step at a time.
 ///
 /// It sits at the top of `lib/src` because it belongs to none of the
 /// directories below it. It is not a verb — no argument parsing, no exit
@@ -30,7 +30,7 @@ import 'transforms/macos.dart';
 ///
 /// This used to be one `produce()` that ran the whole chain inside the first
 /// build step and handed a `_produced` list to the steps after it — which
-/// made the checklist's ten steps a fiction: per-step verdicts were
+/// made the release's ten steps a fiction: per-step verdicts were
 /// invented, a mid-chain failure was reported against the wrong step, and
 /// CI could never split what one step secretly did. Now each step is its own
 /// act: it reads what it needs from the [Workspace] by name, does one thing,
@@ -70,7 +70,7 @@ class BinaryChain {
   /// transient unsigned intermediate every validator would have to know
   /// about. [signing] is present exactly when [step] is a macOS platform.
   Future<LocalProducerOutcome> buildStep(
-    Step step,
+    Work step,
     ResolvedProject project, {
     MacSigning? signing,
     ProgressHandle? progress,
@@ -164,7 +164,7 @@ class BinaryChain {
   /// anything acts: it is read off the published binary, or declared, or the
   /// release was refused (RK-SIGN-009).
   Future<LocalProducerOutcome> _sign(
-    Step step,
+    Work step,
     ResolvedProject project,
     Map<String, Object?> smoke,
     MacSigning signing,
@@ -346,7 +346,7 @@ class BinaryChain {
   // ---- notarize ----
 
   Future<LocalProducerOutcome> notarizeStep(
-    Step step,
+    Work step,
     ResolvedProject project,
   ) async {
     final platform = step.platform!;
@@ -428,7 +428,7 @@ class BinaryChain {
   // ---- archive ----
 
   Future<LocalProducerOutcome> archiveStep(
-    Step step,
+    Work step,
     ResolvedProject project,
   ) async {
     final platform = step.platform!;
@@ -475,7 +475,7 @@ class BinaryChain {
   }
 
   LocalProducerOutcome _missingArtifact(
-    Step step,
+    Work step,
     String name,
     String producedBy,
   ) {

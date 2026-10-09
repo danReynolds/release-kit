@@ -2,11 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/asset_build.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/workspace.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/progress.dart';
@@ -18,7 +18,7 @@ void main() {
   setUp(() => scratch = Directory.systemTemp.createTempSync('rk-asset-'));
   tearDown(() => scratch.deleteSync(recursive: true));
 
-  final unit = () {
+  final resolution = () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
@@ -41,10 +41,16 @@ assets = ["assets/parser.so", "parser.dylib"]
             '[package]\nname = "parser"\nversion = "0.1.0"\n',
       }),
       diagnostics,
-    )!.units.single;
+    )!;
   }();
+  final unit = resolution.units.single;
   final project = unit.projects.single;
-  final step = Checklist.localProducerSteps(unit).single;
+  final step = UnitRelease.derive(
+    unit,
+    resolution,
+    repository: null,
+    problems: Diagnostics(),
+  ).work.first;
   const key = 'native/parser/tool/build.sh';
 
   /// A build that answers [result], and writes [writes] into its output.

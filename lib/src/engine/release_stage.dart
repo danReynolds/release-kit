@@ -1,13 +1,12 @@
 import 'dart:io';
 
+import 'assets.dart';
 import 'canonical_json.dart';
-import 'release_asset.dart';
+import 'diagnostic.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
 import 'stage.dart';
 import 'stage_store.dart';
-import 'producers.dart';
-import 'stage_contract.dart';
 import 'stage_completion.dart';
 import 'stage_inspection.dart';
 import 'stage_plan.dart';
@@ -15,13 +14,14 @@ import 'stage_receipt.dart';
 import 'stage_source.dart';
 import 'git.dart';
 import 'timings.dart';
+import 'unit_release.dart';
 
 /// One shared, cached stage resolver for status and release composition.
 class ReleaseStages {
   ReleaseStages({
     required this.source,
     required this.git,
-    required this.stageContracts,
+    required this.resolution,
     String? repositoryRoot,
     DartSdk Function()? sdk,
   }) : repositoryRoot = repositoryRoot ?? git.root,
@@ -30,7 +30,7 @@ class ReleaseStages {
   final SourceTree source;
   final GitState git;
   final String repositoryRoot;
-  final StageContractResolver stageContracts;
+  final Resolution resolution;
   final DartSdk Function() _sdk;
   final Map<String, ReleaseStage> _stages = {};
 
@@ -46,7 +46,14 @@ class ReleaseStages {
       source: source,
       sdk: _sdk,
       repository: git.originUrl,
-      enforceUnitContract: true,
+      // The work a stage records depends on the unit alone: what the release
+      // cannot order is refused where it is released, not here.
+      release: UnitRelease.derive(
+        unit,
+        resolution,
+        repository: git.originUrl,
+        problems: Diagnostics(),
+      ),
       directory: StageDirectory(
         repositoryRoot: repositoryRoot,
         identity: StageIdentity.forPlan(
@@ -56,10 +63,6 @@ class ReleaseStages {
         ),
       ),
       resolvedPlan: plan,
-      targetContributions: stageContracts(
-        unit: unit,
-        repository: git.originUrl,
-      ),
     );
   }
 }
@@ -77,16 +80,12 @@ class ReleaseStage {
     required this.directory,
     DartSdk Function()? sdk,
     this.repository,
-    this.enforceUnitContract = false,
+    this.release,
     Map<String, Object?>? resolvedPlan,
-    Iterable<StageStepContract> targetContributions = const [],
   }) : _readSdk = sdk ?? DartSdk.ambient,
        resolvedPlan = resolvedPlan == null
            ? null
-           : CanonicalJson.normalize(resolvedPlan) as Map<String, Object?>,
-       targetContributions = List<StageStepContract>.unmodifiable(
-         targetContributions,
-       );
+           : CanonicalJson.normalize(resolvedPlan) as Map<String, Object?>;
 
   final ResolvedUnit unit;
   final SourceTree source;
@@ -101,57 +100,44 @@ class ReleaseStage {
   /// What the stage is built from beyond its commit, recorded in the
   /// receipt so a person can read it.
   final Map<String, Object?>? resolvedPlan;
-  final List<StageStepContract> targetContributions;
 
-  /// Direct construction is used by low-level receipt tests whose
-  /// deliberately partial producer graphs are not a release plan. Every
-  /// production resolver sets this, so status and release always check a
-  /// receipt against the producers this rk runs for the unit.
-  final bool enforceUnitContract;
+  /// The release this stage is built for. Every production resolver sets
+  /// it, so status and release always check a completed stage against what
+  /// this rk publishes for the unit. Null only in low-level receipt tests,
+  /// whose deliberately partial stages are not a release.
+  final UnitRelease? release;
 
-  /// The one receipt contract for this stage, shared by the receipt writer
-  /// and the inspector so canonical order and validation cannot drift.
-  /// Null exactly when [enforceUnitContract] is off: a deliberately partial
-  /// graph has no unit contract to order by or validate against.
-  late final StageProducerGraph? _unitContract = _resolveContract();
-
-  StageProducerGraph? _resolveContract() {
-    if (!enforceUnitContract) return null;
-    return StageProducerGraph.forUnit(
-      targetContributions: targetContributions,
-      localProducers: localProducerContracts(unit),
-    );
-  }
-
-  /// Canonical stage producer IDs and their resolved dependency edges.
+  /// What this stage is: its receipt, checked against the files it records.
   ///
-  /// Production stages always enforce a unit contract. Keeping this access on
-  /// the stage prevents the coordinator from rebuilding artifact ownership or
-  /// target-contribution dependencies a second time.
-  List<String> get producerNames => _unitContract?.producerNames ?? const [];
-
-  Set<String> producerDependencies(String producer) =>
-      _unitContract?.dependenciesOf(producer) ??
-      (throw StateError('this partial stage has no producer graph'));
-
-  StageStepContract producerContract(String producer) =>
-      _unitContract?.producerContract(producer) ??
-      (throw StateError('this partial stage has no producer contract'));
-
-  /// What this stage is: its receipt, checked against the files it records
-  /// and against the producers this rk runs for the unit.
+  /// A completed stage must also record every file the release publishes.
+  /// The stage is named by everything that decides its work, so this fails
+  /// only when an rk change forgot to bump the stage schema: it is what
+  /// keeps a stage from another rk from being published as this one's.
   StageInspection inspect() =>
       Timings.spanSync('inspect stage ${unit.name}', () {
         final inspected = const StageInspector().inspect(directory);
         final receipt = inspected.receipt;
-        final contract = _unitContract;
-        if (receipt == null || contract == null) return inspected;
-        final mismatched = contract.validateDeclarations(receipt);
-        return mismatched.isEmpty
+        final release = this.release;
+        if (receipt == null || release == null || !receipt.complete) {
+          return inspected;
+        }
+        final recorded = {
+          for (final artifact in receipt.artifacts) artifact.path,
+        };
+        final missing = [
+          for (final artifact in release.artifacts)
+            if (!recorded.contains(artifact.path))
+              StageIssue(
+                StageIssueKind.missingArtifact,
+                'missing from the completed stage',
+                path: artifact.path,
+              ),
+        ];
+        return missing.isEmpty
             ? inspected
             : StageInspection(
                 receipt: receipt,
-                issues: [...inspected.issues, ...mismatched],
+                issues: [...inspected.issues, ...missing],
               );
       });
 
@@ -265,7 +251,7 @@ class ReleaseStage {
   /// The manifest does not list itself, avoiding a self-digest cycle; the
   /// receipt records it like every other staged file.
   StageReceipt finalize({
-    required Iterable<ReleaseAssetSpec> releaseAssets,
+    required Iterable<ReleaseAsset> releaseAssets,
     Map<String, Object?> evidence = const {},
   }) {
     final inspected = inspect();
@@ -353,22 +339,21 @@ class ReleaseStage {
   /// only [finalize] completes it.
   ///
   /// Concurrent platform lanes complete in scheduling order; steps are
-  /// written in contract order so the receipt reads the same however the
-  /// work interleaved.
+  /// written in the release's work order so the receipt reads the same
+  /// however the work interleaved.
   void writeProgress(Iterable<StageStep> steps) {
-    if (enforceUnitContract && resolvedPlan == null) {
+    final release = this.release;
+    if (release != null && resolvedPlan == null) {
       throw StateError('production receipts require their frozen release plan');
     }
     if (steps.any((step) => step.name == 'complete-stage')) {
       throw StateError('only finalize may complete a stage');
     }
-    // Concurrent lanes complete in scheduling order; the record is
-    // canonical. A stage without a unit contract — a deliberately partial
-    // graph — keeps its given order, which is its own causal truth.
-    final contract = _unitContract;
-    final ordered = contract == null
+    // A stage without a release — a deliberately partial graph — keeps its
+    // given order, which is its own causal truth.
+    final ordered = release == null
         ? List<StageStep>.of(steps)
-        : _contractOrdered(steps, contract.producerNames);
+        : _contractOrdered(steps, [for (final work in release.work) work.name]);
     StageReceiptStore(directory).write(
       StageReceipt(
         identity: directory.identity,
@@ -378,8 +363,8 @@ class ReleaseStage {
     );
   }
 
-  /// Steps in contract order; names outside the contract keep their given
-  /// order, after the known ones. Stable via the given index.
+  /// Steps in work order; names outside it keep their given order, after
+  /// the known ones. Stable via the given index.
   static List<StageStep> _contractOrdered(
     Iterable<StageStep> steps,
     List<String> canonical,

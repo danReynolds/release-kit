@@ -1,13 +1,11 @@
 import 'dart:io';
 
-import '../../engine/assets.dart';
-import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/release_bundle.dart';
 import '../../engine/resolve.dart';
-import '../../engine/targets.dart';
 import '../../engine/tools.dart';
+import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
@@ -34,39 +32,10 @@ final class GithubReleaseTargetModule extends TargetModule {
   ) async => const TargetReady();
 
   @override
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
-  }) {
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
-    final artifacts = ReleaseAssets.expectedForUnit(unit).toList()..sort();
-    final coordinate = repository == null
-        ? tag
-        : '$repository/releases/tag/$tag';
-    return TargetPlan(
-      label: repository == null
-          ? 'GitHub Release'
-          : 'GitHub Release · $repository',
-      kindLabel: 'GitHub Release',
-      // Without an origin there is no repository to name, and echoing the
-      // tag here would print the Git tag row's identity twice.
-      identity: repository ?? 'no origin remote',
-      planNote:
-          '${artifacts.length} asset${artifacts.length == 1 ? '' : 's'} '
-          'to $coordinate',
-      coordinate: coordinate,
-      targetVersion: unit.version.canonical,
-      step: step,
-      artifacts: artifacts,
-    );
-  }
-
-  @override
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
   ) async {
     final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
     final tools = context.tools;
@@ -112,7 +81,7 @@ final class GithubReleaseTargetModule extends TargetModule {
   @override
   Diagnostic diagnoseConflict(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection conflict,
   ) => Diagnostic(
     code: 'RK-REL-001',
@@ -129,7 +98,7 @@ final class GithubReleaseTargetModule extends TargetModule {
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection inspected,
   ) async {
     final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
@@ -237,10 +206,8 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   @override
-  TargetStage stageInput({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-  }) => githubReleaseNotesStage(unit: unit, target: target);
+  Future<TargetStageOutcome> prepare(TargetStageContext context, Work work) =>
+      prepareReleaseNotes(context, work);
 }
 
 final class _GithubSession extends TargetSessionProvider {
@@ -256,7 +223,7 @@ final class _GithubSession extends TargetSessionProvider {
   Future<TargetReadinessOutcome> acquire(
     TargetReadinessContext context,
     ResolvedUnit unit,
-    List<TargetPlan> targets,
+    List<Target> targets,
   ) async {
     ToolResult status;
     try {

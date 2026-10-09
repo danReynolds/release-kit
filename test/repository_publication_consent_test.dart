@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:rk/src/commands/release_preparation.dart';
 import 'package:rk/src/commands/release_publication_coordinator.dart';
 import 'package:rk/src/engine/assets.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
@@ -15,8 +14,8 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
@@ -83,7 +82,7 @@ void main() {
       ]);
       final beta = f.plans.last;
       expect(
-        beta.actions[beta.publicSteps.single.id],
+        beta.actions[beta.targets.single.id],
         ReleaseAction.alreadyPublished,
       );
     },
@@ -140,11 +139,10 @@ final class _Fixture {
   String? answer = 'yes';
   late final output = Output(sink: text.write, isTerminal: false);
   late final tools = _Tools(this);
-  late final catalog = TargetCatalog.builtIn();
   late final stages = ReleaseStages(
     source: source,
     git: git,
-    stageContracts: catalog.stageContractResolver(resolution),
+    resolution: resolution,
   );
   late final inspector = Inspector(
     registry: registry,
@@ -207,21 +205,21 @@ final class _Fixture {
     }
     stage.finalize(releaseAssets: const []);
     expect(stage.inspect().issues, isEmpty);
-    final checklist = Checklist.derive(unit, resolution, Diagnostics());
-    final targets = catalog.derive(unit, checklist, repository: git.originUrl);
+    final release = UnitRelease.derive(
+      unit,
+      resolution,
+      repository: git.originUrl,
+      problems: Diagnostics(),
+    );
     plans.add(
       PublicationPlan(
-        unit: unit,
-        steps: checklist.steps,
-        publicSteps: checklist.steps.where((step) => step.isPublic),
-        targets: targets,
+        release: release,
         states: {
-          for (final step in checklist.steps)
-            step.id: const Inspection.absent(),
+          for (final step in release.steps) step.id: const Inspection.absent(),
         },
         actions: {
-          for (final target in targets)
-            target.step.id: ReleaseAction.notAttempted,
+          for (final target in release.targets)
+            target.id: ReleaseAction.notAttempted,
         },
         prepared: PreparedRelease(claims: const [], signing: null),
         stage: stage,
@@ -232,17 +230,14 @@ final class _Fixture {
 
   /// [plan] as a snapshot that found every target already published.
   PublicationPlan published(PublicationPlan plan) => PublicationPlan(
-    unit: plan.unit,
-    steps: plan.steps,
-    publicSteps: plan.publicSteps,
-    targets: plan.targets,
+    release: plan.release,
     states: {
       for (final step in plan.steps)
         step.id: const Inspection.exact(detail: 'live'),
     },
     actions: {
       for (final target in plan.targets)
-        target.step.id: ReleaseAction.alreadyPublished,
+        target.id: ReleaseAction.alreadyPublished,
     },
     prepared: plan.prepared,
     stage: plan.stage,

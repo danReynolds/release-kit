@@ -18,9 +18,9 @@ import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'pub_resolution_double.dart';
@@ -499,9 +499,7 @@ publish = ["git-tag", "pub.dev"]
         stages = ReleaseStages(
           source: tree,
           git: git,
-          stageContracts: TargetCatalog.builtIn().stageContractResolver(
-            resolution,
-          ),
+          resolution: resolution,
           repositoryRoot: stageRoot.path,
           sdk: sdk,
         );
@@ -1351,11 +1349,13 @@ executables:
                 DartSdk(executable: fixtureDartSdk(root), version: 'fixture'),
             repository: git.originUrl,
             directory: directory,
-            enforceUnitContract: true,
-            resolvedPlan: plan,
-            targetContributions: TargetCatalog.builtIn().stageContractResolver(
+            release: UnitRelease.derive(
+              unit,
               resolution,
-            )(unit: unit, repository: git.originUrl),
+              repository: git.originUrl,
+              problems: Diagnostics(),
+            ),
+            resolvedPlan: plan,
           );
         });
     const releaseTagObject = '4444444444444444444444444444444444444444';
@@ -1808,7 +1808,7 @@ executables:
       json:
           jsonDecode(output.report.encode(exit: code)) as Map<String, Object?>,
       notes: notesAtCreate,
-      expected: Inspector.expectedAssets(resolution.unit('cli')!),
+      expected: ReleaseAssets.expectedForUnit(resolution.unit('cli')!),
     );
   }
 
@@ -2025,8 +2025,8 @@ executables:
           uploaded,
           equals(run.expected),
           reason:
-              'the release publishes exactly the set Inspector.'
-              'expectedAssets derives — any difference is a conflict verdict '
+              'the release publishes exactly the set ReleaseAssets.'
+              'expectedForUnit derives — any difference is a conflict verdict '
               'on the next run, and a published release cannot be edited',
         );
         expect(

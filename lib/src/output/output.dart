@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
+import '../engine/unit_release.dart';
 import 'progress.dart';
 import 'report.dart';
 import 'timeline.dart';
@@ -432,7 +432,7 @@ class Output {
     );
   }
 
-  /// One step of a checklist, printed and recorded as one act.
+  /// One step of a release, printed and recorded as one act.
   ///
   /// Taking the [Step] rather than its parts is what makes the two surfaces
   /// agree: there is no way to show a person one id and hand a caller another,
@@ -442,7 +442,7 @@ class Output {
   /// screen. The asymmetry runs one way only and deliberately: everything
   /// printed is recorded, while the document may carry more than the terminal
   /// shows. Terseness is a rule about a person's attention, and a caller
-  /// keying on step ids wants the whole checklist.
+  /// keying on step ids wants every step.
   void step(
     Step step, {
     Mark mark = Mark.none,
@@ -465,7 +465,7 @@ class Output {
       evidence: evidence,
       permanent: step.isPermanent,
       public: step.isPublic,
-      needs: step.needs,
+      needs: [for (final need in step.needs) need.id],
       action: action,
     );
     if (!show) return;
@@ -480,7 +480,9 @@ class Output {
         StepKind.build ||
         StepKind.notarize ||
         StepKind.archive ||
-        StepKind.buildAssets => VisualRole.localWork,
+        StepKind.sourceSnapshot ||
+        StepKind.buildAssets ||
+        StepKind.targetStage => VisualRole.localWork,
         StepKind.completeStage => VisualRole.checkpoint,
         StepKind.tag ||
         StepKind.publishRegistry ||

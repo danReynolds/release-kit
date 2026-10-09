@@ -15,12 +15,10 @@ import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
@@ -2081,7 +2079,7 @@ void main() {
     },
   );
 
-  test('a complete receipt cannot omit its package preflight', () async {
+  test('a complete receipt missing its package archive refuses', () async {
     await harness.runStage();
     final receipt = harness.stage.requireReceipt();
     StageReceiptStore(harness.stage.directory).write(
@@ -2095,42 +2093,23 @@ void main() {
     final inspected = harness.stage.inspect();
     expect(inspected.reusable, isFalse);
     expect(
-      inspected.issues.map((issue) => issue.kind),
-      contains(StageIssueKind.invalidStructure),
-    );
-  });
-
-  test('a finalized receipt whose terminal step was displaced still refuses '
-      'silent replacement', () async {
-    await harness.runStage();
-    final receipt = harness.stage.requireReceipt();
-    final steps = [...receipt.steps];
-    final terminal = steps.removeLast();
-    expect(terminal.name, 'complete-stage');
-    steps.insert(steps.length - 1, terminal);
-    StageReceiptStore(harness.stage.directory).write(
-      StageReceipt(
-        identity: receipt.identity,
-        plan: receipt.plan,
-        steps: steps,
+      inspected.issues.map((issue) => '$issue'),
+      contains(
+        '${ReleaseAssets.pubArchivePath(harness.stage.unit.projects.single)}: '
+        'missing from the completed stage',
       ),
     );
 
     final released = await harness.run(
       stageOnly: false,
       confirm: (_) async => fail(
-        'a damaged reviewed stage must refuse '
-        'before authorization',
+        'a stage missing what it publishes must refuse before '
+        'authorization',
       ),
     );
 
     expect(released.code, ExitCodes.refused, reason: released.text);
     expect(released.problemCodes, contains('RK-STAGE-002'));
-    expect(
-      harness.stage.inspect().receipt,
-      isNotNull,
-      reason: 'the reviewed bytes were kept for the operator, not reset',
-    );
     expect(
       released.keys.where((key) => key.startsWith('dart compile exe')),
       isEmpty,
@@ -2293,7 +2272,7 @@ class _Harness {
     stages = ReleaseStages(
       source: source,
       git: git,
-      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
+      resolution: resolution,
       repositoryRoot: root.path,
     );
     registry = _ReleaseRegistry({

@@ -2,11 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../engine/assets.dart';
-import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
-import '../../engine/targets.dart';
+import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
 import '../../output/progress.dart';
 import '../github_release/client.dart';
@@ -31,36 +30,10 @@ final class HomebrewTargetModule extends TargetModule {
       ProgressActivity(running: 'updating', failed: 'update failed');
 
   @override
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
-  }) {
-    final project = unit.project(step.project!);
-    final tap = repository == null ? unit.homebrewTap : unit.tapFor(repository);
-    return TargetPlan(
-      label: tap == null ? 'Homebrew' : 'Homebrew · $tap',
-      kindLabel: 'Homebrew',
-      identity: tap ?? 'no tap configured',
-      planNote: '${project.executable} formula',
-      coordinate: tap == null
-          ? 'Formula/${ReleaseAssets.formulaName(project.executable!)}'
-          : '$tap/Formula/${ReleaseAssets.formulaName(project.executable!)}',
-      targetVersion: project.version.canonical,
-      step: step,
-      project: project,
-      artifacts: [ReleaseAssets.formulaName(project.executable!)],
-      uses:
-          '${ReleaseAssets.formulaName(project.executable!)} bound in the '
-          'release manifest',
-    );
-  }
-
-  @override
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
   ) async {
     final tools = context.tools;
     if (tools == null) {
@@ -205,7 +178,7 @@ final class HomebrewTargetModule extends TargetModule {
   @override
   Diagnostic diagnoseConflict(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection conflict,
   ) => Diagnostic(
     code: 'RK-REL-001',
@@ -222,7 +195,7 @@ final class HomebrewTargetModule extends TargetModule {
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection inspected,
   ) async {
     final repository = context.repository;
@@ -305,7 +278,7 @@ final class HomebrewTargetModule extends TargetModule {
   @override
   ({String code, String message, String? next}) nameUnconfirmed(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection state,
     TargetActOutcome act,
   ) => switch (state.verdict) {
@@ -327,8 +300,6 @@ final class HomebrewTargetModule extends TargetModule {
   };
 
   @override
-  TargetStage stageInput({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-  }) => homebrewFormulaStage(unit: unit, target: target);
+  Future<TargetStageOutcome> prepare(TargetStageContext context, Work work) =>
+      prepareFormula(context, work);
 }
