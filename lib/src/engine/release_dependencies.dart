@@ -1,3 +1,4 @@
+import 'dependency_graph.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';
 import 'pubspec.dart';
@@ -108,6 +109,7 @@ final class ReleaseDependencyPlan {
     };
     return _ordered(
       unit.projects,
+      (project) => project.name,
       (project) => needs[project]!,
       diagnostics,
       (cycle) => Diagnostic(
@@ -157,6 +159,7 @@ final class ReleaseDependencyPlan {
     };
     return _ordered(
       resolution.units,
+      (unit) => unit.name,
       (unit) => needs[unit]!,
       diagnostics,
       (cycle) => Diagnostic(
@@ -169,57 +172,27 @@ final class ReleaseDependencyPlan {
     );
   }
 
-  /// A dependencies-first order over [values]. When a cycle makes complete
-  /// ordering impossible, reports [cycle] with the actual members and falls
-  /// back to input order for the remainder: every value is always returned,
-  /// and the diagnostic is the refusal.
+  /// A dependencies-first order over [values], each named by [idOf]. Values
+  /// that depend on each other in a circle have none: [cycle] reports the
+  /// circle, which refuses the release, and [values] come back as given, so
+  /// that status still describes every one.
   static List<T> _ordered<T>(
     List<T> values,
+    String Function(T value) idOf,
     List<T> Function(T value) dependencies,
     Diagnostics diagnostics,
     Diagnostic Function(List<T> cycle) cycle,
   ) {
-    final ordered = <T>[];
-    final settled = <T>{};
-    while (ordered.length < values.length) {
-      final next = values
-          .where(
-            (value) =>
-                !settled.contains(value) &&
-                dependencies(value).every(settled.contains),
-          )
-          .firstOrNull;
-      if (next == null) {
-        diagnostics.report(cycle(_cycle(values, dependencies, settled)));
-        for (final value in values) {
-          if (settled.add(value)) ordered.add(value);
-        }
-        return ordered;
-      }
-      ordered.add(next);
-      settled.add(next);
+    try {
+      return DependencyGraph(
+        values,
+        idOf: idOf,
+        dependenciesOf: (value) => dependencies(value).map(idOf),
+      ).ordered();
+    } on DependencyCycle<T> catch (circle) {
+      diagnostics.report(cycle(circle.members));
+      return values;
     }
-    return ordered;
-  }
-
-  /// One actual cycle among the unsettled values, so the remedy names the
-  /// circle itself rather than everything stalled behind it. When the sort
-  /// stalls, every unsettled value has an unsettled dependency, so following
-  /// them must revisit a value; the loop from that revisit is the cycle.
-  static List<T> _cycle<T>(
-    List<T> values,
-    List<T> Function(T value) dependencies,
-    Set<T> settled,
-  ) {
-    final path = <T>[];
-    var value = values.firstWhere((value) => !settled.contains(value));
-    while (!path.contains(value)) {
-      path.add(value);
-      value = dependencies(
-        value,
-      ).firstWhere((dependency) => !settled.contains(dependency));
-    }
-    return path.sublist(path.indexOf(value));
   }
 }
 
