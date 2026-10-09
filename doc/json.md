@@ -80,8 +80,8 @@ summary; `next[]` contains the publish command when publication is configured.
 Status reads the saved stage for the current source, if any. Its
 `completeStage` evidence includes the actual `stage id`. An exact local stage
 verdict means the receipt names this stage and records every file this rk
-publishes for the unit, and every file it publishes still has its recorded size and digest. Status performs no dependency resolution or
-producer work. An incomplete saved stage reports only its recorded local
+publishes for the unit, each still at its recorded size and digest. Status
+performs no dependency resolution or producer work. An incomplete saved stage reports only its recorded local
 progress.
 
 ## Release plan

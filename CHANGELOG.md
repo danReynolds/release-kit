@@ -7,8 +7,8 @@ one question for the whole run. A fresh stage of Fleury's four packages takes
 about 10s (2m 9s with 0.1.14), reusing it under a second (about 30s), and
 releasing them and their two tags takes three trips to origin.
 
-Stages saved by 0.1.14 are not reused: a release 0.1.14 left partly
-published finishes with 0.1.14.
+Stages an earlier rk saved are not reused, and `rk clean` removes them: a
+release an earlier rk left partly published finishes with that rk.
 
 ### Releasing
 
@@ -96,6 +96,13 @@ published finishes with 0.1.14.
   build reads is left out, as `git archive` leaves out a submodule.
 - Staging offline reports that Pub could not reach the registry
   (`RK-PUB-019`), not validation errors to fix.
+- A stage that no longer validates (`RK-STAGE-002`) names each file that is
+  wrong, by its path in the stage: missing from the completed stage, or
+  differing from the receipt in size or digest.
+- A `.rk` that is a symbolic link, such as one on another disk, is used
+  where it leads; `rk clean` still removes a stage that is a link without
+  following it. `RK-STAGE-001` no longer reports "the release stage path is
+  unsafe".
 - A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)
   allows any version, as Pub reads it (`RK-DEP-002` is gone). A comma inside
   a quoted list item in `release.toml` no longer breaks the list. Pubspecs
@@ -151,7 +158,7 @@ published finishes with 0.1.14.
   `[release.core.project.x]`, is a TOML error (`RK-TOML-001`).
 - A diagnostic code names the kind of mistake; the message names the
   setting, and the location its line. Codes that repeat another are merged,
-  and doc/codes.md lists 96 codes, down from 150:
+  and doc/codes.md lists 95 codes, down from 150:
 
   | was | now |
   |---|---|

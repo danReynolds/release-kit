@@ -20,8 +20,8 @@ and local preparation still needed. Publication and staging are separate:
   published version when one is known.
 - **Does not match** means published content conflicts with the candidate.
 - **Could not be read** means a check failed; it is not evidence of absence.
-- **Staged** means the exact local stage's receipt records the producers this
-  rk runs, and every file it publishes still has its recorded size and digest.
+- **Staged** means the exact local stage's receipt records every file this
+  rk publishes for the unit, each still at its recorded size and digest.
   A missing stage does not undo an existing publication.
 
 If the checkout has changed since its version was released, the report keeps
