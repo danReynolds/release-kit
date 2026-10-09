@@ -135,7 +135,8 @@ supported by these installation adapters yet. A missing Dart or Homebrew tool
 is reported with a reason; RK does not install the package manager itself.
 
 `install` leaves routing unchanged. `use` prepares a missing installation and
-then switches. Existing published installations are reused, never silently
+then switches. Local is the checkout itself: `rk install local` prepares it,
+and Local shows as installed only while it is selected. Existing published installations are reused, never silently
 upgraded. Local preparation refreshes dependencies and binds the checkout from
 which you invoke it. Source edits are picked up on the next invocation, with no
 reinstallation or Git pull. The launched program keeps your working directory
@@ -154,11 +155,12 @@ GitHub release; they are not independent publisher authentication.
 Command launchers live in `$XDG_DATA_HOME/rk/bin`, or `~/.local/share/rk/bin`.
 Each one names its project and source in a header, so rk reads the selection
 back from the launchers rather than storing it; the only other state is
-GitHub downloads. `use` replaces each command's launcher atomically. A failed
-prepare or a cancellation before the launchers are written leaves the old
-selection usable. Cancelling waits for the current package-manager operation
-to settle; an installation that already finished can remain installed without
-being selected.
+GitHub downloads, in `downloads/<package>/<version>` beside `bin`. `use`
+replaces each command's launcher atomically. A failed prepare or a
+cancellation before the launchers are written leaves the old selection
+usable. Cancelling waits for the current package-manager operation to settle;
+an installation that already finished can remain installed without being
+selected.
 
 On fish, `use` prepends this directory through `fish_add_path` using universal
 state. Existing fish sessions normally pick that up at their next prompt.
@@ -166,22 +168,47 @@ Other shells receive the exact PATH command to run and persist in their own
 configuration. RK never rewrites shell startup files. The next `rk use --list`
 checks the environment actually inherited from the shell.
 
-RK refuses to overwrite a command in its bin directory that it did not write.
-Any launcher rk wrote may be replaced, so changing a project's origin or
-moving its checkout does not lock rk out of its own commands.
+A launcher names its project by package name and its source by name, as in
+`# rk-managed:orbit_cli:homebrew`, and each command's launcher is read on its
+own. RK refuses to overwrite a command in its bin directory that it did not
+write, or that it selected for another project; `rk use --list` reports a
+command another project's launcher holds. Changing a project's origin or
+moving its checkout does not lock rk out of its own commands. A launcher rk
+0.1.14 wrote names its project by a hash and forwards to that project's
+`projects/<hash>/current`, which records the source: rk reads the selection
+from there, and the next `rk use` of a project exporting the command replaces
+it.
 
-Removing the active source is refused: select another first. Local is the
-checkout itself, so there is nothing to uninstall. Uninstalling Pub or Homebrew
-removes that package manager's installation, including one installed outside RK.
-GitHub uninstall removes RK's downloads for that project. An update replaces
-the previous download once the new one is installed and routed. A download is
-recorded by its directory, so a run interrupted after unpacking finishes on
-the next run instead of refusing to overwrite it.
+Removing a source any of the project's commands runs is refused: select
+another first. Local is the checkout itself, so there is nothing to uninstall.
+Uninstalling Pub or Homebrew removes that package manager's installation,
+including one installed outside RK. GitHub uninstall removes RK's downloads
+for that project. An update replaces the previous download once the new one is
+installed and routed. A download is recorded by its directory, so an install
+or update interrupted after unpacking finishes when it runs again, without
+downloading again.
 
 If a checkout or native installation moves or disappears, launchers stop with
 repair instructions. They do not fall back to another source. Homebrew and Pub
 launchers follow their package manager's own upgrades: `brew upgrade` moves the
 `opt` link, and `dart pub global run` runs whatever Pub has activated.
+
+### When rk's own checkout does not compile
+
+With Local selected in rk's own checkout, `rk` runs that checkout, and rk
+keeps no copy of itself: while the checkout does not compile, `rk use` cannot
+run to switch back. Make the checkout compile again (`git stash`, say), or run
+a published rk by its path from the checkout:
+
+```sh
+$(brew --prefix)/opt/rk/bin/rk use homebrew
+dart pub global run rk use pub
+~/.local/share/rk/downloads/rk/<version>/rk use github
+```
+
+The published rk must already be installed (`dart pub global activate rk`
+installs one) and newer than 0.1.14, which refuses to replace these
+launchers.
 
 ## Implementation and qualification
 

@@ -47,21 +47,23 @@ class InstallationManager {
         states[source] = SourceInspection(problem: error.message);
       }
     }
-    final selected = store.selected(project)?.source;
+    // Each command runs what its own launcher names: another project's
+    // launcher, or one left from an earlier selection, is not this selection.
+    final launchers = store.launchers(project);
     final paths = {
       for (final command in project.commands)
         command: findExecutable(command, environment),
     };
     final current = <String, InstallationSource?>{};
     for (final entry in paths.entries) {
-      current[entry.key] = entry.value == '${store.bin}/${entry.key}'
-          ? selected
+      current[entry.key] = store.routes(entry.key, environment)
+          ? launchers[entry.key]?.source
           : states.entries
                 .where(
                   (s) =>
                       entry.value != null &&
                       (s.value.installation?.exportedPaths.any(
-                            (p) => _sameFile(p, entry.value!),
+                            (p) => sameFile(p, entry.value!),
                           ) ??
                           false),
                 )
@@ -71,7 +73,7 @@ class InstallationManager {
     return ProjectInstallations(
       project,
       states,
-      selected: selected,
+      selected: launchers.values.firstOrNull?.source,
       resolvedCommands: paths,
       currentSources: current,
       routing: store.routingProblems(project, environment),
@@ -127,7 +129,7 @@ class InstallationManager {
           ? null
           : Version.tryParse(previousVersion);
       final next = Version.tryParse(release.version);
-      if (previousVersion == release.version) {
+      if (previousVersion == release.version && current != release.source) {
         return '${project.name} · ${release.source.label} ${release.version} is already installed. Source selection unchanged.';
       }
       if (previous != null && next != null && previous.compareTo(next) > 0) {
@@ -138,13 +140,17 @@ class InstallationManager {
       }
       cancellation?.check();
       if (current == release.source) store.checkOwnership(project);
-      final installed = await _providerCall(
-        () => (provider as InstallationUpdates).download(
-          project,
-          release,
-          progress,
-        ),
-      );
+      // An update of the selected source that stopped after installing, before
+      // routing, finishes here: the launchers move to the version installed.
+      final installed = previousVersion == release.version
+          ? inspected.installation!
+          : await _providerCall(
+              () => (provider as InstallationUpdates).download(
+                project,
+                release,
+                progress,
+              ),
+            );
       if (installed.source != release.source ||
           installed.version != release.version) {
         throw const InstallationFailure(
@@ -195,8 +201,9 @@ class InstallationManager {
     try {
       cancellation?.check();
       if (action == InstallationAction.use) store.checkOwnership(project);
+      // Any of the project's commands may run it, not only the first.
       if (action == InstallationAction.uninstall &&
-          store.selected(project)?.source == source) {
+          store.launchers(project).values.any((l) => l.source == source)) {
         throw InstallationFailure(
           '${source.label} is selected for ${project.name}.',
           'Run rk use with another source first.',
@@ -217,7 +224,7 @@ class InstallationManager {
           final effective = findExecutable(command, environment);
           if (effective != null &&
               installation.exportedPaths.any(
-                (path) => _sameFile(path, effective),
+                (path) => sameFile(path, effective),
               )) {
             throw InstallationFailure(
               '${source.label} currently provides $command on PATH.',
@@ -239,7 +246,10 @@ class InstallationManager {
       cancellation?.check();
       if (action == InstallationAction.install) {
         store.retire(project, installation);
-        return '${project.name} installed from ${source.label}. Selection unchanged.';
+        // Local is the checkout itself: it counts as installed once selected.
+        return source == InstallationSource.local
+            ? '${project.name} prepared in this checkout. Selection unchanged.'
+            : '${project.name} installed from ${source.label}. Selection unchanged.';
       }
       await store.activate(
         project,
@@ -253,15 +263,6 @@ class InstallationManager {
       lock.closeSync();
       _busy = false;
     }
-  }
-}
-
-bool _sameFile(String a, String b) {
-  try {
-    return File(a).resolveSymbolicLinksSync() ==
-        File(b).resolveSymbolicLinksSync();
-  } on FileSystemException {
-    return false;
   }
 }
 

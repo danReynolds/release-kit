@@ -132,14 +132,25 @@ published finishes with 0.1.14.
 - A Homebrew selection keeps running after `brew upgrade`: launchers go
   through Homebrew's `opt` link instead of a versioned keg.
 - Switching rk's own source no longer copies, or compiles, the running rk
-  first.
+  first. If rk's own checkout stops compiling while Local is selected, run a
+  published rk by its path to switch back; `doc/installations.md` shows how.
 - A GitHub update replaces the previous download, uninstall removes every
-  download, and a run interrupted after unpacking finishes on the next run.
-- rk reads the selection back from the launchers, and adding or renaming a
-  project's GitHub remote no longer makes rk refuse its own commands. A
-  selection made by 0.1.14 keeps running; run `rk use` once to move it to the
-  new launchers. What 0.1.14 kept under `~/.local/share/rk` (`managers`, and
-  each project's `current`, `generations` and receipts) can be deleted.
+  download, and an install or update interrupted after unpacking finishes
+  when it runs again, without downloading again.
+- rk reads the selection back from the launchers, each of which names its
+  project and source, and keeps GitHub downloads under
+  `~/.local/share/rk/downloads/<package>`, so adding or renaming a project's
+  GitHub remote no longer makes rk refuse its own commands or lose its
+  download. rk still refuses a command it selected for another project, and
+  `rk uninstall` refuses a source any of the project's commands runs,
+  including through a launcher 0.1.14 wrote. A selection made by 0.1.14 keeps
+  running; run `rk use` once to move it to the new launchers. Then what
+  0.1.14 kept under `~/.local/share/rk`, `managers` and `projects`, can be
+  deleted.
+- Local is the checkout itself: `rk install local` prepares it, and Local
+  shows as installed only while it is selected.
+- rk's bin directory on PATH written with a trailing slash, or through a
+  link, counts as first: `rk use` no longer says to put it there.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.
 - `rk use local` runs Dart commands whose dependencies have build hooks
   (native assets) from any directory, through a small bootstrap. Select

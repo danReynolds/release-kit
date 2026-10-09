@@ -13,6 +13,13 @@ List<ExecutableProject> executableProjects(
     for (final project in unit.projects) {
       final commands = project.pubspec.executableScripts;
       if (commands.isEmpty) continue;
+      // A launcher names its project in a line of shell.
+      if (!RegExp(r'^\w+$').hasMatch(project.name)) {
+        throw InstallationFailure(
+          'Unsupported package name in ${project.directoryIn(root)}/pubspec.yaml.',
+          'A Dart package name has only letters, digits and underscores.',
+        );
+      }
       for (final entry in commands.entries) {
         if (!safeCommandName(entry.key) || !safeCommandName(entry.value)) {
           throw InstallationFailure(

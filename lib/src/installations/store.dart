@@ -2,9 +2,17 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../engine/tools.dart';
-import '../transforms/digest.dart';
 import 'model.dart';
 import 'provider.dart';
+
+/// A launcher rk wrote, read back: the project it names, the source it runs
+/// and where that source is installed. [project] is null for a launcher an
+/// older rk wrote, which named the project by a hash of its origin.
+typedef Launcher = ({
+  String? project,
+  InstallationSource source,
+  String location,
+});
 
 /// The launchers rk writes into one directory on PATH. Each launcher names its
 /// project and source in a header, so the selection is read back from the
@@ -15,11 +23,10 @@ class InstallationStore {
   final String root;
   final Tools tools;
   String get bin => '$root/bin';
-  String id(ExecutableProject project) => Sha256.hex(
-    utf8.encode('${project.repository ?? project.root}\u0000${project.name}'),
-  );
-  String projectRoot(ExecutableProject project) =>
-      '$root/projects/${id(project)}';
+
+  /// Where [project]'s GitHub downloads live, one directory per version.
+  String downloads(ExecutableProject project) =>
+      '$root/downloads/${project.name}';
 
   static String defaultRoot(Map<String, String> environment) {
     final data = environment['XDG_DATA_HOME'];
@@ -48,36 +55,85 @@ class InstallationStore {
     return lock;
   }
 
-  String _owner(ExecutableProject project) => '# rk-managed:${id(project)}:';
+  /// `# rk-managed:<project>:<source>`, naming the project by its package.
+  /// Older launchers name it by a [_hash] of its origin: rk 0.1.14's carry no
+  /// source, and later development builds' do.
+  static final _header = RegExp(
+    r'^# rk-managed:([^:\s]+)(?::(\w+))?$',
+    multiLine: true,
+  );
+  static final _location = RegExp(r'^# rk-location:(.+)$', multiLine: true);
+  static final _hash = RegExp(r'^[0-9a-f]{64}$');
 
-  /// The selected source and its location, read from the first launcher.
-  ({InstallationSource source, String location})? selected(
-    ExecutableProject project,
-  ) {
-    final file = File('$bin/${project.commands.first}');
+  /// The launcher rk wrote for [command], or null when there is none or it
+  /// cannot be read.
+  Launcher? launcher(String command) {
+    final file = File('$bin/$command');
     if (!file.existsSync()) return null;
-    final lines = file.readAsLinesSync();
-    final owner = _owner(project);
-    final header = lines.where((line) => line.startsWith(owner)).firstOrNull;
-    final location = lines
-        .where((line) => line.startsWith('# rk-location:'))
-        .firstOrNull;
-    final source = header == null
-        ? null
-        : InstallationSource.named(header.substring(owner.length));
+    final text = file.readAsStringSync();
+    final header = _header.firstMatch(text);
+    if (header == null) return null;
+    final owner = header[1]!;
+    final legacy = _hash.hasMatch(owner);
+    if (header[2] == null) return legacy ? _legacy(owner) : null;
+    final source = InstallationSource.named(header[2]!);
+    final location = _location.firstMatch(text)?[1];
     if (source == null || location == null) return null;
-    return (source: source, location: location.substring(14));
+    return (project: legacy ? null : owner, source: source, location: location);
   }
 
-  /// Any launcher rk wrote may be replaced; anything else is someone's command.
+  /// What a launcher rk 0.1.14 wrote runs: it forwards to its project's
+  /// current generation, whose installation.json records the source.
+  Launcher? _legacy(String hash) {
+    final record = File('$root/projects/$hash/current/installation.json');
+    if (!record.existsSync()) return null;
+    try {
+      if (jsonDecode(record.readAsStringSync()) case {
+        'source': final String name,
+        'location': final String location,
+      }) {
+        if (InstallationSource.named(name) case final source?) {
+          return (project: null, source: source, location: location);
+        }
+      }
+    } on FormatException {
+      // Not a record 0.1.14 wrote; its launcher runs nothing rk can name.
+    }
+    return null;
+  }
+
+  /// What [project]'s commands run: each command whose launcher rk wrote for
+  /// this project, or before launchers named their project.
+  Map<String, Launcher> launchers(ExecutableProject project) => {
+    for (final command in project.commands)
+      if (launcher(command) case final launcher?
+          when (launcher.project ?? project.name) == project.name)
+        command: launcher,
+  };
+
+  /// The selected source and its location, read from the project's first
+  /// launcher.
+  Launcher? selected(ExecutableProject project) =>
+      launchers(project).values.firstOrNull;
+
+  /// A launcher rk wrote for this project may be replaced, and so may one
+  /// that names no project. A command rk did not write, or selected for
+  /// another project, is not this project's.
   void checkOwnership(ExecutableProject project) {
     for (final command in project.commands) {
       final file = File('$bin/$command');
-      if (file.existsSync() &&
-          !file.readAsStringSync().contains('# rk-managed:')) {
+      if (!file.existsSync()) continue;
+      final owner = _header.firstMatch(file.readAsStringSync())?[1];
+      if (owner == null) {
         throw InstallationFailure(
           '$command is already owned by another installation.',
           'rk will not replace ${file.path}. Resolve the command collision first.',
+        );
+      }
+      if (owner != project.name && !_hash.hasMatch(owner)) {
+        throw InstallationFailure(
+          '$command is selected for $owner.',
+          'rk will not replace ${file.path} for ${project.name}. Resolve the command collision first.',
         );
       }
     }
@@ -123,7 +179,7 @@ class InstallationStore {
     LaunchCommand command,
   ) {
     final script = StringBuffer('#!/bin/sh\n')
-      ..writeln('${_owner(project)}${installation.source.name}')
+      ..writeln('# rk-managed:${project.name}:${installation.source.name}')
       ..writeln('# rk-location:${installation.location}');
     for (final file in [command.executable, ...command.requiredFiles]) {
       script.writeln('if [ ! -f ${shellQuote(file)} ]; then');
@@ -147,12 +203,26 @@ class InstallationStore {
     ExecutableProject project,
     Map<String, String> environment,
   ) {
-    if (selected(project) == null) return const [];
+    final launchers = this.launchers(project);
+    final selected = launchers.values.firstOrNull;
     return [
       for (final command in project.commands)
-        if (findExecutable(command, environment) != '$bin/$command')
+        if (launcher(command)?.project case final owner?
+            when owner != project.name)
+          '$command is selected for $owner, not ${project.name}.'
+        else if (selected != null &&
+            launchers[command]?.source != selected.source)
+          '$command is not switched to ${selected.source.label}; run rk use ${selected.source.name} again.'
+        else if (selected != null && !routes(command, environment))
           '$command resolves to ${findExecutable(command, environment) ?? 'nothing'}; put $bin first in PATH.',
     ];
+  }
+
+  /// Whether [command] on [environment]'s PATH is its launcher, however PATH
+  /// spells the directory: with a trailing slash, or through a link.
+  bool routes(String command, Map<String, String> environment) {
+    final found = findExecutable(command, environment);
+    return found != null && sameFile(found, '$bin/$command');
   }
 
   /// Once [kept] is installed and routed, removes what it replaced: rk's own
@@ -161,7 +231,7 @@ class InstallationStore {
   void retire(ExecutableProject project, Installation kept) {
     if (!kept.managed) return;
     final parent = Directory(kept.location).parent;
-    if (!parent.path.startsWith('${projectRoot(project)}/')) return;
+    if (parent.path != downloads(project)) return;
     final inUse = selected(project)?.location;
     for (final entry in parent.listSync(followLinks: false)) {
       if (entry.path != kept.location && entry.path != inUse) {
@@ -169,11 +239,15 @@ class InstallationStore {
       }
     }
   }
+}
 
-  String managedDirectory(ExecutableProject project, String name) {
-    final directory = '${projectRoot(project)}/$name';
-    Directory(directory).createSync(recursive: true);
-    return directory;
+/// Whether [a] and [b] are one file, once links and spelling are resolved.
+bool sameFile(String a, String b) {
+  try {
+    return File(a).resolveSymbolicLinksSync() ==
+        File(b).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    return false;
   }
 }
 
