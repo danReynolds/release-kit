@@ -72,14 +72,25 @@ final class ReleaseSource {
       final commit = CommitFiles(root, git.head, tools: tools);
       return configFrom((paths) => Manifests.readAt(commit, paths));
     }
-    return configFrom((paths) async => Manifests.readFrom(tree, paths));
+    return configIn(tree);
   }
+
+  /// release.toml in [tree], parsed and resolved; [releasing] as
+  /// [Resolution.fromManifests] takes it.
+  static Future<ConfigRead> configIn(
+    SourceTree tree, {
+    bool releasing = true,
+  }) => configFrom(
+    (paths) async => Manifests.readFrom(tree, paths),
+    releasing: releasing,
+  );
 
   /// release.toml, parsed and resolved against the manifests it declares,
   /// each read through [read].
   static Future<ConfigRead> configFrom(
-    Future<Manifests> Function(List<String> paths) read,
-  ) async {
+    Future<Manifests> Function(List<String> paths) read, {
+    bool releasing = true,
+  }) async {
     final diagnostics = Diagnostics();
     try {
       final config = await read(const ['release.toml']);
@@ -97,18 +108,20 @@ final class ReleaseSource {
           parsed,
           await read(Manifests.pathsFor(parsed)),
           diagnostics,
+          releasing: releasing,
         );
         if (resolution != null && diagnostics.isEmpty) {
           return ConfigResolved(resolution);
         }
       }
     } on SourceUnreadable catch (error) {
-      diagnostics.report(_unreadable(error));
+      diagnostics.report(unreadable(error));
     }
     return ConfigProblems(diagnostics.found);
   }
 
-  static Diagnostic _unreadable(SourceUnreadable error) =>
+  /// What a release input that is there and could not be read is.
+  static Diagnostic unreadable(SourceUnreadable error) =>
       error.path == 'release.toml'
       ? wrongReleaseConfig(error.reason)
       : Diagnostic(
@@ -179,15 +192,21 @@ final class Manifests {
 
   /// [paths] as [commit] has them, read in one batch with the directories
   /// that hold them, whose entries say which of them are regular files.
+  ///
+  /// A changelog may be a link to another file in the commit, which a stage
+  /// reads through: it is read through too, in one more batch.
   static Future<Manifests> readAt(
     CommitFiles commit,
     Iterable<String> paths,
   ) async {
-    String name(String path) => path == '.' ? '' : path;
-    final wanted = {...paths};
-    final objects = await commit.read({
-      for (final path in wanted) ...[name(path), _parent(name(path))],
-    });
+    final objects = <String, GitObject?>{};
+    Future<void> fetch(Iterable<String> names) async => objects.addAll(
+      await commit.read(
+        {
+          for (final name in names) ...[name, _parent(name)],
+        }.where((name) => !objects.containsKey(name)),
+      ),
+    );
     final listings = <String, Map<String, String>>{};
     String? modeOf(String path) {
       if (path.isEmpty) return '040000';
@@ -198,12 +217,26 @@ final class Manifests {
       })[path.substring(directory.isEmpty ? 0 : directory.length + 1)];
     }
 
+    final wanted = {for (final path in paths) path: path == '.' ? '' : path};
+    await fetch(wanted.values);
+    final links = {
+      for (final MapEntry(key: path, value: name) in wanted.entries)
+        if (path.split('/').last == 'CHANGELOG.md' && modeOf(name) == '120000')
+          path: _within(
+            _parent(name),
+            utf8.decode(objects[name]!.bytes, allowMalformed: true),
+          ),
+    };
+    if (links.values.nonNulls.isNotEmpty) await fetch(links.values.nonNulls);
+
     final texts = <String, String? Function()>{};
     final present = <String>{};
-    for (final path in wanted) {
-      final object = objects[name(path)];
-      final mode = modeOf(name(path));
-      if (mode != null) present.add(path);
+    for (final MapEntry(key: path, value: at) in wanted.entries) {
+      if (modeOf(at) != null) present.add(path);
+      // A link out of the commit stays a link, which is refused.
+      final read = links.containsKey(path) ? links[path] ?? at : at;
+      final object = objects[read];
+      final mode = modeOf(read);
       final refusal = switch (mode) {
         '120000' => 'symbolic link',
         '160000' => 'gitlink/submodule',
@@ -234,6 +267,24 @@ final class Manifests {
 String _parent(String path) {
   final cut = path.lastIndexOf('/');
   return cut < 0 ? '' : path.substring(0, cut);
+}
+
+/// [relative], a link's target as written in [directory], as a path in the
+/// commit; null when it is absolute or climbs out of the commit.
+String? _within(String directory, String relative) {
+  if (relative.startsWith('/')) return null;
+  final parts = [if (directory.isNotEmpty) ...directory.split('/')];
+  for (final part in relative.split('/')) {
+    if (part.isEmpty || part == '.') continue;
+    if (part != '..') {
+      parts.add(part);
+    } else if (parts.isEmpty) {
+      return null;
+    } else {
+      parts.removeLast();
+    }
+  }
+  return parts.join('/');
 }
 
 /// What reading release.toml found.

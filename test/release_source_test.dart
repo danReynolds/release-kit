@@ -1,6 +1,9 @@
 import 'dart:io';
 
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/release_source.dart';
+import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
@@ -42,11 +45,14 @@ publish = ["pub.dev"]
     final source = await ReleaseSource.open(root.path);
     // An edit after Git said clean does not reach what is staged.
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 9.9.9\n');
+    _write(root, 'CHANGELOG.md', '## 9.9.9\n');
 
     final read = await source.readConfig() as ConfigResolved;
 
     expect(source.inRepository, isTrue);
-    expect(read.resolution.unit('tool')!.version.canonical, '1.0.0');
+    final unit = read.resolution.unit('tool')!;
+    expect(unit.version.canonical, '1.0.0');
+    expect(unit.projects.single.changelog, '## 1.0.0\n');
     expect(source.git.stagingProblem(), isNull);
   });
 
@@ -92,6 +98,68 @@ publish = ["git-tag", "github-release"]
       expect(asked, ['git cat-file --batch', 'git cat-file --batch']);
     },
   );
+
+  test(
+    'a committed changelog that links into the commit is read through',
+    () async {
+      if (Platform.isWindows) return;
+      _write(root, 'packages/a/pubspec.yaml', 'name: a\nversion: 1.0.0\n');
+      Link(
+        '${root.path}/packages/a/CHANGELOG.md',
+      ).createSync('../../CHANGELOG.md');
+      _write(root, 'release.toml', '''
+schema = 2
+
+[release.a]
+path = "packages/a"
+publish = ["pub.dev"]
+''');
+      commitAll();
+
+      final read =
+          await (await ReleaseSource.open(root.path)).readConfig()
+              as ConfigResolved;
+      expect(
+        read.resolution.unit('a')!.projects.single.changelog,
+        '## 1.0.0\n',
+      );
+
+      // One that leads out of the commit is refused, as a stage refuses it.
+      Link('${root.path}/packages/a/CHANGELOG.md')
+        ..deleteSync()
+        ..createSync('/etc/hosts');
+      git(['commit', '-qam', 'out']);
+      final refused =
+          await (await ReleaseSource.open(root.path)).readConfig()
+              as ConfigProblems;
+      expect(refused.problems.single.code, 'RK-SRC-003');
+      expect(refused.problems.single.remedy, contains('symbolic link'));
+    },
+  );
+
+  test('installing reads no changelog: a link to one is never refused', () {
+    if (Platform.isWindows) return;
+    File('${root.path}/CHANGELOG.md').renameSync('${root.path}/NEWS.md');
+    Link('${root.path}/CHANGELOG.md').createSync('NEWS.md');
+    final tree = WorkingTree(root.path, git: false);
+    final config = ReleaseConfig.parse(
+      tree.read('release.toml')!,
+      'release.toml',
+      Diagnostics(),
+    )!;
+
+    final installing = Resolution.resolve(
+      config,
+      tree,
+      Diagnostics(),
+      releasing: false,
+    );
+    expect(installing!.unit('tool')!.projects.single.changelog, isNull);
+    expect(
+      () => Resolution.resolve(config, tree, Diagnostics()),
+      throwsA(isA<SourceUnreadable>()),
+    );
+  });
 
   test('a dirty repository is read as it is, and cannot be staged', () async {
     commitAll();

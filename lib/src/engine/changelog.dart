@@ -1,5 +1,4 @@
 import 'diagnostic.dart';
-import 'source_tree.dart';
 import 'version.dart';
 
 /// Whether a changelog records the version being released.
@@ -20,10 +19,11 @@ class Changelog {
     return false;
   }
 
-  /// Checks the changelog beside [manifestDirectory], recording a problem when
-  /// the file or the entry is missing.
+  /// Checks [changelog], the text of the changelog beside
+  /// [manifestDirectory], recording a problem when the file or the entry is
+  /// missing.
   static void check({
-    required SourceTree tree,
+    required String? changelog,
     required String manifestDirectory,
     required String packageName,
     required Version version,
@@ -33,7 +33,7 @@ class Changelog {
         ? 'CHANGELOG.md'
         : '$manifestDirectory/CHANGELOG.md';
 
-    final source = tree.read(path);
+    final source = changelog;
     if (source == null) {
       diagnostics.add(
         'RK-CHG-001',

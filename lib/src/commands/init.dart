@@ -5,6 +5,7 @@ import '../engine/config.dart';
 import '../engine/diagnostic.dart';
 import '../engine/init_plan.dart';
 import '../engine/release_choice.dart';
+import '../engine/release_source.dart';
 import '../output/output.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -78,14 +79,7 @@ class InitCommand {
     try {
       existing = tree.read('release.toml');
     } on SourceUnreadable catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-CONF-034',
-          message: 'release.toml is there and rk could not read it',
-          source: SourceLocation('release.toml', 1),
-          remedy: error.reason,
-        ),
-      );
+      output.problem(ReleaseSource.unreadable(error));
       return ExitCodes.refused;
     }
     // Already configured is where init leads, not a problem: rk never edits
@@ -173,7 +167,11 @@ class InitCommand {
       final proposal = plan.renderToml();
       final problems = Diagnostics();
       final parsed = ReleaseConfig.parse(proposal, 'release.toml', problems);
-      if (parsed != null) Resolution.resolve(parsed, tree, problems);
+      try {
+        if (parsed != null) Resolution.resolve(parsed, tree, problems);
+      } on SourceUnreadable catch (error) {
+        problems.report(ReleaseSource.unreadable(error));
+      }
       if (problems.isNotEmpty) {
         output.blank();
         output.problem(

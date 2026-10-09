@@ -36,31 +36,20 @@ class Resolution {
   static Resolution? resolve(
     ReleaseConfig config,
     SourceTree tree,
-    Diagnostics diagnostics,
-  ) => fromManifests(
+    Diagnostics diagnostics, {
+    bool releasing = true,
+  }) => fromManifests(
     config,
     Manifests.readFrom(tree, Manifests.pathsFor(config)),
     diagnostics,
-  );
-
-  /// Discovers installation targets without applying release source policy.
-  /// Local checkouts may depend on unpublished path or Git packages. Release
-  /// callers continue to use [resolve] and retain all publication checks.
-  static Resolution? forInstallation(
-    ReleaseConfig config,
-    SourceTree tree,
-    Diagnostics diagnostics,
-  ) => fromManifests(
-    config,
-    Manifests.readFrom(tree, Manifests.pathsFor(config)),
-    diagnostics,
-    releasing: false,
+    releasing: releasing,
   );
 
   /// Resolves [config] against [manifests], everything it declares read
-  /// from one source. [releasing] applies the release source policy: a
-  /// local checkout being installed may depend on unpublished path or Git
-  /// packages.
+  /// from one source. [releasing] applies the release source policy and
+  /// reads each changelog; a local checkout being installed may depend on
+  /// unpublished path or Git packages, and its changelogs are not asked
+  /// about.
   static Resolution? fromManifests(
     ReleaseConfig config,
     Manifests manifests,
@@ -210,7 +199,15 @@ class Resolution {
           : '${declared.path}/Cargo.toml';
       final crateSource = manifests.text(crate);
       if (crateSource != null) {
-        return _crate(unit, declared, crate, crateSource, diagnostics);
+        final project = _crate(unit, declared, crate, crateSource, diagnostics);
+        return project == null || !releasing
+            ? project
+            : ResolvedProject(
+                unitName: project.unitName,
+                config: declared,
+                pubspec: project.pubspec,
+                changelog: manifests.text(_changelog(declared)),
+              );
       }
       diagnostics.add(
         'RK-RES-001',
@@ -334,8 +331,12 @@ class Resolution {
       unitName: unit.name,
       config: declared,
       pubspec: pubspec,
+      changelog: releasing ? manifests.text(_changelog(declared)) : null,
     );
   }
+
+  static String _changelog(ProjectConfig project) =>
+      project.path == '.' ? 'CHANGELOG.md' : '${project.path}/CHANGELOG.md';
 
   /// A Cargo crate, which rk releases only through the build it declares:
   /// its name and version come from `Cargo.toml`, and its declared assets
@@ -573,12 +574,17 @@ class ResolvedProject {
     required this.config,
     required this.pubspec,
     this.dartDefines = const {},
+    this.changelog,
   });
 
   final String unitName;
   final ProjectConfig config;
   final Pubspec pubspec;
   final Map<String, String> dartDefines;
+
+  /// This project's CHANGELOG.md, read from the same source as its manifest:
+  /// null when it has none, or when it was resolved to be installed.
+  final String? changelog;
 
   String get name => pubspec.name;
   Version get version => pubspec.version!;
