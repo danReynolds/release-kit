@@ -312,7 +312,7 @@ binary_platforms = ["linux-x64"]
         ),
       );
 
-      final inspected = await module.inspectCandidate(
+      final (state: inspected, :history) = await module.read(
         TargetReadContext(
           registry: null,
           pubDev: null,
@@ -323,6 +323,7 @@ binary_platforms = ["linux-x64"]
         unit,
         target,
       );
+      expect(history, isNull, reason: 'a formula carries its own version');
 
       expect(inspected.verdict, Verdict.exact, reason: inspected.detail);
       expect(tools.calls, [

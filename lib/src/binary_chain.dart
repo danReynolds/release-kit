@@ -12,6 +12,7 @@ import 'engine/tools.dart';
 import 'engine/unit_release.dart';
 import 'engine/verdict.dart';
 import 'transforms/archive.dart';
+import 'targets/target_module.dart';
 import 'transforms/macos.dart';
 
 /// The local half of shipping binaries, one step at a time.
@@ -67,7 +68,7 @@ class BinaryChain {
   /// seconds, so a signing failure rebuilds rather than maintaining a
   /// transient unsigned intermediate every validator would have to know
   /// about. [signing] is present exactly when [step] is a macOS platform.
-  Future<LocalProducerOutcome> buildStep(
+  Future<Produced> buildStep(
     Work step,
     ResolvedProject project, {
     MacSigning? signing,
@@ -113,7 +114,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return LocalProducerOutcome.failed(built.problem ?? 'the build failed');
+      return const Produced.failed();
     }
 
     // The proof's absence travels with the artifact. `built` alone would
@@ -133,7 +134,7 @@ class BinaryChain {
           show: false,
         );
       }
-      return LocalProducerOutcome.succeeded(
+      return Produced(
         evidence: {
           'smoke': smoke,
           'artifact': ReleaseAssets.binaryArtifact(project, platform).toJson(),
@@ -154,7 +155,7 @@ class BinaryChain {
   /// tautology. [MacSigning.codeId] is resolved by the caller, before
   /// anything acts: it is read off the published binary, or declared, or the
   /// release was refused (RK-SIGN-009).
-  Future<LocalProducerOutcome> _sign(
+  Future<Produced> _sign(
     Work step,
     ResolvedProject project,
     Map<String, Object?> smoke,
@@ -164,11 +165,7 @@ class BinaryChain {
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
     final published = signing.publishedRequirement;
-    LocalProducerOutcome fail(
-      String code,
-      String message, {
-      String? transcript,
-    }) {
+    Produced fail(String code, String message, {String? transcript}) {
       output.problem(
         Diagnostic(
           code: code,
@@ -178,7 +175,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return LocalProducerOutcome.failed(message);
+      return const Produced.failed();
     }
 
     final signer = MacOsSigner(tools: tools);
@@ -251,8 +248,7 @@ class BinaryChain {
         evidence: {'published': published, 'produced': requirement},
         show: true,
       );
-      return LocalProducerOutcome.failed(
-        'the produced signature differs from the published identity',
+      return Produced.failed(
         output.report.actedPublicly
             ? HaltKind.actedAndUnfixable
             : HaltKind.unfixableByRerun,
@@ -278,7 +274,7 @@ class BinaryChain {
         transcript: signedSmoke.transcript,
       );
     }
-    return LocalProducerOutcome.succeeded(
+    return Produced(
       evidence: {
         'artifact': artifact.toJson(),
         'smoke': smoke,
@@ -327,10 +323,7 @@ class BinaryChain {
 
   // ---- notarize ----
 
-  Future<LocalProducerOutcome> notarizeStep(
-    Work step,
-    ResolvedProject project,
-  ) async {
+  Future<Produced> notarizeStep(Work step, ResolvedProject project) async {
     final platform = step.platform!;
     for (final path in ReleaseAssets.binaryOutputs(project, platform)) {
       if (!File(stage.pathOf(path)).existsSync()) {
@@ -365,7 +358,7 @@ class BinaryChain {
           ),
           unit: step.unit,
         );
-        return LocalProducerOutcome.failed(zipped.summary);
+        return const Produced.failed();
       }
 
       // The wait is Apple's, and silence during it reads as a hang — this is
@@ -381,9 +374,7 @@ class BinaryChain {
           ),
           unit: step.unit,
         );
-        return LocalProducerOutcome.failed(
-          notarized.problem ?? 'Apple rejected the submission',
-        );
+        return const Produced.failed();
       }
       output.step(
         step,
@@ -393,7 +384,7 @@ class BinaryChain {
       );
       // Apple's verdict is about the signed files, which the archive step
       // packs as they are; a consumer asks Apple about the exact bytes.
-      return LocalProducerOutcome.succeeded(
+      return Produced(
         evidence: {
           'notary': {
             'status': 'Accepted',
@@ -408,10 +399,7 @@ class BinaryChain {
 
   // ---- archive ----
 
-  Future<LocalProducerOutcome> archiveStep(
-    Work step,
-    ResolvedProject project,
-  ) async {
+  Future<Produced> archiveStep(Work step, ResolvedProject project) async {
     final platform = step.platform!;
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
@@ -450,14 +438,10 @@ class BinaryChain {
       detail: name,
       note: name,
     );
-    return LocalProducerOutcome.succeeded();
+    return const Produced();
   }
 
-  LocalProducerOutcome _missingArtifact(
-    Work step,
-    String name,
-    String producedBy,
-  ) {
+  Produced _missingArtifact(Work step, String name, String producedBy) {
     output.problem(
       Diagnostic(
         code: 'RK-WORK-001',
@@ -466,7 +450,7 @@ class BinaryChain {
       ),
       unit: step.unit,
     );
-    return LocalProducerOutcome.failed('the workspace has no $name');
+    return const Produced.failed();
   }
 }
 
@@ -490,32 +474,4 @@ final class MacSigning {
   /// The certificate the preflight chose: the one Developer ID on a first
   /// release, or the one for the published release's team.
   final SigningIdentity identity;
-}
-
-/// The complete handoff from one local operation to the stage receipt writer.
-///
-/// Producers still render their established diagnostics. This value carries
-/// only the machine facts the receipt needs: whether the operation completed,
-/// and the evidence learned while doing the work. The stage records the files
-/// the work writes.
-class LocalProducerOutcome {
-  LocalProducerOutcome.succeeded({Map<String, Object?> evidence = const {}})
-    : ok = true,
-      problem = null,
-      halt = null,
-      evidence = Map<String, Object?>.unmodifiable(evidence);
-
-  const LocalProducerOutcome.failed([this.problem, this.halt])
-    : ok = false,
-      evidence = const {};
-
-  final bool ok;
-  final String? problem;
-
-  /// The halt this failure asks for, when stronger than the default
-  /// stopped-partway. The producer knows what its failure means; the
-  /// coordinator speaks the halt exactly once, after the drain.
-  final HaltKind? halt;
-
-  final Map<String, Object?> evidence;
 }

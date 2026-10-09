@@ -8,6 +8,7 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/verdict.dart';
@@ -610,9 +611,12 @@ Future<List<Diagnostic>> _history(
   Iterable<Target> targets,
 ) async {
   final listed = targets.toList();
-  final read = await Future.wait([
-    for (final target in listed) inspector.readHistory(target, unit),
-  ]);
+  final read = [
+    for (final read in await Future.wait([
+      for (final target in listed) inspector.read(target, unit),
+    ]))
+      read.history,
+  ];
   final problems = Diagnostics();
   Inspector.historyFindings([
     for (final (index, target) in listed.indexed) (target, read[index]),
@@ -640,10 +644,13 @@ class _LatestInspector extends Inspector {
   final Map<String, Inspection> answers;
 
   @override
-  Future<TargetHistory?> inspectHistory(
+  Future<TargetRead> read(
     Target target,
-    ResolvedUnit unit,
-  ) async {
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async => (state: const Inspection.absent(), history: _history(target));
+
+  TargetHistory? _history(Target target) {
     final kind = target.target.wireName;
     if (kind == 'homebrew') return null;
     final inspection = answers[kind] ?? const Inspection.absent();

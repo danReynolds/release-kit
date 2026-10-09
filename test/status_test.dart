@@ -285,10 +285,16 @@ class FixedInspector extends Inspector {
   }) async => answers[step.kind] ?? answer;
 
   @override
-  Future<TargetHistory?> inspectHistory(
+  Future<TargetRead> read(
     Target target,
-    ResolvedUnit unit,
-  ) async {
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async => (
+    state: answers[target.kind] ?? answer,
+    history: await _history(target, unit),
+  );
+
+  Future<TargetHistory?> _history(Target target, ResolvedUnit unit) async {
     final configured = latest;
     if (configured != null) {
       return TargetHistory.versioned(inspection: configured, target: target);
@@ -304,7 +310,7 @@ class FixedInspector extends Inspector {
       );
     }
     if (targetAnswer.isAbsent && target.target == PublishTarget.pubDev) {
-      return super.inspectHistory(target, unit);
+      return (await super.read(target, unit)).history;
     }
     return TargetHistory.versioned(inspection: targetAnswer, target: target);
   }
@@ -358,19 +364,24 @@ class CoordinatedInspector extends Inspector {
   var started = 0;
 
   @override
-  Future<Inspection> inspect(
-    Step step,
+  Future<TargetRead> read(
+    Target target,
     ResolvedUnit unit, {
     Stage? stage,
   }) async {
-    final gate = _gates.putIfAbsent(step.kind, Completer<void>.new);
+    // The history as the target reads it; the state as the test says.
+    final history = super.read(target, unit, stage: stage);
+    final gate = _gates.putIfAbsent(target.kind, Completer<void>.new);
     started++;
     active++;
     if (active > maximumActive) maximumActive = active;
     if (started == expected && !allStarted.isCompleted) allStarted.complete();
     await gate.future;
     active--;
-    return answers[step.kind] ?? const Inspection.absent();
+    return (
+      state: answers[target.kind] ?? const Inspection.absent(),
+      history: (await history).history,
+    );
   }
 
   void finish(StepKind kind) => _gates[kind]!.complete();

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'binary_chain.dart';
+import 'targets/target_module.dart';
 import 'engine/assets.dart';
 import 'engine/diagnostic.dart';
 import 'engine/resolve.dart';
@@ -55,7 +55,7 @@ final class AssetBuild {
   /// Runs [project]'s build with [environment] added to rk's own, which
   /// carries the facts a build may need about the release it is part of.
   /// While it runs, the first of [progress]'s rows shows its latest line.
-  Future<LocalProducerOutcome> build(
+  Future<Produced> build(
     Work step,
     ResolvedProject project, {
     Map<String, String> environment = const {},
@@ -88,9 +88,7 @@ final class AssetBuild {
             ),
             unit: step.unit,
           );
-          return const LocalProducerOutcome.failed(
-            'the build cache could not be made',
-          );
+          return const Produced.failed();
         }
       }
       final tail = <String>[];
@@ -173,7 +171,7 @@ final class AssetBuild {
           ),
           unit: step.unit,
         );
-        return const LocalProducerOutcome.failed('the build did not start');
+        return const Produced.failed();
       } finally {
         // The rows settle once the build returns, and must not redraw after.
         wait?.cancel();
@@ -197,9 +195,7 @@ final class AssetBuild {
           ),
           unit: step.unit,
         );
-        return LocalProducerOutcome.failed(
-          'the build exited ${result.exitCode}',
-        );
+        return const Produced.failed();
       }
       final missing = [
         for (final declared in project.assets)
@@ -236,9 +232,7 @@ final class AssetBuild {
           ),
           unit: step.unit,
         );
-        return const LocalProducerOutcome.failed(
-          'the build did not write every declared asset',
-        );
+        return const Produced.failed();
       }
       for (final declared in project.assets) {
         final staged = File(
@@ -247,9 +241,7 @@ final class AssetBuild {
         staged.parent.createSync(recursive: true);
         File('${out.path}/$declared').copySync(staged.path);
       }
-      return LocalProducerOutcome.succeeded(
-        evidence: {'command': project.build, 'cache': ?cache},
-      );
+      return Produced(evidence: {'command': project.build, 'cache': ?cache});
     } finally {
       out.deleteSync(recursive: true);
     }

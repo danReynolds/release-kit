@@ -7,7 +7,6 @@ import '../../engine/stage.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
 import '../../engine/version.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 import 'transaction.dart';
@@ -18,24 +17,28 @@ final class GitTagTargetModule extends TargetModule {
   @override
   PublishTarget get target => PublishTarget.gitTag;
 
+  /// Origin's tag, and the lane's latest version, from one listing of
+  /// origin's tags per run.
   @override
-  Future<TargetReadinessOutcome> checkReadiness(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-  ) async => const TargetReady();
-
-  @override
-  ProgressActivity get publishActivity =>
-      ProgressActivity(running: 'creating', failed: 'tag creation failed');
-
-  @override
-  Future<Inspection> inspectCandidate(
-    TargetReadContext context,
+  Future<TargetRead> read(
+    TargetReadContext reads,
     ResolvedUnit unit,
     Target target, {
     Stage? stage,
   }) async {
-    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    final history = readHistory(() => _history(reads, unit, target));
+    return (
+      state: await _candidate(reads, unit, stage: stage),
+      history: await history,
+    );
+  }
+
+  Future<Inspection> _candidate(
+    TargetReadContext context,
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async {
+    final tag = unit.tag!;
     final tools = context.tools;
     if (tools == null) {
       return Inspection.unknown(
@@ -101,8 +104,7 @@ final class GitTagTargetModule extends TargetModule {
         : local;
   }
 
-  @override
-  Future<TargetHistory> inspectHistory(
+  Future<TargetHistory> _history(
     TargetReadContext context,
     ResolvedUnit unit,
     Target target,
@@ -114,7 +116,7 @@ final class GitTagTargetModule extends TargetModule {
     final inspection = destination == null
         ? const Inspection.unknown('no tools to read origin with')
         : await destination.inspectLatestVersion(
-            requiredTargetTagPattern(unit, PublishTarget.gitTag),
+            unit.tagPattern!,
             listing: context.once(originTagsKey, destination.listTags),
           );
     final history = TargetHistory.versioned(
@@ -144,7 +146,7 @@ final class GitTagTargetModule extends TargetModule {
     TargetReadContext context,
     ResolvedUnit unit,
   ) sync* {
-    final pattern = requiredTargetTagPattern(unit, PublishTarget.gitTag);
+    final pattern = unit.tagPattern!;
     for (final tag in context.git.tagsMatching(pattern)) {
       final raw = GitState.versionIn(tag, pattern);
       if (raw == null) continue;
@@ -164,11 +166,16 @@ final class GitTagTargetModule extends TargetModule {
   }
 
   @override
-  Diagnostic diagnoseConflict(
+  ({Diagnostic diagnostic, String? next}) explain(
     ResolvedUnit unit,
     Target target,
-    Inspection conflict,
-  ) {
+    Inspection state, {
+    TargetActOutcome? acted,
+  }) => acted != null
+      ? unconfirmedAct(target, state, acted)
+      : (diagnostic: _conflict(unit, target, state), next: null);
+
+  Diagnostic _conflict(ResolvedUnit unit, Target target, Inspection conflict) {
     if (conflict.sourceMismatch != null) {
       final project = unit.projects.first;
       return Diagnostic(
@@ -185,7 +192,7 @@ final class GitTagTargetModule extends TargetModule {
             'changelog entry, then run rk stage ${unit.name}.',
       );
     }
-    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    final tag = unit.tag!;
     if (conflict.evidence['origin'] == 'has no $tag') {
       return Diagnostic(
         code: 'RK-REL-001',
@@ -212,6 +219,6 @@ final class GitTagTargetModule extends TargetModule {
     TargetReleaseContext context,
     ResolvedUnit unit,
     Target target,
-    Inspection inspected,
+    Inspection before,
   ) => publishGitTag(context, unit);
 }

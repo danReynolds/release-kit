@@ -1,6 +1,5 @@
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
-import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
 import '../../engine/verdict.dart';
 import '../../output/progress.dart';
@@ -18,7 +17,7 @@ Future<TargetActOutcome> publishGitTag(
   ResolvedUnit unit,
 ) async {
   final git = context.git;
-  final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+  final tag = unit.tag!;
   final destination = GitTag(tools: context.tools, root: git.root);
   // As Git itself does, rk signs a tag when tag.gpgSign asks it to. A
   // signing key alone, which may be there for commits, does not sign

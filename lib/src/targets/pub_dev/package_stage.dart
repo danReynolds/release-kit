@@ -6,6 +6,7 @@ import '../../engine/resolve.dart';
 import '../../engine/stage_source.dart';
 import '../../engine/tools.dart';
 import '../../engine/unit_release.dart';
+import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'resolution.dart';
@@ -13,22 +14,20 @@ import 'resolution.dart';
 /// Stages [work]'s package: Pub's native archive, the one private input to
 /// the pub.dev lifecycle. Packaging, how Pub resolves the package, and its
 /// diagnostics stay together here.
-Future<TargetStageOutcome> preparePubArchive(
-  TargetStageContext context,
-  Work work,
-) async {
+Future<Produced> preparePubArchive(StageRun context, Work work) async {
   final project = work.project!;
-  context.progress?.begin(CommonProgressActivities.validating);
+  context.rows?.begin(CommonProgressActivities.validating);
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
-    return TargetStageFailure(diagnostic, unit: project.unitName);
+    context.output.problem(diagnostic, unit: project.unitName);
+    return const Produced.failed(HaltKind.beforeActing);
   }
-  return TargetStageSuccess(warnings: validation.warnings);
+  return Produced(warnings: validation.warnings);
 }
 
 /// Stages [project]'s Pub archive.
 Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
-  TargetStageContext context,
+  StageRun context,
   ResolvedProject project,
 ) async {
   final archivePath = ReleaseAssets.pubArchivePath(project);
@@ -66,7 +65,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
 }
 
 Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
-  TargetStageContext context,
+  StageRun context,
   ResolvedProject project, {
   required File archive,
 }) async {
@@ -89,7 +88,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
 
     // The repository packages Pub takes from this source, by name with
     // their directories: those the release plan names (see
-    // [TargetStageContext.fromSource]), and members of the package's
+    // [StageRun.fromSource]), and members of the package's
     // workspace that only its development needs.
     final members =
         resolutionPackages(sourceRoot, directory).packages ?? const {};
@@ -362,7 +361,7 @@ String _relativePath(String from, String to) {
 /// what a Dart build of the package reads (see
 /// [StageSourceSnapshot.dartBuildInputs]), and is deleted after the archive
 /// command finishes.
-Directory _mirrorSource(TargetStageContext context, ResolvedProject project) {
+Directory _mirrorSource(StageRun context, ResolvedProject project) {
   final mirror = Directory.systemTemp.createTempSync('rk-pub-source-');
   try {
     final gitControl = _gitControlAncestor(mirror.path);

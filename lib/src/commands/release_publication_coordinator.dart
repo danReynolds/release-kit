@@ -91,8 +91,8 @@ final class ReleasePublicationCoordinator {
   /// The public steps the one yes accepted, by unit. Null until asked.
   Map<String, Set<String>>? _authorized;
 
-  /// The native sessions already acquired this run, by provider.
-  final Set<String> _sessions = {};
+  /// The targets whose native session this run has already signed in to.
+  final Set<PublishTarget> _signedIn = {};
 
   /// Proves every unfinished target can publish from this host, before any
   /// private work is spent on it.
@@ -120,7 +120,7 @@ final class ReleasePublicationCoordinator {
       for (final target in grouped) {
         progress.begin(target, CommonProgressActivities.checking);
       }
-      final readiness = await module.checkReadiness(
+      final readiness = await module.ready(
         TargetReadinessContext(
           tools: tools,
           git: initialGit,
@@ -128,19 +128,19 @@ final class ReleasePublicationCoordinator {
           progress: progress.combined(grouped),
         ),
         unit,
+        signIn: false,
       );
-      if (readiness case TargetNotReady(:final diagnostic, :final unit)) {
+      if (readiness.problem case final problem?) {
         progress
           ..failAll(grouped, activity: CommonProgressActivities.checking)
           ..notAttemptedPending()
           ..settle();
-        output.problem(diagnostic, unit: unit);
+        output.problem(problem, unit: unit.name);
         output.halt(HaltKind.beforeActing);
         return false;
       }
-      final note = (readiness as TargetReady).note;
       for (final target in grouped) {
-        progress.complete(target, note: note);
+        progress.complete(target, note: readiness.note);
       }
     }
     progress.discard();
@@ -374,58 +374,59 @@ final class ReleasePublicationCoordinator {
     return ExitCodes.ok;
   }
 
-  /// Signs in once per provider for the run, after the yes and before the
-  /// first act that needs it.
+  /// Signs in once per target for the run, after the yes and before the
+  /// first act that needs it: pub.dev and GitHub have native sessions.
   Future<bool> _acquireSessions(
     ResolvedUnit unit,
     List<Target> publishing,
   ) async {
-    final byProvider = <String, (TargetSessionProvider, List<Target>)>{};
+    final byTarget = <PublishTarget, List<Target>>{};
     for (final target in publishing) {
-      final provider = inspector.targets
-          .moduleFor(target.target)
-          .authentication;
-      if (provider == null || _sessions.contains(provider.id)) continue;
-      final (_, grouped) = byProvider[provider.id] ??= (provider, []);
-      grouped.add(target);
+      if (target.target != PublishTarget.pubDev &&
+          target.target != PublishTarget.githubRelease) {
+        continue;
+      }
+      if (_signedIn.contains(target.target)) continue;
+      (byTarget[target.target] ??= []).add(target);
     }
-    if (byProvider.isEmpty) return true;
+    if (byTarget.isEmpty) return true;
     final progress = TargetReleaseProgress(
       output,
       title: '${unit.name} ${unit.version} · preparing release',
-      targets: [for (final (_, grouped) in byProvider.values) ...grouped],
+      targets: [for (final grouped in byTarget.values) ...grouped],
     );
     final environment = refreshEnvironment();
-    for (final (provider, grouped) in byProvider.values) {
+    for (final MapEntry(key: kind, value: grouped) in byTarget.entries) {
       for (final target in grouped) {
-        progress.begin(target, provider.activity);
+        progress.begin(target, CommonProgressActivities.checkingSignIn);
       }
-      final acquired = await provider.acquire(
-        TargetReadinessContext(
-          tools: tools,
-          git: initialGit,
-          environment: environment,
-          progress: progress.combined(grouped),
-          runInteractive: allowInteractiveTools
-              ? progress.interactive(tools)
-              : null,
-        ),
-        unit,
-        grouped,
-      );
-      if (acquired case TargetNotReady(:final diagnostic, :final unit)) {
+      final signedIn = await inspector.targets
+          .moduleFor(kind)
+          .ready(
+            TargetReadinessContext(
+              tools: tools,
+              git: initialGit,
+              environment: environment,
+              progress: progress.combined(grouped),
+              runInteractive: allowInteractiveTools
+                  ? progress.interactive(tools)
+                  : null,
+            ),
+            unit,
+            signIn: true,
+          );
+      if (signedIn.problem case final problem?) {
         progress
-          ..failAll(grouped, activity: provider.activity)
+          ..failAll(grouped, activity: CommonProgressActivities.checkingSignIn)
           ..notAttemptedPending()
           ..settle();
-        output.problem(diagnostic, unit: unit);
+        output.problem(problem, unit: unit.name);
         output.halt(HaltKind.beforeActing);
         return false;
       }
-      _sessions.add(provider.id);
-      final note = (acquired as TargetReady).note;
+      _signedIn.add(kind);
       for (final target in grouped) {
-        progress.complete(target, note: note);
+        progress.complete(target, note: signedIn.note);
       }
     }
     progress.discard();
@@ -503,7 +504,7 @@ final class ReleasePublicationCoordinator {
     final halt = output.report.actedPublicly
         ? HaltKind.stoppedPartway
         : HaltKind.beforeActing;
-    if (recoversWithoutStage && !module.recoversWithoutStage(state)) {
+    if (recoversWithoutStage && !state.recoversWithoutStage) {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         target,
@@ -571,7 +572,7 @@ final class ReleasePublicationCoordinator {
       confirmDeadline: confirmDeadline,
       confirmInterval: confirmInterval,
     );
-    final mutationActivity = module.publishActivity;
+    final mutationActivity = _acting(target.target);
     releaseProgress.begin(target, mutationActivity);
     late final TargetActOutcome act;
     try {
@@ -593,7 +594,7 @@ final class ReleasePublicationCoordinator {
     try {
       state =
           act.confirmed ??
-          await module.confirmPublication(releaseContext, unit, target, act);
+          await module.confirm(releaseContext, unit, target, act);
     } on Object catch (error) {
       state = Inspection.unknown(
         '${target.kindLabel} verification threw: $error',
@@ -631,17 +632,9 @@ final class ReleasePublicationCoordinator {
             ? lastMutationActivity
             : CommonProgressActivities.verifying,
       );
-      final failure = await module.classifyUnconfirmedPublication(
-        releaseContext,
-        unit,
-        target,
-        state,
-        act,
-        actedBefore: actedBefore,
-      );
       return _PublicTargetCompletion.failed(
         target,
-        _PublicationFailure.fromTarget(target, failure),
+        _unconfirmed(unit, target, state, act, actedBefore: actedBefore),
       );
     }
 
@@ -652,6 +645,105 @@ final class ReleasePublicationCoordinator {
     releaseProgress.complete(target, note: note.isEmpty ? 'published' : note);
     return _PublicTargetCompletion.completed(target);
   }
+
+  /// What an act that did not settle exact means: the halt and the
+  /// diagnostic, in [target]'s words.
+  _PublicationFailure _unconfirmed(
+    ResolvedUnit unit,
+    Target target,
+    Inspection state,
+    TargetActOutcome act, {
+    required bool actedBefore,
+  }) {
+    final module = inspector.targets.moduleFor(target.target);
+    final conflict = state.verdict == Verdict.conflict;
+    // The provider refused the act because a permanent target was already
+    // something else: the conflict a fresh inspection would have found, with
+    // the same advice.
+    if (conflict && !target.moving && !act.ok && !act.mayHaveActed) {
+      final advice = module.explain(unit, target, state).diagnostic;
+      return _PublicationFailure(
+        step: target,
+        diagnostics: [
+          Diagnostic(
+            code: advice.code,
+            message: advice.message,
+            source: advice.source,
+            remedy: [?advice.remedy, ?act.problem].join('\n'),
+            evidence: act.evidence ?? act.diagnostic?.evidence,
+          ),
+        ],
+        halt: actedBefore
+            ? HaltKind.actedAndUnfixable
+            : HaltKind.unfixableByRerun,
+      );
+    }
+    final given = act.diagnostic;
+    final named = given == null || conflict
+        ? module.explain(unit, target, state, acted: act)
+        : (diagnostic: given, next: null);
+    final details = [
+      ?given?.remedy,
+      ?act.problem,
+      ?act.privateEffectDetail,
+      if (act.privateEffectDetail == null &&
+          act.privateEffect == TargetPrivateEffect.changed)
+        'private provider state changed; this step did not confirm a public '
+            'release.',
+      if (act.privateEffectDetail == null &&
+          act.privateEffect == TargetPrivateEffect.uncertain)
+        'private provider state may have changed; no public release was '
+            'confirmed.',
+      ?state.detail,
+      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
+    ];
+    return _PublicationFailure(
+      step: target,
+      diagnostics: [
+        Diagnostic(
+          code: named.diagnostic.code,
+          message: named.diagnostic.message,
+          remedy: details.isEmpty
+              ? 're-run; the shared destination inspection will classify the '
+                    'public target before any retry'
+              : details.join('\n'),
+          evidence: act.evidence ?? given?.evidence,
+        ),
+      ],
+      halt: conflict
+          ? (target.moving
+                ? HaltKind.stoppedPartway
+                : HaltKind.actedAndUnfixable)
+          : act.mayHaveActed ||
+                act.privateEffect == TargetPrivateEffect.uncertain ||
+                state.verdict == Verdict.unknown
+          ? HaltKind.lostTrack
+          : act.privateEffect == TargetPrivateEffect.changed || actedBefore
+          ? HaltKind.stoppedPartway
+          : HaltKind.beforeActing,
+      nextCommand: named.next,
+    );
+  }
+
+  /// What a target's row says while rk acts on it.
+  static ProgressActivity _acting(PublishTarget target) => switch (target) {
+    PublishTarget.gitTag => ProgressActivity(
+      running: 'creating',
+      failed: 'tag creation failed',
+    ),
+    PublishTarget.pubDev => ProgressActivity(
+      running: 'publishing',
+      failed: 'publish failed',
+    ),
+    PublishTarget.githubRelease => ProgressActivity(
+      running: 'drafting',
+      failed: 'draft failed',
+    ),
+    PublishTarget.homebrew => ProgressActivity(
+      running: 'updating',
+      failed: 'update failed',
+    ),
+  };
 
   void _completeExistingTarget(
     Target target,
@@ -687,7 +779,8 @@ final class ReleasePublicationCoordinator {
         if (conflict && step is Target)
           inspector.targets
               .moduleFor(step.target)
-              .diagnoseConflict(unit, step, state)
+              .explain(unit, step, state)
+              .diagnostic
         else
           Diagnostic(
             code: 'RK-REL-001',
@@ -946,14 +1039,6 @@ final class _PublicationFailure {
     required this.halt,
     this.nextCommand,
   });
-
-  factory _PublicationFailure.fromTarget(Step step, TargetFailure failure) =>
-      _PublicationFailure(
-        step: step,
-        diagnostics: [failure.diagnostic],
-        halt: failure.halt,
-        nextCommand: failure.nextCommand,
-      );
 
   final Step step;
   final List<Diagnostic> diagnostics;

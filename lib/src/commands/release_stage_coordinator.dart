@@ -73,7 +73,7 @@ final class ReleaseStageCoordinator {
   /// of an interrupted run are cleared, and its signing identity is chosen.
   /// Units do this one at a time, since choosing an identity may ask the
   /// operator. [fromSource] names, for each Pub package, the repository
-  /// packages it takes from this source: see [TargetStageContext.fromSource].
+  /// packages it takes from this source: see [StageRun.fromSource].
   Future<UnitStaging?> begin({
     required UnitRelease release,
     required Stage stage,
@@ -227,15 +227,30 @@ final class ReleaseStageCoordinator {
     final laneChains = <String, BinaryChain>{};
     final failures = <HaltKind>[];
 
-    /// Records [work], which wrote its files and learned [evidence], and
-    /// fills the rows it completes.
-    void record(
-      Work work, {
-      Map<String, Object?> evidence = const {},
-      Iterable<Diagnostic> warnings = const [],
-    }) {
-      stage.record(work, evidence: evidence, warnings: warnings);
-      stageProgress.restore({work.name: stage.receipt!.producers[work.name]!});
+    /// Records what [work] produced, and fills the rows it completes; null
+    /// when it is recorded, and otherwise how the stage stopped. Work that
+    /// failed has said why.
+    HaltKind? settle(Work work, Produced produced) {
+      if (produced.halt case final halt?) {
+        _discardUnrecorded(stage, work.outputs);
+        stageProgress.fail(work.name);
+        return halt;
+      }
+      try {
+        stage.record(
+          work,
+          evidence: produced.evidence,
+          warnings: produced.warnings,
+        );
+        stageProgress.restore({
+          work.name: stage.receipt!.producers[work.name]!,
+        });
+        return null;
+      } on Object catch (error) {
+        stageProgress.fail(work.name);
+        _stageProgressProblem(error);
+        return HaltKind.beforeActing;
+      }
     }
 
     /// Runs [work], a target's input; null when it is recorded, and
@@ -244,39 +259,26 @@ final class ReleaseStageCoordinator {
       final receiptName = work.name;
       final target = release.preparing(work)!;
       try {
-        final result = await targets
+        final produced = await targets
             .moduleFor(target.target)
             .prepare(
-              TargetStageContext(
+              StageRun(
                 unit: unit,
-                tools: tools,
-                git: initialGit,
-                attach: output.report.attach,
                 stage: stage,
                 source: source,
-                progress: stageProgress.handleFor(receiptName),
+                tools: tools,
+                git: initialGit,
+                output: output,
+                rows: stageProgress.handleFor(receiptName),
                 fromSource: fromSource[work.project?.name] ?? const {},
               ),
               work,
             );
         warnings.addAll([
-          for (final warning in result.warnings)
+          for (final warning in produced.warnings)
             _StageWarning(warning, target: target.id),
         ]);
-        if (result case TargetStageFailure(:final diagnostic, :final unit)) {
-          _discardUnrecorded(stage, work.outputs);
-          stageProgress.fail(receiptName);
-          output.problem(diagnostic, unit: unit);
-          return HaltKind.beforeActing;
-        }
-        try {
-          record(work, warnings: result.warnings);
-          return null;
-        } on Object catch (error) {
-          stageProgress.fail(receiptName);
-          _stageProgressProblem(error);
-          return HaltKind.beforeActing;
-        }
+        return settle(work, produced);
       } on Object catch (error) {
         _discardUnrecorded(stage, work.outputs);
         stageProgress.fail(receiptName);
@@ -306,9 +308,9 @@ final class ReleaseStageCoordinator {
         );
         output.report.acted = true;
         stageProgress.begin(receiptName, _producerActivity(step));
-        final LocalProducerOutcome act;
+        final Produced produced;
         try {
-          act = await _actProducer(
+          produced = await _actProducer(
             step,
             unit,
             signing,
@@ -321,19 +323,7 @@ final class ReleaseStageCoordinator {
           _stageOperationProblem(step.summary, error);
           return HaltKind.stoppedPartway;
         }
-        if (!act.ok) {
-          _discardUnrecorded(stage, step.outputs);
-          stageProgress.fail(receiptName);
-          return act.halt ?? HaltKind.stoppedPartway;
-        }
-        try {
-          record(step, evidence: act.evidence);
-          return null;
-        } on Object catch (error) {
-          stageProgress.fail(receiptName);
-          _stageProgressProblem(error);
-          return HaltKind.beforeActing;
-        }
+        return settle(step, produced);
       } on Object catch (error) {
         _discardUnrecorded(stage, step.outputs);
         stageProgress.fail(receiptName);
@@ -803,7 +793,7 @@ final class ReleaseStageCoordinator {
         : null;
   }
 
-  Future<LocalProducerOutcome> _actProducer(
+  Future<Produced> _actProducer(
     Work step,
     ResolvedUnit unit,
     ReleaseSigningContext? signing, {

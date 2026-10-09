@@ -8,7 +8,6 @@ import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
-import '../../output/progress.dart';
 import '../github_release/client.dart';
 import '../target_module.dart';
 import 'client.dart';
@@ -20,23 +19,24 @@ final class HomebrewTargetModule extends TargetModule {
   @override
   PublishTarget get target => PublishTarget.homebrew;
 
+  /// The tap's formula, compared with the staged one; without a stage, with
+  /// one rendered from the digests GitHub reports for the release. A
+  /// formula keeps no history of its own: its read carries its version.
   @override
-  Future<TargetReadinessOutcome> checkReadiness(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-  ) async => const TargetReady();
-
-  @override
-  ProgressActivity get publishActivity =>
-      ProgressActivity(running: 'updating', failed: 'update failed');
-
-  @override
-  Future<Inspection> inspectCandidate(
-    TargetReadContext context,
+  Future<TargetRead> read(
+    TargetReadContext reads,
     ResolvedUnit unit,
     Target target, {
     Stage? stage,
-  }) async {
+  }) async =>
+      (state: await _inspect(reads, unit, target, stage), history: null);
+
+  Future<Inspection> _inspect(
+    TargetReadContext context,
+    ResolvedUnit unit,
+    Target target,
+    Stage? stage,
+  ) async {
     final tools = context.tools;
     if (tools == null) {
       return const Inspection.unknown('no tools to read the tap with');
@@ -88,11 +88,15 @@ final class HomebrewTargetModule extends TargetModule {
       }
       return current.inspection;
     }
-    return destination.inspect(
+    final recovered = await destination.inspect(
       formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
       expectedBytes: current.bytes,
     );
+    // An update rendered from public digests needs no stage.
+    return recovered.authority is HomebrewUpdateAuthority
+        ? recovered.recovering()
+        : recovered;
   }
 
   Future<({Inspection inspection, List<int>? bytes})> _publishedFormula(
@@ -101,7 +105,7 @@ final class HomebrewTargetModule extends TargetModule {
     required ResolvedProject project,
   }) async {
     final repository = context.repository!;
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
+    final tag = unit.tag!;
     final executable = project.executable!;
     final archiveNames = {
       for (final platform in project.binaryPlatforms)
@@ -159,26 +163,38 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  bool recoversWithoutStage(Inspection inspected) =>
-      switch (inspected.authority) {
-        HomebrewUpdateAuthority(:final replacement) => replacement != null,
-        _ => false,
-      };
-
-  @override
-  Diagnostic diagnoseConflict(
+  ({Diagnostic diagnostic, String? next}) explain(
     ResolvedUnit unit,
     Target target,
-    Inspection conflict,
-  ) => Diagnostic(
-    code: 'RK-REL-001',
-    message:
-        '${target.label}: '
-        '${conflict.detail ?? 'the published formula does not match'}',
-    remedy:
-        'restore the formula to the exact release bytes it is meant to '
-        'reference, or advance the source version intentionally; then '
-        'run rk status ${unit.name} again',
+    Inspection state, {
+    TargetActOutcome? acted,
+  }) => (
+    diagnostic: acted == null
+        ? Diagnostic(
+            code: 'RK-REL-001',
+            message:
+                '${target.label}: '
+                '${state.detail ?? 'the published formula does not match'}',
+            remedy:
+                'restore the formula to the exact release bytes it is meant '
+                'to reference, or advance the source version intentionally; '
+                'then run rk status ${unit.name} again',
+          )
+        : switch (state.verdict) {
+            Verdict.unknown => const Diagnostic(
+              code: 'RK-BREW-002',
+              message: 'the tap was updated and could not be read back',
+            ),
+            Verdict.conflict => const Diagnostic(
+              code: 'RK-BREW-003',
+              message: 'the public tap does not hold what rk pushed',
+            ),
+            Verdict.absent || Verdict.exact => const Diagnostic(
+              code: 'RK-BREW-001',
+              message: 'the tap formula was not updated',
+            ),
+          },
+    next: null,
   );
 
   @override
@@ -186,7 +202,7 @@ final class HomebrewTargetModule extends TargetModule {
     TargetReleaseContext context,
     ResolvedUnit unit,
     Target target,
-    Inspection inspected,
+    Inspection before,
   ) async {
     final repository = context.repository;
     if (repository == null) {
@@ -204,7 +220,7 @@ final class HomebrewTargetModule extends TargetModule {
         ),
       );
     }
-    final authority = inspected.authority;
+    final authority = before.authority;
     if (authority is! HomebrewUpdateAuthority) {
       return const TargetActOutcome(
         ok: false,
@@ -254,33 +270,6 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  bool get conflictIsPermanent => false;
-
-  @override
-  ({String code, String message, String? next}) nameUnconfirmed(
-    ResolvedUnit unit,
-    Target target,
-    Inspection state,
-    TargetActOutcome act,
-  ) => switch (state.verdict) {
-    Verdict.unknown => (
-      code: 'RK-BREW-002',
-      message: 'the tap was updated and could not be read back',
-      next: null,
-    ),
-    Verdict.conflict => (
-      code: 'RK-BREW-003',
-      message: 'the public tap does not hold what rk pushed',
-      next: null,
-    ),
-    Verdict.absent || Verdict.exact => (
-      code: 'RK-BREW-001',
-      message: 'the tap formula was not updated',
-      next: null,
-    ),
-  };
-
-  @override
-  Future<TargetStageOutcome> prepare(TargetStageContext context, Work work) =>
-      prepareFormula(context, work);
+  Future<Produced> prepare(StageRun run, Work work) =>
+      prepareFormula(run, work);
 }

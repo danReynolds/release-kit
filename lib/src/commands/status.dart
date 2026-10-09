@@ -240,11 +240,12 @@ class StatusCommand {
     var targets = await Future.wait([
       for (final expectation in expectations)
         () async {
+          final read = await observed.targetReads[expectation.id]!;
           final target = _publicationObservation(
             _observeTarget(
               expectation,
-              await observed.reads[expectation.id]!,
-              await observed.historyReads[expectation.id]!,
+              read.state,
+              read.history,
               stageResult.check,
               artifactProblems,
             ),
@@ -326,11 +327,12 @@ class StatusCommand {
           unit: unit.name,
           diagnostic: inspector.targets
               .moduleFor(releasedSource.target.expectation.target)
-              .diagnoseConflict(
+              .explain(
                 unit,
                 releasedSource.target.expectation,
                 releasedSource.target.inspection,
-              ),
+              )
+              .diagnostic,
           evidence: {
             'released source': releasedSource.releasedCommit,
             'current source': releasedSource.currentCommit,
@@ -626,7 +628,8 @@ class StatusCommand {
     final diagnostic = state.verdict == Verdict.conflict
         ? inspector.targets
               .moduleFor(target.expectation.target)
-              .diagnoseConflict(unit, target.expectation, state)
+              .explain(unit, target.expectation, state)
+              .diagnostic
         : Diagnostic(
             code: 'RK-REL-001',
             message: '$label: ${_condition(state)}',

@@ -18,27 +18,24 @@ final class GithubReleaseTargetModule extends TargetModule {
   @override
   PublishTarget get target => PublishTarget.githubRelease;
 
+  /// The release, compared with the staged digests when there is a stage.
+  /// A release keeps no history of its own: its tag's lane does.
   @override
-  ProgressActivity get publishActivity =>
-      ProgressActivity(running: 'drafting', failed: 'draft failed');
-
-  @override
-  TargetSessionProvider get authentication => const _GithubSession();
-
-  @override
-  Future<TargetReadinessOutcome> checkReadiness(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-  ) async => const TargetReady();
-
-  @override
-  Future<Inspection> inspectCandidate(
-    TargetReadContext context,
+  Future<TargetRead> read(
+    TargetReadContext reads,
     ResolvedUnit unit,
     Target target, {
     Stage? stage,
-  }) async {
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
+  }) async =>
+      (state: await _inspect(reads, unit, target, stage), history: null);
+
+  Future<Inspection> _inspect(
+    TargetReadContext context,
+    ResolvedUnit unit,
+    Target target,
+    Stage? stage,
+  ) async {
+    final tag = unit.tag!;
     final tools = context.tools;
     if (tools == null) {
       return const Inspection.unknown('no tools to read the forge with');
@@ -74,29 +71,68 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   @override
-  Diagnostic diagnoseConflict(
+  ({Diagnostic diagnostic, String? next}) explain(
     ResolvedUnit unit,
     Target target,
-    Inspection conflict,
-  ) => Diagnostic(
-    code: 'RK-REL-001',
-    message:
-        '${target.label}: '
-        '${conflict.detail ?? 'the published release does not match'}',
-    remedy:
-        'compare the published release with the source named by its '
-        'tag. If they are not the intended release, bump the version '
-        'and changelog; rk will not replace conflicting public bytes',
-  );
+    Inspection state, {
+    TargetActOutcome? acted,
+  }) => acted != null
+      ? unconfirmedAct(target, state, acted)
+      : (
+          diagnostic: Diagnostic(
+            code: 'RK-REL-001',
+            message:
+                '${target.label}: '
+                '${state.detail ?? 'the published release does not match'}',
+            remedy:
+                'compare the published release with the source named by its '
+                'tag. If they are not the intended release, bump the version '
+                'and changelog; rk will not replace conflicting public bytes',
+          ),
+          next: null,
+        );
+
+  /// With [signIn], the GitHub CLI's session.
+  @override
+  Future<TargetReadiness> ready(
+    TargetReadinessContext context,
+    ResolvedUnit unit, {
+    required bool signIn,
+  }) async {
+    if (!signIn) return const TargetReadiness();
+    ToolResult status;
+    try {
+      status = await context.tools.run('gh', const [
+        'auth',
+        'status',
+        '--active',
+        '--hostname',
+        'github.com',
+      ], workingDirectory: context.git.root);
+    } on ProcessException {
+      status = ToolResult(exitCode: -1, stdout: '', stderr: '');
+    }
+    if (status.ok) return const TargetReadiness(note: 'signed in');
+    return TargetReadiness.refused(
+      Diagnostic(
+        code: 'RK-GITHUB-010',
+        message: 'the GitHub CLI has no usable session',
+        remedy:
+            'Run gh auth login from a terminal, then re-run rk release '
+            '${unit.name}. Authentication does not prove write permission; '
+            'the exact publish and read-back remain authoritative.',
+      ),
+    );
+  }
 
   @override
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
     Target target,
-    Inspection inspected,
+    Inspection before,
   ) async {
-    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
+    final tag = unit.tag!;
     final repository = context.repository;
     if (repository == null) {
       return TargetActOutcome(
@@ -143,7 +179,9 @@ final class GithubReleaseTargetModule extends TargetModule {
       onProgress: (event, current, total) {
         switch (event) {
           case GithubPublishEvent.drafting:
-            context.progress.begin(publishActivity);
+            context.progress.begin(
+              ProgressActivity(running: 'drafting', failed: 'draft failed'),
+            );
           case GithubPublishEvent.uploading:
             context.progress.begin(
               ProgressActivity(running: 'uploading', failed: 'upload failed'),
@@ -179,48 +217,6 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetStageOutcome> prepare(TargetStageContext context, Work work) =>
-      prepareReleaseNotes(context, work);
-}
-
-final class _GithubSession extends TargetSessionProvider {
-  const _GithubSession();
-
-  @override
-  String get id => 'github-cli';
-
-  @override
-  ProgressActivity get activity => CommonProgressActivities.checkingSignIn;
-
-  @override
-  Future<TargetReadinessOutcome> acquire(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<Target> targets,
-  ) async {
-    ToolResult status;
-    try {
-      status = await context.tools.run('gh', const [
-        'auth',
-        'status',
-        '--active',
-        '--hostname',
-        'github.com',
-      ], workingDirectory: context.git.root);
-    } on ProcessException {
-      status = ToolResult(exitCode: -1, stdout: '', stderr: '');
-    }
-    if (status.ok) return const TargetReady(note: 'signed in');
-    return TargetNotReady(
-      Diagnostic(
-        code: 'RK-GITHUB-010',
-        message: 'the GitHub CLI has no usable session',
-        remedy:
-            'Run gh auth login from a terminal, then re-run rk release '
-            '${unit.name}. Authentication does not prove write permission; '
-            'the exact publish and read-back remain authoritative.',
-      ),
-      unit: unit.name,
-    );
-  }
+  Future<Produced> prepare(StageRun run, Work work) =>
+      prepareReleaseNotes(run, work);
 }

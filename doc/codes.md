@@ -183,7 +183,7 @@ RK-YAML-001 (YAML rk cannot parse) is RK-PKG-001; neither is reused.
 | `RK-PUB-003` | ${project.name}: dart pub publish did not complete | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-005` | the published coordinate could not be confirmed after acting | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-006` | the immutable public archive differs from the staged native archive | `lib/src/targets/pub_dev/module.dart` |
-| `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev/session.dart` |
+| `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-009` | the native Dart configuration redirects pub.dev publication | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev/module.dart`, `lib/src/targets/pub_dev/package_stage.dart` |
@@ -201,7 +201,7 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 | code | says | declared in |
 |---|---|---|
 | `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
-| `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/targets/target_module.dart` |
+| `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/targets/target_module.dart` |
 
 ## RK-RES — The config resolved against the repository
 

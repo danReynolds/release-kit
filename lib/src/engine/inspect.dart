@@ -91,33 +91,29 @@ class Inspector {
     Verdict.exact => false,
   };
 
-  /// What [step]'s destination holds. [stage] is the unit's complete
-  /// stage, if it has one: a target that publishes staged bytes compares
-  /// what is public with them.
-  Future<Inspection> inspect(Step step, ResolvedUnit unit, {Stage? stage}) =>
-      Timings.span('check ${step.id}', () async {
-        return switch (step) {
-          Target() =>
-            targets
-                .moduleFor(step.target)
-                .inspectCandidate(targetReads, unit, step, stage: stage),
-          Requirement() => _prerequisite(step),
-          // Local work is decided where it runs, from the stage.
-          Work() => const Inspection.unknown(
-            'local work, decided when it runs',
-          ),
-        };
-      });
+  /// What [target]'s destination holds, and what its lane is already at.
+  /// [stage] is the unit's complete stage, if it has one: a target that
+  /// publishes staged bytes compares what is public with them.
+  Future<TargetRead> read(Target target, ResolvedUnit unit, {Stage? stage}) =>
+      Timings.span(
+        'check ${target.id}',
+        () => targets
+            .moduleFor(target.target)
+            .read(targetReads, unit, target, stage: stage),
+      );
 
-  /// The newest public version visible in one configured target lane.
-  ///
-  /// This is status metadata, not a substitute for inspecting the exact
-  /// candidate coordinate. The candidate answers whether acting is needed;
-  /// this answers the separate operator question, "what is this lane at?"
-  Future<TargetHistory?> inspectHistory(Target target, ResolvedUnit unit) =>
-      targets
-          .moduleFor(target.target)
-          .inspectHistory(targetReads, unit, target);
+  /// What [step]'s destination holds: a target's, a package another unit
+  /// publishes, or for local work, nothing rk has looked at yet.
+  Future<Inspection> inspect(
+    Step step,
+    ResolvedUnit unit, {
+    Stage? stage,
+  }) async => switch (step) {
+    Target() => (await read(step, unit, stage: stage)).state,
+    Requirement() => await _prerequisite(step),
+    // Local work is decided where it runs, from the stage.
+    Work() => const Inspection.unknown('local work, decided when it runs'),
+  };
 
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Requirement requirement) async {
@@ -144,25 +140,6 @@ class Inspector {
         // and re-running is exactly the fix. A conflict would halt saying this
         // cannot be fixed by re-running, which is the opposite of true.
         : Inspection.absent(detail: '$name $version is not published yet');
-  }
-
-  /// [target]'s public history; a read that throws is unknown, never absent.
-  ///
-  /// Exact-coordinate inspection answers whether this version exists, not
-  /// whether a newer one exists in the same lane: a shallow checkout can
-  /// find `v1.0.0` absent while origin is at `v2.0.0`. Targets decide whether
-  /// their latest-version read is a meaningful guard; Homebrew, whose exact
-  /// inspection reads the formula's version, declines this one.
-  Future<TargetHistory?> readHistory(Target target, ResolvedUnit unit) async {
-    try {
-      return await inspectHistory(target, unit);
-    } on Object catch (error) {
-      return TargetHistory(
-        inspection: Inspection.unknown(
-          'the latest public version could not be read: $error',
-        ),
-      );
-    }
   }
 
   /// What a release learns from its lanes' histories: the names it claims

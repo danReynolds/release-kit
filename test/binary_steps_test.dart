@@ -155,7 +155,7 @@ executables:
         codeId: 'com.example.tool',
       ),
     );
-    expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+    expect(built.ok, isTrue, reason: buffer.toString());
     for (final file in ReleaseAssets.binaryOutputs(project, 'macos-arm64')) {
       expect(File(stage.pathOf(file)).existsSync(), isTrue, reason: file);
     }
@@ -183,11 +183,7 @@ executables:
     final notarized = await chain(
       tools,
     ).notarizeStep(step(StepKind.notarize), project);
-    expect(
-      notarized.ok,
-      isTrue,
-      reason: notarized.problem ?? buffer.toString(),
-    );
+    expect(notarized.ok, isTrue, reason: buffer.toString());
     expect(
       Directory(stage.path)
           .listSync(recursive: true)
@@ -203,7 +199,7 @@ executables:
     final archived = await chain(
       tools,
     ).archiveStep(step(StepKind.archive), project);
-    expect(archived.ok, isTrue, reason: archived.problem);
+    expect(archived.ok, isTrue, reason: buffer.toString());
     expect(
       tools.calls.where((call) => call.startsWith('codesign --force')),
       hasLength(3),
@@ -236,7 +232,7 @@ executables:
           tools,
         ).buildStep(step(StepKind.build), project, signing: signing);
 
-        expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+        expect(built.ok, isTrue, reason: buffer.toString());
         final signed = signatures(tools);
         expect(signed.first, endsWith('/lib/tool/app.aot'));
         expect(signed.last, endsWith('/lib/tool/dartaotruntime'));
@@ -271,7 +267,7 @@ executables:
         ).buildStep(step(StepKind.build), project, signing: signing);
 
         expect(built.ok, isFalse);
-        expect(built.problem, contains('code hash of lib/tool/app.aot'));
+        expect(buffer.toString(), contains('code hash of lib/tool/app.aot'));
         expect(
           signatures(tools).where((call) => call.endsWith('dartaotruntime')),
           isEmpty,
@@ -346,7 +342,7 @@ executables:
         codeId: 'io.github.example.tool',
       ),
     );
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
+    expect(ok.ok, isTrue, reason: buffer.toString());
     final sign = tools.calls.firstWhere(
       (c) => c.startsWith('codesign --force'),
     );
@@ -375,7 +371,7 @@ executables:
           codeId: 'com.example.tool',
         ),
       );
-      expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+      expect(built.ok, isTrue, reason: buffer.toString());
       stage.write(
         '${ReleaseAssets.binaryRoot(project, 'macos-arm64')}/lib/tool/'
         'dartaotruntime.cstemp',
@@ -387,11 +383,7 @@ executables:
       ).notarizeStep(step(StepKind.notarize), project);
 
       // The scripted ditto checks that its payload is the artifact's files.
-      expect(
-        notarized.ok,
-        isTrue,
-        reason: notarized.problem ?? buffer.toString(),
-      );
+      expect(notarized.ok, isTrue, reason: buffer.toString());
     },
   );
 

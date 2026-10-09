@@ -5,6 +5,7 @@ import '../../engine/diagnostic.dart';
 import '../../engine/resolve.dart';
 import '../../engine/source_tree.dart';
 import '../../engine/unit_release.dart';
+import '../../output/output.dart';
 import '../target_module.dart';
 
 /// Stages GitHub's private release body: the changelog entries for the
@@ -13,14 +14,11 @@ import '../target_module.dart';
 ///
 /// It lives here so the module itself remains a readable account of the
 /// public target lifecycle.
-Future<TargetStageOutcome> prepareReleaseNotes(
-  TargetStageContext context,
-  Work work,
-) async {
-  final unit = context.unit;
-  final notes = _releaseNotes(unit, context.source);
+Future<Produced> prepareReleaseNotes(StageRun run, Work work) async {
+  final unit = run.unit;
+  final notes = _releaseNotes(unit, run.source);
   if (notes == null) {
-    return TargetStageFailure(
+    run.output.problem(
       Diagnostic(
         code: 'RK-CHG-003',
         message:
@@ -32,9 +30,10 @@ Future<TargetStageOutcome> prepareReleaseNotes(
             'or this is a bug in rk',
       ),
     );
+    return const Produced.failed(HaltKind.beforeActing);
   }
   if (notes.isEmpty) {
-    return TargetStageFailure(
+    run.output.problem(
       Diagnostic(
         code: 'RK-CHG-004',
         message:
@@ -46,10 +45,11 @@ Future<TargetStageOutcome> prepareReleaseNotes(
             'under each ${unit.version} heading',
       ),
     );
+    return const Produced.failed(HaltKind.beforeActing);
   }
 
-  context.stage.write(work.outputs.single, utf8.encode(notes));
-  return TargetStageSuccess();
+  run.stage.write(work.outputs.single, utf8.encode(notes));
+  return const Produced();
 }
 
 String? _releaseNotes(ResolvedUnit unit, SourceTree source) {

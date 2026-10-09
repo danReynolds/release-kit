@@ -8,11 +8,9 @@ import '../../engine/stage.dart';
 import '../../engine/tools.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
-import '../../output/progress.dart';
 import '../target_module.dart';
 import 'endpoint.dart';
 import 'package_stage.dart';
-import 'session.dart';
 
 final class PubDevTargetModule extends TargetModule {
   const PubDevTargetModule({this.endpoint = const PubEndpoint.pubDev()});
@@ -22,22 +20,19 @@ final class PubDevTargetModule extends TargetModule {
   @override
   PublishTarget get target => PublishTarget.pubDev;
 
-  @override
-  ProgressActivity get publishActivity =>
-      ProgressActivity(running: 'publishing', failed: 'publish failed');
-
-  @override
-  TargetSessionProvider get authentication => PubDevSession(endpoint: endpoint);
-
   /// A version on pub.dev is published: what is there is what its consumers
-  /// get, whatever bytes a stage holds now.
+  /// get, whatever bytes a stage holds now. The lane's history comes from
+  /// the same package lookup, which the registry reader caches.
   @override
-  Future<Inspection> inspectCandidate(
-    TargetReadContext context,
+  Future<TargetRead> read(
+    TargetReadContext reads,
     ResolvedUnit unit,
     Target target, {
     Stage? stage,
-  }) => _inspect(context, target);
+  }) async {
+    final history = readHistory(() => _history(reads, target));
+    return (state: await _inspect(reads, target), history: await history);
+  }
 
   /// After rk's own upload, the archive pub.dev reports must be the one it
   /// staged and uploaded: [stage]'s.
@@ -68,10 +63,8 @@ final class PubDevTargetModule extends TargetModule {
     );
   }
 
-  @override
-  Future<TargetHistory> inspectHistory(
+  Future<TargetHistory> _history(
     TargetReadContext context,
-    ResolvedUnit unit,
     Target target,
   ) async {
     final reader = context.registry;
@@ -174,25 +167,54 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  Diagnostic diagnoseConflict(
+  ({Diagnostic diagnostic, String? next}) explain(
     ResolvedUnit unit,
     Target target,
-    Inspection conflict,
-  ) => Diagnostic(
-    code: 'RK-REL-001',
-    message:
-        '${target.label}: '
-        '${conflict.detail ?? 'the published package does not match'}',
-    remedy:
-        'pub.dev versions are immutable. Bump the version and '
-        'changelog, then stage the new release',
-  );
+    Inspection state, {
+    TargetActOutcome? acted,
+  }) => switch (acted) {
+    null => (
+      diagnostic: Diagnostic(
+        code: 'RK-REL-001',
+        message:
+            '${target.label}: '
+            '${state.detail ?? 'the published package does not match'}',
+        remedy:
+            'pub.dev versions are immutable. Bump the version and '
+            'changelog, then stage the new release',
+      ),
+      next: null,
+    ),
+    _ when state.verdict == Verdict.conflict => (
+      diagnostic: Diagnostic(
+        code: 'RK-PUB-006',
+        message:
+            '${acted.coordinate ?? target.project?.name}: '
+            '${state.detail ?? 'the public archive differs'}',
+      ),
+      next: null,
+    ),
+    _ => (
+      diagnostic: Diagnostic(
+        code: 'RK-PUB-005',
+        message:
+            '${acted.coordinate ?? target.project?.name}: the exact public '
+            'archive could not be confirmed',
+      ),
+      next: 'rk status ${unit.name}',
+    ),
+  };
 
+  /// Before staging, the native configuration must publish where this
+  /// target does; with [signIn], after the yes, Pub must hold a token or a
+  /// session for it.
   @override
-  Future<TargetReadinessOutcome> checkReadiness(
+  Future<TargetReadiness> ready(
     TargetReadinessContext context,
-    ResolvedUnit unit,
-  ) async {
+    ResolvedUnit unit, {
+    required bool signIn,
+  }) async {
+    if (signIn) return _signIn(context, unit);
     final redirected = unit.projects
         .where((project) => project.publish.contains(PublishTarget.pubDev))
         .any(
@@ -200,8 +222,8 @@ final class PubDevTargetModule extends TargetModule {
             project.pubspec.effectivePublishDestination(context.environment),
           ),
         );
-    if (!redirected) return const TargetReady();
-    return TargetNotReady(
+    if (!redirected) return const TargetReadiness();
+    return TargetReadiness.refused(
       Diagnostic(
         code: 'RK-PUB-009',
         message: endpoint.isPubDev
@@ -215,7 +237,6 @@ final class PubDevTargetModule extends TargetModule {
             : 'Match native PUB_HOSTED_URL to the explicit endpoint supplied '
                   'by the command composition.',
       ),
-      unit: unit.name,
     );
   }
 
@@ -291,16 +312,16 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  Future<Inspection> confirmPublication(
+  Future<Inspection> confirm(
     TargetReleaseContext context,
     ResolvedUnit unit,
     Target target,
-    TargetActOutcome act,
+    TargetActOutcome acted,
   ) async {
     // pub.dev can take minutes to list an upload it accepted. One it refused,
     // or that never arrived, is not worth that wait: a lost response shows
     // within a few reads.
-    final deadline = act.ok
+    final deadline = acted.ok
         ? context.confirmDeadline
         : context.confirmInterval * 2;
     var waited = Duration.zero;
@@ -329,30 +350,134 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  ({String code, String message, String? next}) nameUnconfirmed(
-    ResolvedUnit unit,
-    Target target,
-    Inspection state,
-    TargetActOutcome act,
-  ) => state.verdict == Verdict.conflict
-      ? (
-          code: 'RK-PUB-006',
-          message:
-              '${act.coordinate ?? target.project?.name}: '
-              '${state.detail ?? 'the public archive differs'}',
-          next: null,
-        )
-      : (
-          code: 'RK-PUB-005',
-          message:
-              '${act.coordinate ?? target.project?.name}: the exact public '
-              'archive could not be confirmed',
-          next: 'rk status ${unit.name}',
-        );
+  Future<Produced> prepare(StageRun run, Work work) =>
+      preparePubArchive(run, work);
 
-  @override
-  Future<TargetStageOutcome> prepare(TargetStageContext context, Work work) =>
-      preparePubArchive(context, work);
+  /// Pub's own session for this endpoint: a token, a stored session it
+  /// refreshes quietly, or `dart pub login` at an attached terminal.
+  Future<TargetReadiness> _signIn(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+  ) async {
+    // An environment-backed token needs no second durable credential.
+    if (await _tokenConfigured(context)) {
+      return const TargetReadiness(note: 'token configured');
+    }
+    if (!endpoint.isPubDev) {
+      return TargetReadiness.refused(
+        Diagnostic(
+          code: 'RK-PUB-007',
+          message: 'the composed local registry has no native Pub token',
+          remedy:
+              'Register its token using dart pub token add ${endpoint.origin}.',
+        ),
+      );
+    }
+    final runInteractive = context.runInteractive;
+    final stored = _sessionStored(context) == true;
+    if (runInteractive == null && !stored) return _terminalRequired(unit);
+    // A stored session is checked quietly, so a current or refreshable one
+    // does not surface provider chatter. Without one, pub opens a browser
+    // login and waits on it, which only an attached terminal can answer.
+    if (stored) {
+      try {
+        final quiet = await context.tools.run(
+          'dart',
+          const ['pub', 'login'],
+          workingDirectory: context.git.root,
+          timeout: const Duration(seconds: 20),
+        );
+        if (quiet.exitCode == 0) {
+          return const TargetReadiness(note: 'signed in');
+        }
+      } on ProcessException {
+        // The attached attempt below reports launcher failure to the operator.
+      }
+    }
+
+    if (runInteractive == null) return _terminalRequired(unit);
+
+    int code;
+    try {
+      code = await runInteractive('dart', const [
+        'pub',
+        'login',
+      ], workingDirectory: context.git.root);
+    } on ProcessException {
+      code = -1;
+    }
+    if (code == 0) return const TargetReadiness(note: 'signed in');
+    return TargetReadiness.refused(
+      Diagnostic(
+        code: 'RK-PUB-007',
+        message: 'dart pub login did not complete',
+        remedy:
+            'Run dart pub login from a terminal, then re-run rk release '
+            '${unit.name}. A successful login confirms a current session, '
+            'not permission to publish every package.',
+      ),
+    );
+  }
+
+  static TargetReadiness _terminalRequired(ResolvedUnit unit) =>
+      TargetReadiness.refused(
+        Diagnostic(
+          code: 'RK-PUB-007',
+          message: 'dart pub login requires an attached terminal',
+          remedy:
+              'Run dart pub login from a terminal, then re-run rk release '
+              '${unit.name}. Machine and redirected releases require an '
+              'existing token or session.',
+        ),
+      );
+
+  /// Whether Pub already has a token for this exact composed endpoint.
+  Future<bool> _tokenConfigured(TargetReadinessContext context) async {
+    try {
+      final tokens = await context.tools.run('dart', const [
+        'pub',
+        'token',
+        'list',
+      ], workingDirectory: context.git.root);
+      if (!tokens.ok) return false;
+      return tokens.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .any(endpoint.matches);
+    } on ProcessException {
+      return false;
+    }
+  }
+
+  /// Whether this machine already holds a pub session, or null when rk
+  /// cannot tell where one would be kept.
+  static bool? _sessionStored(TargetReadinessContext context) {
+    final credentials = _pubCredentialsFile(context.environment);
+    if (credentials == null) return null;
+    try {
+      return credentials.existsSync();
+    } on FileSystemException {
+      return null;
+    }
+  }
+}
+
+/// Where the pub client keeps the session `dart pub login` writes.
+File? _pubCredentialsFile(Map<String, String> environment) {
+  const name = 'dart/pub-credentials.json';
+  if (Platform.isWindows) {
+    final appData = environment['APPDATA'];
+    return appData == null ? null : File('$appData/$name');
+  }
+  final home = environment['HOME'];
+  if (Platform.isMacOS) {
+    return home == null
+        ? null
+        : File('$home/Library/Application Support/$name');
+  }
+  final config =
+      environment['XDG_CONFIG_HOME'] ?? (home == null ? null : '$home/.config');
+  return config == null ? null : File('$config/$name');
 }
 
 String? _repositoryIdentity(String? value) {

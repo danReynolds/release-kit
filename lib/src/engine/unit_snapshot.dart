@@ -63,12 +63,16 @@ final class UnitSnapshot {
       stageCheck: check,
       stageError: error,
     );
-    snapshot.reads = {
-      for (final step in release.steps) step.id: snapshot._read(step),
-    };
-    snapshot.historyReads = {
+    snapshot.targetReads = {
       for (final target in release.targets)
-        target.id: inspector.readHistory(target, unit),
+        target.id: snapshot._readTarget(target),
+    };
+    snapshot.reads = {
+      for (final step in release.steps)
+        step.id: switch (step) {
+          Target() => snapshot.targetReads[step.id]!.then((read) => read.state),
+          _ => snapshot._read(step),
+        },
     };
     return snapshot;
   }
@@ -92,9 +96,9 @@ final class UnitSnapshot {
   /// Each step's read as it arrives, by step id.
   late final Map<String, Future<Inspection>> reads;
 
-  /// Each public target's history as it arrives, by step id. Null history
-  /// means the target keeps none: its candidate read carries its version.
-  late final Map<String, Future<TargetHistory?>> historyReads;
+  /// Each public target's read as it arrives, with its lane's history, by
+  /// step id.
+  late final Map<String, Future<TargetRead>> targetReads;
 
   /// What every step's read found, by step id. Set by [settle].
   late final Map<String, Inspection> states;
@@ -114,9 +118,12 @@ final class UnitSnapshot {
     states = Map.unmodifiable({
       for (final (index, step) in steps.indexed) step.id: read[index],
     });
-    final latest = await Future.wait([
-      for (final target in targets) historyReads[target.id]!,
-    ]);
+    final latest = [
+      for (final read in await Future.wait([
+        for (final target in targets) targetReads[target.id]!,
+      ]))
+        read.history,
+    ];
     histories = Map.unmodifiable({
       for (final (index, target) in targets.indexed) target.id: latest[index],
     });
@@ -137,13 +144,26 @@ final class UnitSnapshot {
           : const Inspection.unknown('local work, decided when it runs');
     }
     try {
-      return await inspector.inspect(
-        step,
+      return await inspector.inspect(step, unit);
+    } on Object catch (error) {
+      return Inspection.unknown('the target read failed: $error');
+    }
+  }
+
+  /// [target]'s read, against the stage when it is complete. One that
+  /// throws is unknown, never absent.
+  Future<TargetRead> _readTarget(Target target) async {
+    try {
+      return await inspector.read(
+        target,
         unit,
         stage: stageReusable ? stage : null,
       );
     } on Object catch (error) {
-      return Inspection.unknown('the target read failed: $error');
+      return (
+        state: Inspection.unknown('the target read failed: $error'),
+        history: null,
+      );
     }
   }
 
@@ -211,10 +231,7 @@ final class UnitSnapshot {
       remaining.isNotEmpty &&
       remaining.every((target) {
         final state = states[target.id]!;
-        return state.isAbsent &&
-            inspector.targets
-                .moduleFor(target.target)
-                .recoversWithoutStage(state);
+        return state.isAbsent && state.recoversWithoutStage;
       });
 
   /// Whether a partial release needs the exact stage it no longer has, when
