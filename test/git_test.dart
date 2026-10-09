@@ -10,11 +10,8 @@ import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
 
-/// `GitState.read` against real repositories.
-///
-/// It had no test: `status_test.dart` fakes the whole object, so the parsing
-/// of `git status --porcelain` — which decides whether rk will release at all
-/// — was never exercised by anything.
+/// Git as rk reads it: a repository's state and committed source, against
+/// real repositories, and origin's release tags, through scripted git.
 void main() {
   group('in a real repository', () {
     late Directory root;

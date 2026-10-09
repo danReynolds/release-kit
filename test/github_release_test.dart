@@ -9,9 +9,9 @@ import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
 
-/// The forge reader, whose whole inspect arm a mutation pass found protected
-/// by nothing: a draft could read as published, a missing asset as exact, and
-/// any gh failure as absent, and the suite stayed green.
+/// The GitHub Release reader, and the private draft rk fills before it
+/// publishes: a draft is never published, a missing or extra asset is a
+/// conflict, and a gh failure is never absent.
 void main() {
   Future<Inspection> inspect(
     List<({int code, String out, String err})> answers, {

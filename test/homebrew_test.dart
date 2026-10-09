@@ -399,10 +399,6 @@ binary_platforms = ["linux-x64"]
     test(
       'a first-ever formula is written, staged, committed, and pushed',
       () async {
-        // Two bugs lived here at once: the formula was written with `cat` and
-        // no stdin — so the contents parameter was never used and the file
-        // went out empty — and `git commit -a` never stages a new file, so
-        // the empty write then read as "already current" and nothing pushed.
         final (tapUpdate, tools) = tap();
         final contents = render();
         final outcome = await tapUpdate.update(

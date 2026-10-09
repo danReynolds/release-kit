@@ -325,9 +325,8 @@ executables:
   });
 
   test('the derived identifier signs, not the project name', () async {
-    // The published 0.1.0 binary carries a reverse-DNS identifier; signing
-    // with the project-name default would produce a different designated
-    // requirement and fail continuity only after the tag was public.
+    // A published binary can carry a reverse-DNS identifier; signing with
+    // the project name instead would make another designated requirement.
     const published =
         'designated => identifier "io.github.example.tool" '
         'and certificate leaf[subject.OU] = "TEAM123456"';
@@ -392,9 +391,9 @@ executables:
   );
 
   test('an accepted submission is notarized without its log', () async {
-    // Apple's log is evidence, not an output: fetching it after an
-    // acceptance once failed the step on a transient error, and the run
-    // after it notarized the same bytes again.
+    // Apple's log is evidence, not an output: a transient failure to fetch
+    // it must not fail an accepted submission, or the next run notarizes the
+    // same bytes again.
     final tools = BundleRecordingTools(
       answers: (key) {
         if (key.startsWith('xcrun notarytool submit')) {

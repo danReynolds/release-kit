@@ -11,12 +11,6 @@ import 'package:test/test.dart';
 
 /// The pub.dev client, against a real server rather than a fake.
 ///
-/// Every other test that touches verdicts goes through a FakeRegistry that
-/// hand-writes them, so the contract was asserted by the double and never by
-/// the code that ships. A mutation proved it: changing the real `inspect` to
-/// answer `absent` where it should answer `unknown` broke nothing in the whole
-/// suite. This file exists so that mutation fails.
-///
 /// The rule being defended is the cardinal one. `absent` may be concluded only
 /// from an authenticated negative, because `absent` is what lets rk publish —
 /// and a timeout, a captive portal, or a 500 answered as `absent` is rk

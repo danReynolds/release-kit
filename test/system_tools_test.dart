@@ -192,9 +192,8 @@ and the repository exists.
 
     // The kill reaches `sh`, not the `sleep` it backgrounded, and that
     // orphan still holds the write end of the pipes. Joining them
-    // unconditionally waits on a process rk never knew about — verified to
-    // hang indefinitely before this. A bound that can be outlived is not a
-    // bound.
+    // unconditionally waits on a process rk never knew about. A bound that
+    // can be outlived is not a bound.
     final result = await const SystemTools(timeout: Duration(milliseconds: 300))
         .run('sh', const ['-c', 'sleep 2 & sleep 2'])
         .timeout(
