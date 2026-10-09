@@ -184,14 +184,12 @@ class ReleaseCommand {
   Future<int> _runUnits({String? only}) async {
     // One repository fact for the whole invocation, including ordering or
     // scope refusals that happen before the first unit pipeline starts.
-    output.report.repository(
-      name: tree.description.split('/').last,
-      branch: git.branch,
+    output.repository(
+      tree.description.split('/').last,
+      git: git,
       uncommitted: git.uncommitted.length,
-      head: git.hasCommit ? git.head : null,
-      remote: git.originUrl,
-      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
-      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
+      source: true,
+      show: false,
     );
     if (only != null) {
       final named = resolution.units
@@ -473,7 +471,7 @@ class ReleaseCommand {
     await read.settle();
     for (final step in read.release.steps) {
       final state = read.states[step.id]!;
-      output.record(
+      output.report.step(
         step,
         verdict: state.verdict,
         detail: state.detail,
@@ -617,7 +615,7 @@ class ReleaseCommand {
     if (!stageOnly && !localOnly) {
       return (ok: true, said: false, readyToPublish: false);
     }
-    output.record(
+    output.report.step(
       release.barrier,
       verdict: Verdict.exact,
       detail: 'staged and validated',

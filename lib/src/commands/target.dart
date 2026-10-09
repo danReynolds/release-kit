@@ -45,7 +45,9 @@ Example: rk target pub.dev
   }
 
   int _list() {
-    output.report.releaseChoices(_references.values.map((item) => item.json));
+    output.report.section('release_choices', [
+      for (final item in _references.values) item.json,
+    ]);
     output.heading('Release choices supported by rk $rkVersion');
     output.blank();
     output.say('This lists everything the installed rk can create or publish.');
@@ -79,7 +81,7 @@ Example: rk target pub.dev
 
   int _detail(_Reference reference) {
     final choice = reference.choice;
-    output.report.releaseChoices([reference.json]);
+    output.report.section('release_choices', [reference.json]);
     output.heading('${choice.id} — ${reference.title}');
     output.blank();
     output.say(reference.description);

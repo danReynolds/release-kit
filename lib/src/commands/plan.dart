@@ -44,14 +44,7 @@ final class PlanCommand {
       problems: diagnostics,
     );
     if (derived == null || diagnostics.isNotEmpty) {
-      output.repository(
-        name: repositoryName,
-        branch: git.branch,
-        commit: git.hasCommit ? git.shortHead : null,
-        uncommitted: uncommitted,
-        head: git.hasCommit ? git.head : null,
-        remote: git.originUrl,
-      );
+      output.repository(repositoryName, git: git, uncommitted: uncommitted);
       output.blank();
       output.problems(diagnostics.found);
       return ExitCodes.refused;
@@ -60,14 +53,13 @@ final class PlanCommand {
       for (final release in derived)
         if (only == null || release.unit.name == only) release,
     ];
-    output.report.repository(
-      name: repositoryName,
-      branch: git.branch,
+    output.repository(
+      repositoryName,
+      git: git,
       uncommitted: uncommitted,
-      head: git.hasCommit ? git.head : null,
-      remote: git.originUrl,
+      show: false,
     );
-    output.report.releasePlan(planJson(plan));
+    output.report.section('plan', planJson(plan));
     ReleasePlanRenderer(output).render(
       plan,
       repository: repositoryName,

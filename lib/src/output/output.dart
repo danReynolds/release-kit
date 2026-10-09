@@ -3,12 +3,22 @@ import 'dart:io';
 import 'dart:math' show max, min;
 
 import '../engine/diagnostic.dart';
-import '../engine/unit_release.dart';
+import '../engine/git.dart';
 import 'report.dart';
 import 'timeline.dart';
 import '../engine/verdict.dart';
 
 part 'board.dart';
+
+/// What a checkout is at, in one phrase: `main@abc1234 · 2 uncommitted`.
+/// The commit rides beside the branch for a reader; a document keeps them
+/// apart, because `branch` promises a branch name.
+String sourceIdentity(String? branch, String? commit, int? uncommitted) => [
+  if (branch != null && commit != null) '$branch@$commit',
+  if (branch != null && commit == null) branch,
+  if (branch == null && commit != null) commit,
+  if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
+].join(' · ');
 
 /// Makes untrusted text inert on a terminal while leaving report evidence raw.
 ///
@@ -324,37 +334,34 @@ class Output {
   }
 
   /// The repository line, recorded in parts so a caller is not left parsing
-  /// "keybay · main · 2 uncommitted" back into fields.
-  void repository({
-    required String name,
-    String? branch,
-    String? commit,
+  /// "keybay · main · 2 uncommitted" back into fields. [git] is what was read
+  /// of it, when anything was, and each command counts [uncommitted] its own
+  /// way. With [source], the record says how a stage would be named: by its
+  /// commit, or not at all yet. [show] false records it without a heading.
+  void repository(
+    String name, {
+    GitState? git,
     int? uncommitted,
-    String? head,
-    String? remote,
-    String? sourceBinding,
-    String? sourceComparison,
+    bool source = false,
+    bool show = true,
   }) {
+    final commit = git != null && git.hasCommit;
     report.repository(
       name: name,
-      branch: branch,
+      branch: git?.branch,
       uncommitted: uncommitted,
-      head: head,
-      remote: remote,
-      sourceBinding: sourceBinding,
-      sourceComparison: sourceComparison,
+      head: commit ? git.head : null,
+      remote: git?.originUrl,
+      sourceBinding: source ? (commit ? 'gitCommit' : 'unbound') : null,
+      sourceComparison: source ? (commit ? 'exact' : 'unavailable') : null,
     );
-    heading(
-      [
-        name,
-        // The commit rides beside the branch for a reader; the document keeps
-        // them apart, because `branch` promises a branch name.
-        if (branch != null && commit != null) '$branch@$commit',
-        if (branch != null && commit == null) branch,
-        if (branch == null && commit != null) commit,
-        if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
-      ].join(' · '),
+    if (!show) return;
+    final identity = sourceIdentity(
+      git?.branch,
+      commit ? git.shortHead : null,
+      uncommitted,
     );
+    heading(identity.isEmpty ? name : '$name · $identity');
   }
 
   /// Opens a unit. Steps printed after this belong to it.
@@ -383,33 +390,6 @@ class Output {
       noteRole: VisualRole.secondary,
     );
   }
-
-  /// Records what a run found at one step, for the document only.
-  ///
-  /// Taking the [Step] rather than its parts is what keeps a step's id,
-  /// kind and target in one place. A person reads the boards and lines that
-  /// say the same thing more briefly; a caller keying on step ids wants
-  /// every step.
-  void record(
-    Step step, {
-    Verdict verdict = Verdict.unknown,
-    String? detail,
-    Map<String, String> evidence = const {},
-    String? action,
-  }) => report.step(
-    id: step.id,
-    unit: step.unit,
-    summary: step.summary,
-    verdict: verdict.name,
-    kind: step.kind.name,
-    target: step.target?.wireName,
-    detail: detail,
-    evidence: evidence,
-    permanent: step.isPermanent,
-    public: step.isPublic,
-    needs: [for (final need in step.needs) need.id],
-    action: action,
-  );
 
   /// Ends the run's rendering.
   ///
@@ -776,7 +756,7 @@ class Output {
     }
     flushWarnings();
     final kind = HaltKind.of(stop, changed: report.publicChanged);
-    report.halt(kind.name, kind.sentence, helps: kind.rerunHelps);
+    report.halt(kind);
     blank();
     say(kind.sentence);
     blank();

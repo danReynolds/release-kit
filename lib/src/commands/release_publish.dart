@@ -441,7 +441,7 @@ final class Publication {
     // The target is read again right before its act: another run or person
     // may have published it since the snapshot.
     var state = await inspector.inspect(target, unit, stage: staged);
-    output.record(
+    output.report.step(
       target,
       verdict: state.verdict,
       detail: state.detail,
@@ -451,7 +451,7 @@ final class Publication {
     if (state.isExact) {
       actions[target] = ReleaseAction.alreadyPublished;
       row.complete('already published', mark: Mark.satisfied);
-      output.record(
+      output.report.step(
         target,
         verdict: state.verdict,
         action: actions[target]!.wire,
@@ -549,7 +549,7 @@ final class Publication {
     actions[target] = state.isExact
         ? ReleaseAction.completed
         : ReleaseAction.failed;
-    output.record(
+    output.report.step(
       target,
       verdict: state.verdict,
       detail: state.detail,

@@ -278,7 +278,7 @@ Future<int> _run(
     final states = [
       for (final project in projects) await manager.inspect(project),
     ];
-    output.report.installations({
+    output.report.section('installations', {
       'root': root,
       'managed_bin': store.bin,
       'projects': states.map((s) => s.toJson()).toList(),

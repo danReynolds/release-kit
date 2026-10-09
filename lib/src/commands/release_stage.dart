@@ -348,7 +348,7 @@ final class StageRunner {
       return false;
     }
 
-    output.record(
+    output.report.step(
       release.barrier,
       verdict: Verdict.exact,
       detail: 'staged and validated',

@@ -1,7 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import '../engine/canonical_json.dart';
 import '../engine/diagnostic.dart';
+import '../engine/unit_release.dart';
+import '../engine/verdict.dart';
+import 'output.dart' show HaltKind;
 
 /// The machine surface: what a run found, keyed by step id.
 ///
@@ -33,12 +37,7 @@ class Report {
   final List<Map<String, Object?>> _warnings = [];
   final List<String> _next = [];
   Map<String, Object?>? _repository;
-  Map<String, Object?>? _init;
-  Map<String, Object?>? _cleanup;
-  Map<String, Object?>? _plan;
-  Map<String, Object?>? _installations;
-  void installations(Map<String, Object?> value) => _installations = value;
-  List<Map<String, Object?>>? _releaseChoices;
+  final Map<String, Object> _sections = {};
   Map<String, Object?>? _halt;
 
   /// Whether re-running would move the release forward.
@@ -116,22 +115,16 @@ class Report {
     () => {'name': name, 'steps': <Map<String, Object?>>[]},
   );
 
-  /// Records a step under its own unit, keyed by [id].
+  /// Records what a run found at [step], under its own unit.
+  ///
   /// [verdict] is always written, and defaults to `unknown` rather than to
   /// nothing. An omitted key invites a caller to read "no verdict" as "nothing
   /// is there", which is the one collapse rk must never make — `unknown` says
   /// rk could not tell, and that is a different instruction to a caller than
   /// `absent`.
-  void step({
-    required String id,
-    required String unit,
-    required String summary,
-    String verdict = 'unknown',
-    String? kind,
-    String? target,
-    bool? permanent,
-    bool? public,
-    List<String> needs = const [],
+  void step(
+    Step step, {
+    Verdict verdict = Verdict.unknown,
     String? detail,
     Map<String, String> evidence = const {},
     String? action,
@@ -140,59 +133,33 @@ class Report {
     // twice — once at inspection, once after the act — gave a caller two
     // entries for one id in a document whose contract is "keyed on step id",
     // with the stale one first. The act's answer supersedes the inspection's.
-    final steps = _entry(unit)['steps'] as List<Map<String, Object?>>;
-    steps.removeWhere((s) => s['id'] == id);
+    final steps = _entry(step.unit)['steps'] as List<Map<String, Object?>>;
+    steps.removeWhere((s) => s['id'] == step.id);
     steps.add({
-      'id': id,
-      if (kind != null) 'kind': kind,
-      if (target != null) 'target': target,
-      'summary': summary,
-      'verdict': verdict,
-      if (permanent != null) 'permanent': permanent,
-      if (public != null) 'public': public,
-      if (needs.isNotEmpty) 'needs': needs,
-      if (detail != null) 'detail': detail,
+      'id': step.id,
+      'kind': step.kind.name,
+      'target': ?step.target?.wireName,
+      'summary': step.summary,
+      'verdict': verdict.name,
+      'permanent': step.isPermanent,
+      'public': step.isPublic,
+      if (step.needs.isNotEmpty)
+        'needs': [for (final need in step.needs) need.id],
+      'detail': ?detail,
       if (evidence.isNotEmpty) 'evidence': evidence,
-      if (action != null) 'action': action,
+      'action': ?action,
     });
   }
 
-  /// Records one target-oriented status observation without introducing a
-  /// second readiness state machine. The target carries the same four-way
-  /// verdict as its step; artifact status describes only the local
-  /// stage evidence for each filename.
-  void target({
-    required String unit,
-    required String id,
-    required String kind,
-    required String label,
-    required String coordinate,
-    required String targetVersion,
-    required String verdict,
-    required bool currentKnown,
-    String? currentVersion,
-    String? detail,
-    String? uses,
-    required List<Map<String, Object?>> artifacts,
-  }) {
-    final entry = _entry(unit);
+  /// Records one target-oriented status observation, [entry], under [unit],
+  /// in place of any recorded under its id. It carries the same four-way
+  /// verdict as its step.
+  void target(String unit, Map<String, Object?> entry) {
     final targets =
-        entry.putIfAbsent('targets', () => <Map<String, Object?>>[])
+        _entry(unit).putIfAbsent('targets', () => <Map<String, Object?>>[])
             as List<Map<String, Object?>>;
-    targets.removeWhere((target) => target['id'] == id);
-    targets.add({
-      'id': id,
-      'kind': kind,
-      'label': label,
-      'coordinate': coordinate,
-      'current_known': currentKnown,
-      'current_version': currentVersion,
-      'target_version': targetVersion,
-      'verdict': verdict,
-      if (detail != null) 'detail': detail,
-      if (uses != null) 'uses': uses,
-      'artifacts': artifacts,
-    });
+    targets.removeWhere((target) => target['id'] == entry['id']);
+    targets.add(entry);
   }
 
   void problem(Diagnostic diagnostic, {String? unit, String? target}) {
@@ -275,48 +242,90 @@ class Report {
 
   void attach(String name, String contents) => attachments[name] = contents;
 
-  void initPlan(Map<String, Object?> plan) => _init = plan;
-
-  /// The source-derived release graph reported by `rk plan`.
-  ///
-  /// It is deliberately separate from steps and targets: those carry runtime
-  /// verdicts, while a plan makes no destination observation at all.
-  void releasePlan(Map<String, Object?> plan) => _plan = plan;
-
-  /// The repository-local stage inventory an explicit clean observed and how
-  /// much of that frozen set this invocation removed.
-  void cleanup({
-    required String root,
-    required String path,
-    required int found,
-    required int removed,
-  }) {
-    _cleanup = {'root': root, 'path': path, 'found': found, 'removed': removed};
+  /// What one command reports beside its units, by [key]: `init`'s
+  /// proposal, what `clean` found and removed, `plan`'s release graph,
+  /// `use`'s installations, or `target`'s release choices. The document
+  /// keeps them in that order, whichever came first.
+  void section(String key, Object value) {
+    assert(_sectionOrder.contains(key), 'no report section $key');
+    _sections[key] = value;
   }
 
-  /// Static reference entries reported by `rk target`.
-  ///
-  /// They deliberately carry no selected or available state: this command
-  /// describes the installed binary and does not inspect a repository.
-  void releaseChoices(Iterable<Map<String, Object?>> choices) {
-    _releaseChoices = List.unmodifiable(choices);
-  }
+  static const _sectionOrder = [
+    'init',
+    'cleanup',
+    'plan',
+    'installations',
+    'release_choices',
+  ];
 
   /// Whether a halt sentence has been recorded, so a generic late halt can
   /// yield to a specific one already diagnosed.
   bool get halted => _halt != null;
 
-  /// Records a halt. [helps] only ever narrows: the worst answer of a run
-  /// is the answer for the run. Re-running is safe by construction — the
-  /// same inspection precedes every act — so the document does not carry a
-  /// field that could only ever say so.
-  void halt(String kind, String sentence, {required bool helps}) {
-    _halt = {'kind': kind, 'sentence': sentence};
-    if (!helps) rerunHelps = false;
+  /// Records a halt. Re-running only ever stops helping: the worst answer
+  /// of a run is the answer for the run. Re-running is safe by construction
+  /// — the same inspection precedes every act — so the document does not
+  /// carry a field that could only ever say so.
+  void halt(HaltKind kind) {
+    _halt = {'kind': kind.name, 'sentence': kind.sentence};
+    if (!kind.rerunHelps) rerunHelps = false;
+  }
+
+  /// Whether a run that did not end cleanly leaves its evidence behind.
+  ///
+  /// `rk plan` is an unusually strict read-only surface: even an rk bug must
+  /// not make its "nothing changed" contract false. Other commands keep a
+  /// crash because its stack is otherwise lost, and an ordinary failure only
+  /// after the run began acting: a refusal before that has said everything
+  /// it knows, and copying it would fill `.rk/diagnosis` with typos.
+  bool keepsDiagnosis({required bool crashed}) =>
+      command != 'plan' && (acted || crashed);
+
+  /// Writes this document, its attachments and any [crash] under
+  /// `<root>/.rk/diagnosis/<stamp>/`, and says where.
+  ///
+  /// rk never reads it back. That is what keeps it honest: nothing rk
+  /// decides later can depend on a file a person is free to delete, so the
+  /// directory never becomes the state store rk does not have.
+  String writeDiagnosis(
+    String root, {
+    required String stamp,
+    required int exit,
+    String? crash,
+  }) {
+    final at = '$root/.rk/diagnosis/$stamp';
+    for (final MapEntry(key: name, value: contents) in {
+      'run.json': encode(exit: exit),
+      ...attachments,
+      'crash.txt': ?crash,
+    }.entries) {
+      File('$at/$name')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync(contents);
+    }
+    return diagnosis = at;
   }
 
   /// The document, with [exit] folded in so a caller that captured only stdout
   /// still knows how the process ended.
-  String encode({required int exit}) =>
-      '${const JsonEncoder.withIndent('  ').convert({'rk': schema, 'command': command, 'observed_at': DateTime.now().toUtc().toIso8601String(), 'exit': exit, 'rerun_helps': rerunHelps, if (_repository != null) 'repository': _repository, if (_init != null) 'init': _init, if (_cleanup != null) 'cleanup': _cleanup, if (_plan != null) 'plan': _plan, if (_installations != null) 'installations': _installations, if (_releaseChoices != null) 'release_choices': _releaseChoices, 'units': _units.values.toList(), 'problems': _problems, 'warnings': _warnings, 'next': _next, if (attachments.isNotEmpty) 'attachments': attachments, if (diagnosis != null) 'diagnosis': diagnosis, if (_halt != null) 'halt': _halt})}\n';
+  String encode({required int exit}) {
+    final document = {
+      'rk': schema,
+      'command': command,
+      'observed_at': DateTime.now().toUtc().toIso8601String(),
+      'exit': exit,
+      'rerun_helps': rerunHelps,
+      'repository': ?_repository,
+      for (final key in _sectionOrder) key: ?_sections[key],
+      'units': _units.values.toList(),
+      'problems': _problems,
+      'warnings': _warnings,
+      'next': _next,
+      if (attachments.isNotEmpty) 'attachments': attachments,
+      'diagnosis': ?diagnosis,
+      'halt': ?_halt,
+    };
+    return '${const JsonEncoder.withIndent('  ').convert(document)}\n';
+  }
 }

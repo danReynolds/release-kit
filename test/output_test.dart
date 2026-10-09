@@ -79,7 +79,7 @@ void main() {
       MemorySourceTree({'pubspec.yaml': 'name: core\nversion: 1.2.3\n'}),
       diagnostics,
     )!;
-    out.record(
+    out.report.step(
       UnitRelease.derive(
         resolution.unit('core')!,
         resolution,

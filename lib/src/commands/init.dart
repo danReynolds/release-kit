@@ -64,12 +64,13 @@ class InitCommand {
     // proposal-awaiting-a-human — used to produce byte-identical empty
     // documents under --json. Each is data now: a state is a problem entry
     // with exit 0, the same shape status uses for blocked-but-not-failed.
-    output.repository(
+    output.report.repository(
       name: _name(),
       remote: origin,
       sourceBinding: gitBound ? 'gitCommit' : 'unbound',
       sourceComparison: gitBound ? 'exact' : 'unavailable',
     );
+    output.heading(_name());
 
     // The same reading rules as every other verb: unreadable is not absent,
     // and neither is a repository that cannot be listed. Before this, both
@@ -113,7 +114,7 @@ class InitCommand {
         (gitignore == null ||
             !gitignore.split('\n').any((l) => l.trim() == '.rk/'));
     while (true) {
-      output.report.initPlan(plan.toJson());
+      output.report.section('init', plan.toJson());
       final selector = select;
       if (selector != null && plan.candidates.isNotEmpty) {
         final selected = await selector(plan);
@@ -122,7 +123,7 @@ class InitCommand {
           return ExitCodes.ok;
         }
         plan = selected;
-        output.report.initPlan(plan.toJson());
+        output.report.section('init', plan.toJson());
       }
 
       final reasons = _reasons(plan);

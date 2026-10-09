@@ -26,7 +26,6 @@ import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/target.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/targets/pub_dev/endpoint.dart';
-import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
@@ -415,11 +414,7 @@ Future<void> runRk(
     output.halt(
       output.report.changedWhatHaltsSpeakOf ? Stop.lostTrack : Stop.refused,
     );
-    final recordsDiagnosis = Diagnosis.shouldWrite(
-      command: command,
-      acted: output.report.acted,
-      crashed: true,
-    );
+    final recordsDiagnosis = output.report.keepsDiagnosis(crashed: true);
     output.problem(
       Diagnostic(
         code: 'RK-INT-001',
@@ -583,29 +578,18 @@ void _reportTimings(
 /// strictly read-only even when rk itself fails.
 void _recordDiagnosis(Output output, int code, {String? crash}) {
   if (code == ExitCodes.ok || code == ExitCodes.usage) return;
-  if (!Diagnosis.shouldWrite(
-    command: output.report.command,
-    acted: output.report.acted,
-    crashed: crash != null,
-  )) {
-    return;
-  }
+  if (!output.report.keepsDiagnosis(crashed: crash != null)) return;
   final root =
       WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
 
-  final at = Diagnosis.write(
+  final at = output.report.writeDiagnosis(
     root,
     stamp: DateTime.now().toIso8601String().replaceAll(':', '-'),
-    report: output.report,
     exit: code,
-    attachments: {
-      ...output.report.attachments,
-      if (crash != null) 'crash.txt': crash,
-    },
+    crash: crash,
   );
-  output.report.diagnosis = at;
   output.say('what this run saw: $at');
 }
 
@@ -839,7 +823,7 @@ Future<_Prepared> _prepare(Output output) async {
   final source = await ReleaseSource.open(Directory.current.absolute.path);
   switch (await source.readConfig()) {
     case ConfigMissing():
-      output.repository(name: source.root.split('/').last);
+      output.repository(source.root.split('/').last);
       output.blank();
       output.line('no release.toml', mark: Mark.none);
       output.next('rk init');
@@ -858,14 +842,11 @@ Future<_Prepared> _prepare(Output output) async {
 void _showRepository(Output output, ReleaseSource source) {
   final git = source.git;
   output.repository(
-    name: source.root.split('/').last,
-    branch: git.branch,
-    commit: git.hasCommit ? git.shortHead : null,
+    source.root.split('/').last,
+    git: git,
     uncommitted: source.inRepository && git.worktreeStatusError == null
         ? git.uncommitted.length
         : null,
-    head: git.hasCommit ? git.head : null,
-    remote: git.originUrl,
   );
 }
 

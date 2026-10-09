@@ -50,12 +50,13 @@ Example: rk clean
       }
       final inventory = lock == null ? observed : stages.list();
       final found = inventory.length;
-      output.report.cleanup(
-        root: stages.root,
-        path: '.rk/work/stages',
-        found: found,
-        removed: 0,
-      );
+      void record(int removed) => output.report.section('cleanup', {
+        'root': stages.root,
+        'path': '.rk/work/stages',
+        'found': found,
+        'removed': removed,
+      });
+      record(0);
       _heading();
 
       if (found == 0) {
@@ -138,13 +139,7 @@ Example: rk clean
       var removed = 0;
       for (final entry in inventory) {
         if (!stages.remove(entry)) continue;
-        removed++;
-        output.report.cleanup(
-          root: stages.root,
-          path: '.rk/work/stages',
-          found: found,
-          removed: removed,
-        );
+        record(++removed);
       }
       if (removed != found) {
         output.blank();

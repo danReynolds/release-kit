@@ -109,7 +109,7 @@ class BinaryChain {
 
     if (signing == null) {
       if (built.unproven case final unproven?) {
-        output.record(
+        output.report.step(
           step,
           verdict: Verdict.exact,
           detail: 'built, not executed — $unproven',
@@ -223,7 +223,7 @@ class BinaryChain {
       // The difference itself, not the fact of one: both requirements are
       // printed as well as recorded.
       final evidence = {'published': published, 'produced': requirement};
-      output.record(step, verdict: Verdict.conflict, evidence: evidence);
+      output.report.step(step, verdict: Verdict.conflict, evidence: evidence);
       output.line(
         step.summary,
         mark: Mark.blocked,
@@ -322,7 +322,7 @@ class BinaryChain {
         );
         return const Produced.failed();
       }
-      output.record(step, verdict: Verdict.exact, detail: 'notarized');
+      output.report.step(step, verdict: Verdict.exact, detail: 'notarized');
       // Apple's verdict is about the signed files, which the archive step
       // packs as they are; a consumer asks Apple about the exact bytes.
       return Produced(
@@ -371,7 +371,7 @@ class BinaryChain {
 
     final name = ReleaseAssets.archivePath(project, platform);
     stage.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
-    output.record(step, verdict: Verdict.exact, detail: name);
+    output.report.step(step, verdict: Verdict.exact, detail: name);
     return const Produced();
   }
 

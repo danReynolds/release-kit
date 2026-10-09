@@ -142,14 +142,10 @@ class StatusCommand {
     final snapshots = snapshot.units;
     final uniqueIssues = snapshot.issues;
     output.repository(
-      name: tree.description.split('/').last,
-      branch: git.branch,
-      commit: git.hasCommit ? git.shortHead : null,
+      tree.description.split('/').last,
+      git: git,
       uncommitted: git.uncommitted.length,
-      head: git.hasCommit ? git.head : null,
-      remote: git.originUrl,
-      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
-      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
+      source: true,
     );
     if (!git.hasCommit) {
       output.line(
@@ -745,7 +741,7 @@ class StatusCommand {
       _record(step, snapshot.states[step.id]!);
     }
     for (final target in snapshot.targets) {
-      _recordTarget(snapshot, target);
+      output.report.target(snapshot.unit.name, target.toJson());
     }
 
     _renderPublication(snapshot);
@@ -984,31 +980,6 @@ class StatusCommand {
     }
   }
 
-  void _recordTarget(StatusUnitSnapshot snapshot, TargetObservation target) {
-    final state = target.inspection;
-    output.report.target(
-      unit: snapshot.unit.name,
-      id: target.expectation.id,
-      kind: target.expectation.target.wireName,
-      label: target.expectation.label,
-      coordinate: target.expectation.coordinate,
-      targetVersion: target.expectation.targetVersion,
-      verdict: state.verdict.name,
-      currentKnown: target.currentKnown,
-      currentVersion: target.currentVersion,
-      detail: state.detail,
-      uses: target.expectation.uses,
-      artifacts: [
-        for (final artifact in target.artifacts)
-          {
-            'name': artifact.name,
-            'status': artifact.status.name,
-            if (artifact.problem != null) 'problem': artifact.problem,
-          },
-      ],
-    );
-  }
-
   static String _artifactNote(ArtifactStatus status) => switch (status) {
     ArtifactStatus.notStaged => 'not staged',
     ArtifactStatus.staged => 'staged',
@@ -1107,7 +1078,7 @@ class StatusCommand {
   }
 
   void _record(Step step, Inspection state) {
-    output.record(
+    output.report.step(
       step,
       verdict: state.verdict,
       detail: state.detail,
@@ -1287,6 +1258,28 @@ class TargetObservation {
   String get stagedSummary => artifacts.length == 1
       ? artifacts.single.name
       : '${artifacts.length} artifacts';
+
+  /// What `targets[]` says of it in `--json`.
+  Map<String, Object?> toJson() => {
+    'id': expectation.id,
+    'kind': expectation.target.wireName,
+    'label': expectation.label,
+    'coordinate': expectation.coordinate,
+    'current_known': currentKnown,
+    'current_version': currentVersion,
+    'target_version': expectation.targetVersion,
+    'verdict': inspection.verdict.name,
+    'detail': ?inspection.detail,
+    'uses': ?expectation.uses,
+    'artifacts': [
+      for (final artifact in artifacts)
+        {
+          'name': artifact.name,
+          'status': artifact.status.name,
+          'problem': ?artifact.problem,
+        },
+    ],
+  };
 }
 
 /// A report issue linked to its unit but independent of rendering.
