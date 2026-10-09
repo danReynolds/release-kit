@@ -96,10 +96,10 @@ final class InitPlan {
     final native = DartWorkspaceDiscovery(tree, trackedManifests: gitBound);
     final notices = [...native.notices];
     final projects = native.projects
-        .where((project) => !project.isExampleOrFixture)
+        .where((project) => !isExampleOrFixture(project.directory))
         .toList();
-    bool registryAvailableFor(DartProjectDiscovery project) =>
-        !project.isGroupingRoot &&
+    bool registryAvailableFor(Pubspec project) =>
+        !project.isWorkspaceRoot &&
         project.version != null &&
         !project.vetoesRegistry &&
         (project.publishTo == null ||
@@ -112,7 +112,7 @@ final class InitPlan {
     var vetoed = 0;
     for (final project in projects) {
       if (project.vetoesRegistry) vetoed++;
-      final packageUsable = !project.isGroupingRoot && project.version != null;
+      final packageUsable = !project.isWorkspaceRoot && project.version != null;
       final repositoryPubDev =
           project.publishTo == null || isPubDevDestination(project.publishTo!);
       final ambientPubDev =
@@ -135,7 +135,7 @@ final class InitPlan {
         ReleaseChoice.pubDev: registryAvailable
             ? const InitAvailability.available('native Dart package coordinate')
             : InitAvailability.unavailable(
-                project.isGroupingRoot
+                project.isWorkspaceRoot
                     ? 'workspace root — select its packages instead'
                     : project.version == null
                     ? 'the native manifest declares no version'
@@ -196,9 +196,9 @@ final class InitPlan {
       candidates.add(
         InitCandidate(
           name: project.name,
-          path: project.path,
-          version: project.version,
-          executables: project.executables,
+          path: project.directory,
+          version: project.version?.canonical,
+          executables: List.unmodifiable(project.executables),
           vetoesRegistry: project.vetoesRegistry,
           availability: Map.unmodifiable(availability),
           selected: Set.unmodifiable(selected),

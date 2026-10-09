@@ -34,9 +34,8 @@ class ReleaseConfig {
     String path,
     Diagnostics diagnostics,
   ) {
-    final document = TomlDocument.parse(source, path, diagnostics);
-    if (document == null) return null;
-    return _Reader(document.root, path, diagnostics).run();
+    final root = parseToml(source, path, diagnostics);
+    return root == null ? null : _Reader(root, path, diagnostics).run();
   }
 }
 
