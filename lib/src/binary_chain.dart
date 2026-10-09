@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'builds/capability.dart';
 import 'builds/dart_cli.dart';
+import 'builds/macos_identity.dart';
 import 'engine/assets.dart';
 import 'engine/diagnostic.dart';
 import 'output/output.dart';
@@ -15,27 +16,12 @@ import 'transforms/archive.dart';
 import 'targets/target_module.dart';
 import 'transforms/macos.dart';
 
-/// The local half of shipping binaries, one step at a time.
+/// The local half of shipping binaries, one step at a time: buildStep,
+/// notarizeStep and archiveStep, each run by the stage runner.
 ///
-/// It sits at the top of `lib/src` because it belongs to none of the
-/// directories below it. It is not a verb — no argument parsing, no exit
-/// codes; its API is buildStep, notarizeStep, and archiveStep, each called by
-/// `commands/release.dart`. And it is not an
-/// adapter by this codebase's own test, the one `targets/git_tag/client.dart`
-/// states: it holds an [Output] at thirty-odd sites, where every file in
-/// `builds/`, `transforms/` and `destinations/` holds one at zero.
-///
-/// It lived in `commands/` until `ls` there exposed a non-command alongside
-/// the operational verbs promised by the README and RFC.
-///
-/// This used to be one `produce()` that ran the whole chain inside the first
-/// build step and handed a `_produced` list to the steps after it — which
-/// made the release's ten steps a fiction: per-step verdicts were
-/// invented, a mid-chain failure was reported against the wrong step, and
-/// CI could never split what one step secretly did. Now each step is its own
-/// act: it reads what it needs from the [Stage] by name, does one thing,
-/// and writes what it made back by name. Nothing is carried between steps
-/// in memory (CI readiness, seam 1); the stage is the interface (seam 3).
+/// Each step is its own act: it reads what it needs from the [Stage] by
+/// name, does one thing, and writes what it made back by name. Nothing is
+/// carried between steps in memory; the stage is the interface.
 ///
 /// Reuse is the coordinator's job, not this class's: a producer runs only
 /// when the stage receipt lacks its step, and a validated receipt is the one
@@ -71,7 +57,7 @@ class BinaryChain {
   Future<Produced> buildStep(
     Work step,
     ResolvedProject project, {
-    MacSigning? signing,
+    MacIdentity? signing,
     ProgressHandle? progress,
   }) async {
     // The release refused a platform this host cannot produce before any
@@ -152,14 +138,14 @@ class BinaryChain {
   ///
   /// The requirement is derived from the release users already installed —
   /// asking the certificate about to sign what it will sign with is a
-  /// tautology. [MacSigning.codeId] is resolved by the caller, before
-  /// anything acts: it is read off the published binary, or declared, or the
-  /// release was refused (RK-SIGN-009).
+  /// tautology. [MacIdentity.codeId] is settled before anything acts: it is
+  /// read off the published binary, or declared, or the release was refused
+  /// (RK-SIGN-009).
   Future<Produced> _sign(
     Work step,
     ResolvedProject project,
     Map<String, Object?> smoke,
-    MacSigning signing,
+    MacIdentity signing,
   ) async {
     final platform = step.platform!;
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
@@ -192,7 +178,7 @@ class BinaryChain {
           : const <String>[];
       final signed = await signer.sign(
         binary: stage.pathOf(name),
-        identity: signing.identity,
+        identity: signing.identity!,
         codeId: codeId,
         pinnedLibraries: pins,
       );
@@ -259,7 +245,7 @@ class BinaryChain {
       'first_identity': published == null,
       'published_requirement': published,
       'designated_requirement': requirement,
-      'certificate': signing.identity.name,
+      'certificate': signing.certificate,
     };
     final signedSmoke = await tools.run(
       stage.pathOf('$root/${artifact.entryPoint}'),
@@ -284,41 +270,6 @@ class BinaryChain {
         'signatures': signatures,
       },
     );
-  }
-
-  /// The team id inside a designated requirement, which is the one fact
-  /// needed to pick the certificate that can reproduce it.
-  ///
-  /// The quotes are optional because codesign's requirement printer only
-  /// quotes an OU that needs quoting: a team id beginning with a digit
-  /// prints as `leaf[subject.OU] = "2DC432GLL2"`, one beginning with a
-  /// letter as `leaf[subject.OU] = Q6L2SF6YDW` — confirmed against real
-  /// signed apps and a csreq round-trip. The quoted-only version of this
-  /// returned null for every letter-leading team, which misread an
-  /// established identity as "no team rk can read".
-  static String? teamOf(String requirement) => RegExp(
-    r'subject\.OU\]\s*=\s*"?([A-Z0-9]+)"?',
-  ).firstMatch(requirement)?.group(1);
-
-  /// The code identifier inside a designated requirement — always quoted by
-  /// codesign's printer, unlike the OU.
-  ///
-  /// Public because the preflight compares it against a declared one before
-  /// anything acts; it had a one-line public forwarder around it for that,
-  /// which is a module punched through for a single caller.
-  /// The program identity named by a designated requirement.
-  ///
-  /// codesign quotes an identifier only when it has to. `rk` prints bare while
-  /// `"io.github.danreynolds.keybay.cli"` is quoted, so reading only the quoted
-  /// form leaves a program unable to recognise its own published identity —
-  /// which surfaces on the second release, never the first, because the first
-  /// has no published requirement to read.
-  static String? identifierOf(String requirement) {
-    final match = RegExp(
-      r'identifier\s+(?:"([^"]+)"|([^\s"]+))',
-    ).firstMatch(requirement);
-    if (match == null) return null;
-    return match.group(1) ?? match.group(2);
   }
 
   // ---- notarize ----
@@ -452,26 +403,4 @@ class BinaryChain {
     );
     return const Produced.failed();
   }
-}
-
-/// What a macOS build needs to sign what it compiled.
-///
-/// Resolved by the coordinator before anything acts, so the one step that
-/// makes an identity permanent never invents a value nothing stated.
-final class MacSigning {
-  const MacSigning({
-    required this.publishedRequirement,
-    required this.codeId,
-    required this.identity,
-  });
-
-  /// The designated requirement of the release users already installed, or
-  /// null on a first signed release.
-  final String? publishedRequirement;
-
-  final String codeId;
-
-  /// The certificate the preflight chose: the one Developer ID on a first
-  /// release, or the one for the published release's team.
-  final SigningIdentity identity;
 }

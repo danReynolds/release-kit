@@ -1,3 +1,4 @@
+import '../builds/macos_identity.dart';
 import '../engine/canonical_json.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
@@ -834,7 +835,7 @@ final class ReleasePublicationCoordinator {
   List<String> disclosureFor(
     List<Target> remaining,
     List<TargetClaim> claims, {
-    ReleaseSigningContext? firstSigning,
+    MacIdentity? firstSigning,
     bool firstStep = true,
   }) {
     final permanent = [
@@ -861,7 +862,7 @@ final class ReleasePublicationCoordinator {
     ResolvedUnit unit,
     List<Target> remaining, {
     required List<({String platform, String reason})> unprovable,
-    required ReleaseSigningContext? signing,
+    required MacIdentity? signing,
     required List<TargetClaim> claims,
   }) {
     final disclosed = <String>[];
@@ -873,7 +874,7 @@ final class ReleasePublicationCoordinator {
     );
 
     showTargets(remaining, claims);
-    final firstSigning = signing?.firstCertificate == null ? null : signing;
+    final firstSigning = signing != null && signing.first ? signing : null;
     if (firstSigning != null) {
       // The identifier first: it is what gets sealed into the designated
       // requirement and every Keychain item, so a wrong one has to be seen
@@ -882,7 +883,7 @@ final class ReleasePublicationCoordinator {
         'macOS identity',
         note:
             '${firstSigning.codeId} signed by '
-            '${_shortCertificate(firstSigning.firstCertificate!)} · '
+            '${_shortCertificate(firstSigning.certificate)} · '
             'permanent · first claim',
         depth: 1,
         labelWidth: 26,
@@ -956,7 +957,7 @@ final class ReleasePublicationCoordinator {
   /// Long-form first claims retained with the authorization record.
   List<String> _recordClaims(
     List<TargetClaim> claims,
-    ReleaseSigningContext? firstSigning,
+    MacIdentity? firstSigning,
   ) {
     // Sentences, not columns. This is read out of the report by whoever or
     // whatever consented; the alignment it used to carry was for a screen
@@ -967,7 +968,7 @@ final class ReleasePublicationCoordinator {
       if (firstSigning != null)
         'macOS identity ${firstSigning.codeId} — permanent: sealed into the '
             'designated requirement, and into every Keychain item this '
-            'program creates. Signed by ${firstSigning.firstCertificate}',
+            'program creates. Signed by ${firstSigning.certificate}',
     ];
     if (firstOf.isEmpty) return const [];
     return ['this release claims, for the first time:', ...firstOf];

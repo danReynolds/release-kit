@@ -1,3 +1,6 @@
+/// Long enough that a preparation board helps instead of flashing briefly.
+const briefPhase = Duration(milliseconds: 800);
+
 /// Target-owned wording for one meaningful release operation.
 ///
 /// RK owns the lifecycle and renderer; a target owns only the words that

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../builds/capability.dart';
+import '../builds/macos_identity.dart';
 import '../engine/assets.dart';
 import '../engine/changelog.dart';
 import '../engine/diagnostic.dart';
@@ -717,9 +718,7 @@ class ReleaseCommand {
       [for (final unit in staged) ...unit.claims],
       [
         for (final unit in staged)
-          if (unit.signing case final signing?
-              when signing.firstCertificate != null)
-            signing,
+          if (unit.signing case final signing? when signing.first) signing,
       ],
     );
     for (final unit in staged) {
@@ -849,7 +848,7 @@ class ReleaseCommand {
   /// stages: every unit's, under one heading.
   void _sayStageClaims(
     List<TargetClaim> claims,
-    List<ReleaseSigningContext> firstSignings,
+    List<MacIdentity> firstSignings,
   ) {
     if (claims.isEmpty && firstSignings.isEmpty) return;
     output.blank();
@@ -880,7 +879,7 @@ class ReleaseCommand {
       );
       output.line(
         'Apple team',
-        note: _shortCertificate(firstSigning.firstCertificate!),
+        note: _shortCertificate(firstSigning.certificate),
         depth: 2,
         labelWidth: 26,
         noteRole: VisualRole.secondary,
@@ -899,7 +898,7 @@ typedef _Staged = ({
   ResolvedUnit unit,
   bool reused,
   List<TargetClaim> claims,
-  ReleaseSigningContext? signing,
+  MacIdentity? signing,
   String? archives,
 });
 

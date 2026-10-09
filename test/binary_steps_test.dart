@@ -3,6 +3,7 @@ import 'dart:io';
 import 'bundle_tools.dart';
 
 import 'package:rk/src/builds/capability.dart';
+import 'package:rk/src/builds/macos_identity.dart';
 import 'package:rk/src/binary_chain.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -149,8 +150,9 @@ executables:
     final built = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: MacSigning(
+      signing: MacIdentity(
         identity: _identity,
+        certificate: _identity.name,
         publishedRequirement: null,
         codeId: 'com.example.tool',
       ),
@@ -214,8 +216,9 @@ executables:
   });
 
   group('the runtime admits only the module it ships', () {
-    final signing = MacSigning(
+    final signing = MacIdentity(
       identity: _identity,
+      certificate: _identity.name,
       publishedRequirement: null,
       codeId: 'com.example.tool',
     );
@@ -299,8 +302,9 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: MacSigning(
+      signing: MacIdentity(
         identity: _identity,
+        certificate: _identity.name,
         publishedRequirement: published,
         codeId: 'com.example.tool',
       ),
@@ -335,8 +339,9 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: MacSigning(
+      signing: MacIdentity(
         identity: _identity,
+        certificate: _identity.name,
         publishedRequirement: published,
         // Resolved by the caller before anything acts.
         codeId: 'io.github.example.tool',
@@ -365,8 +370,9 @@ executables:
       final built = await chain(tools).buildStep(
         step(StepKind.build),
         project,
-        signing: MacSigning(
+        signing: MacIdentity(
           identity: _identity,
+          certificate: _identity.name,
           publishedRequirement: null,
           codeId: 'com.example.tool',
         ),

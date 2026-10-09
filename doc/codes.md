@@ -94,7 +94,7 @@ are merged into these four, as the changelog lists, and are not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-DEP-003` | the packages in "${unit.name}" depend on each other in a circle, so there is no order t… | `lib/src/engine/release_dependencies.dart` |
-| `RK-DEP-004` | the release units depend on each other in a circle | `lib/src/engine/release_dependencies.dart` |
+| `RK-DEP-004` | the release units depend on each other in a circle | `lib/src/commands/status.dart`, `lib/src/engine/release_dependencies.dart` |
 
 RK-DEP-002 (a version constraint Pub cannot parse, which Pub reports when it
 stages the package) is retired and not reused.
@@ -159,7 +159,7 @@ not reused.
 |---|---|---|
 | `RK-NOTARY-001` | $platform: the archive for notarization failed | `lib/src/binary_chain.dart` |
 | `RK-NOTARY-002` | $platform: notarization did not complete | `lib/src/binary_chain.dart` |
-| `RK-NOTARY-004` | the rk-notary credential is not ready | `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-NOTARY-004` | the rk-notary credential is not ready | `lib/src/builds/macos_identity.dart` |
 
 RK-NOTARY-003 (an accepted submission whose log could not be fetched) and
 RK-NOTARY-005 (the delayed Gatekeeper ticket warning) are retired historical
@@ -200,7 +200,7 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
+| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/targets/target_module.dart` |
 
 ## RK-RES — The config resolved against the repository
@@ -224,18 +224,18 @@ into the codes above, and RK-RES-012 is RK-CONF-009; none is reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-SIGN-001` | the published release names no team rk can read | `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-SIGN-001` | the published release names no team rk can read | `lib/src/builds/macos_identity.dart` |
 | `RK-SIGN-002` | $platform: signing failed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-003` | the signature does not match the identity users  already installed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-014` | the signed binary does not run | `lib/src/binary_chain.dart` |
 | `RK-SIGN-017` | the code hash of $file could not be read | `lib/src/binary_chain.dart` |
-| `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-008` | this machine has ${certificates.length} Developer ID  certificates and nothing published says which distributes this | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-009` | no release states what this program is called | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-010` | no certificate for the team the published release names | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-011` | several certificates for the published team | `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/builds/macos_identity.dart` |
+| `RK-SIGN-006` | the login keychain could not be read | `lib/src/builds/macos_identity.dart` |
+| `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/builds/macos_identity.dart` |
+| `RK-SIGN-008` | this machine has ${certificates.length} Developer ID  certificates and nothing published says which distributes this | `lib/src/builds/macos_identity.dart` |
+| `RK-SIGN-009` | no release states what this program is called | `lib/src/builds/macos_identity.dart` |
+| `RK-SIGN-010` | no certificate for the team the published release names | `lib/src/builds/macos_identity.dart` |
+| `RK-SIGN-011` | several certificates for the published team | `lib/src/builds/macos_identity.dart` |
 
 RK-SIGN-012 (the certificate's SHA-256 fingerprint, read only to be compared
 with itself) and RK-SIGN-015, RK-SIGN-016, RK-SIGN-018 and RK-SIGN-019, checks
@@ -256,7 +256,7 @@ RK-SRC-004 (no commit to release) is now RK-GIT-001, and is not reused.
 | `RK-STAGE-001` | the old release stage could not be replaced safely | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/unit_snapshot.dart` |
 | `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release_stage_coordinator.dart`, `lib/src/engine/stage_source.dart` |
-| `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart` |
+| `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/engine/unit_snapshot.dart` |
 | `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart`, `lib/src/commands/clean.dart` |
 
 ## RK-TAG — The tag

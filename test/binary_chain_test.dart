@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/binary_chain.dart';
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/builds/dart_cli.dart';
+import 'package:rk/src/builds/macos_identity.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
@@ -170,7 +170,7 @@ void main() {
     // release, because the first has no published requirement to read.
     test('a bare identifier is read', () {
       expect(
-        BinaryChain.identifierOf(
+        MacIdentity.identifierOf(
           'designated => identifier rk and anchor apple generic and '
           'certificate leaf[subject.OU] = "5AHFA9FUZG"',
         ),
@@ -180,7 +180,7 @@ void main() {
 
     test('a quoted identifier is read', () {
       expect(
-        BinaryChain.identifierOf(
+        MacIdentity.identifierOf(
           'designated => identifier "io.github.danreynolds.keybay.cli" and '
           'anchor apple generic',
         ),
@@ -190,14 +190,14 @@ void main() {
 
     test('a quoted identifier may contain spaces', () {
       expect(
-        BinaryChain.identifierOf('designated => identifier "two words" and x'),
+        MacIdentity.identifierOf('designated => identifier "two words" and x'),
         'two words',
       );
     });
 
     test('a requirement naming no identifier answers null', () {
       expect(
-        BinaryChain.identifierOf('designated => anchor apple generic'),
+        MacIdentity.identifierOf('designated => anchor apple generic'),
         isNull,
       );
     });
@@ -207,20 +207,20 @@ void main() {
     // identifier is a decoy: only anchoring on subject.OU finds the team.
     test('the team is read from a bare or a quoted OU', () {
       expect(
-        BinaryChain.teamOf(
+        MacIdentity.teamOf(
           'designated => identifier "TOOL" and certificate '
           'leaf[subject.OU] = Q6L2SF6YDW',
         ),
         'Q6L2SF6YDW',
       );
       expect(
-        BinaryChain.teamOf(
+        MacIdentity.teamOf(
           'designated => identifier rk and certificate '
           'leaf[subject.OU] = "2DC432GLL2"',
         ),
         '2DC432GLL2',
       );
-      expect(BinaryChain.teamOf('designated => identifier "TOOL"'), isNull);
+      expect(MacIdentity.teamOf('designated => identifier "TOOL"'), isNull);
     });
   });
 
