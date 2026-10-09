@@ -30,6 +30,7 @@ import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/targets/target_module.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 /// An origin that lists exactly the tags git holds locally.
 ///
@@ -52,6 +53,7 @@ class OriginAgreeing implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
       if (arguments.length == 3 && arguments[1] == '--tags') {
@@ -120,6 +122,7 @@ class ReleasedTagOrigin implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
       return ToolResult(

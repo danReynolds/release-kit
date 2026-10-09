@@ -8,6 +8,7 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_source.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 /// A snapshot of a new repository's one commit: [files], [links] by their
 /// targets as `ln -s` writes them, and [submodules] by their paths.
@@ -50,7 +51,7 @@ Future<StageSourceSnapshot> _committed(
     'source',
   ]);
   return StageSourceSnapshot.capture(
-    GitSourceTree(root.path),
+    WorkingTree(root.path, git: true),
     commit: git(['rev-parse', 'HEAD']),
   );
 }
@@ -381,7 +382,7 @@ void main() {
       '${root.path}/nested/data': '0755',
     });
     final snapshot = await StageSourceSnapshot.capture(
-      GitSourceTree(root.path),
+      WorkingTree(root.path, git: true),
       commit: commit,
     );
     expect(snapshot.trackedFiles(), ['nested/data', 'run']);
@@ -398,13 +399,6 @@ void main() {
     expect(posixMode(run.statSync().mode), '0755');
     expect(posixMode(data.statSync().mode), '0644');
 
-    await expectLater(
-      StageSourceSnapshot.capture(
-        GitCommitSourceTree(root.path, commit),
-        commit: 'f' * 40,
-      ),
-      throwsStateError,
-    );
     await expectLater(
       StageSourceSnapshot.capture(snapshot, commit: 'f' * 40),
       throwsStateError,

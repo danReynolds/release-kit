@@ -52,7 +52,7 @@ void main() {
     final run = repo(['clean', '--json']);
 
     expect(run.code, 1, reason: run.all);
-    expect(run.problems.map((problem) => problem['code']), ['RK-CLEAN-004']);
+    expect(run.problems.map((problem) => problem['code']), ['RK-AUTH-001']);
     expect(run.json['cleanup'], {
       'root': Directory(repo.root).resolveSymbolicLinksSync(),
       'path': '.rk/work/stages',

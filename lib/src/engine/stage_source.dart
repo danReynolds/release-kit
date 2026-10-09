@@ -37,23 +37,18 @@ final class StageSourceSnapshot implements SourceTree {
       }
       return source;
     }
-    final GitCommitSourceTree? git;
-    if (source is GitSourceTree) {
+    final CommitFiles? git;
+    if (source is WorkingTree && source.git) {
       if (commit == null) {
         throw StateError('committed source capture requires a commit');
       }
-      git = GitCommitSourceTree(source.root, commit);
-    } else if (source is GitCommitSourceTree) {
-      if (commit != null && commit != source.commit) {
-        throw StateError('source capture names a different Git commit');
-      }
-      git = source;
+      git = CommitFiles(source.root, commit);
     } else {
       git = null;
     }
     if (git == null) return _capture(source, null);
     // Every unit a run stages from one commit shares its one read.
-    final key = git.description;
+    final key = '${git.root}@${git.commit}';
     final read = _committed[key] ??= _capture(source, git);
     try {
       return await read;
@@ -67,13 +62,14 @@ final class StageSourceSnapshot implements SourceTree {
 
   static Future<StageSourceSnapshot> _capture(
     SourceTree source,
-    GitCommitSourceTree? git,
+    CommitFiles? git,
   ) async {
     final entries = {
-      for (final entry in git?.trackedEntries() ?? <GitTreeEntry>[])
-        entry.path: entry,
+      if (git != null)
+        for (final entry in await git.entries) entry.path: entry,
     };
-    final all = [...(git?.trackedFiles() ?? source.trackedFiles())]..sort();
+    final all = [...(git == null ? source.trackedFiles() : entries.keys)]
+      ..sort();
     // A symbolic link is exported as one, as `git archive` would. A gitlink
     // has no files in this commit: an export that would hold it refuses.
     final submodules = {
@@ -93,12 +89,12 @@ final class StageSourceSnapshot implements SourceTree {
     }
     // A non-Git snapshot must own its complete inventory and bytes before the
     // first asynchronous boundary, just as ordinary source production does.
-    final batched = git == null
-        ? null
-        : await git.readBytesBatch([...paths, ...links]);
+    final batched = git == null ? null : await git.read([...paths, ...links]);
     final files = <String, Uint8List>{};
     for (final path in paths) {
-      final bytes = git == null ? source.readBytes(path) : batched![path];
+      final bytes = git == null
+          ? source.readBytes(path)
+          : batched![path]?.bytes;
       if (bytes == null) {
         throw StateError('tracked source disappeared while staging: $path');
       }
@@ -113,7 +109,7 @@ final class StageSourceSnapshot implements SourceTree {
           if (entries[path]?.executable == true) path,
       },
       git?.commit,
-      {for (final path in links) path: utf8.decode(batched![path]!)},
+      {for (final path in links) path: utf8.decode(batched![path]!.bytes)},
       submodules,
     );
   }

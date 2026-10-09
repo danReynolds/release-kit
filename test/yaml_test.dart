@@ -102,7 +102,7 @@ resolution: !!str workspace
         final diagnostics = Diagnostics();
         expect(parseYaml(source, 'p.yaml', diagnostics), isNull);
         final found = diagnostics.found.single;
-        expect(found.code, 'RK-YAML-001');
+        expect(found.code, 'RK-PKG-001');
         expect(found.source?.line, line, reason: found.message);
       });
     }

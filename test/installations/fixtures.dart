@@ -44,7 +44,7 @@ publish = ["pub.dev"${binary ? ', "github-release", "git-tag", "homebrew"' : ''}
 ${binary ? 'binary_platforms = ["linux-x64", "macos-arm64"]' : ''}
 ''');
   final diagnostics = Diagnostics();
-  final tree = FileSystemSourceTree(root.path);
+  final tree = WorkingTree(root.path, git: false);
   final config = ReleaseConfig.parse(
     tree.read('release.toml')!,
     'release.toml',
@@ -171,6 +171,7 @@ class TestTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) => runTool(executable, arguments, workingDirectory, environment);
   @override
   Future<int> runInteractive(

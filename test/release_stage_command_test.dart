@@ -15,7 +15,6 @@ import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
@@ -27,6 +26,7 @@ import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
+import 'support/memory_source_tree.dart';
 
 const _head = '1111111111111111111111111111111111111111';
 const _headTree = '2222222222222222222222222222222222222222';
@@ -341,7 +341,7 @@ void main() {
       );
 
       expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(run.problemCodes, ['RK-SRC-004']);
+      expect(run.problemCodes, ['RK-GIT-001']);
       expect(run.text, contains('git init'));
       expect(run.publicMutations, isEmpty);
       expect(
@@ -2546,6 +2546,7 @@ class _ForwardingReadTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) {
     invocations.add(
       _Invocation(
@@ -2560,6 +2561,7 @@ class _ForwardingReadTools implements Tools {
       arguments,
       workingDirectory: workingDirectory,
       environment: environment,
+      stdin: stdin,
     );
   }
 
@@ -2674,6 +2676,7 @@ class _WorldTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     final invocation = _Invocation(
       executable: executable,

@@ -6,12 +6,12 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/producers.dart';
 import 'package:rk/src/engine/release_plan.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_contract.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/release_plan.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 const _config = '''
 schema = 2

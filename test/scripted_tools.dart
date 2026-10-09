@@ -16,6 +16,7 @@ class ScriptedTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     calls.add([executable, ...arguments]);
     return answers[executable] ??
@@ -44,6 +45,7 @@ class SequencedTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async => _at < _answers.length
       ? _answers[_at++]
       : ToolResult(exitCode: 127, stdout: '', stderr: 'unscripted');

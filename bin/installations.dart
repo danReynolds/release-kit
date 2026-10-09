@@ -4,9 +4,9 @@ library;
 import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
-import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/release_source.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/timings.dart';
@@ -185,19 +185,21 @@ Future<int> _run(
       'Run inside your project, or start with rk init.',
     );
   }
-  final tree = FileSystemSourceTree(root);
-  final diagnostics = Diagnostics();
-  final config = ReleaseConfig.parse(
-    tree.read('release.toml')!,
-    'release.toml',
-    diagnostics,
-  );
-  final resolution = config == null
-      ? null
-      : Resolution.forInstallation(config, tree, diagnostics);
-  if (resolution == null || diagnostics.isNotEmpty) {
-    output.problems(diagnostics.found);
-    return ExitCodes.refused;
+  final Resolution resolution;
+  switch (await ReleaseSource.configIn(
+    WorkingTree(root, git: false),
+    releasing: false,
+  )) {
+    case ConfigResolved(resolution: final resolved):
+      resolution = resolved;
+    case ConfigProblems(:final problems):
+      output.problems(problems);
+      return ExitCodes.refused;
+    case ConfigMissing():
+      throw const InstallationFailure(
+        'No rk setup found in this directory.',
+        'Run inside your project, or start with rk init.',
+      );
   }
   // Installation discovery needs only the origin, not release preflight's
   // worktree status, tags, signing configuration or branch ancestry.

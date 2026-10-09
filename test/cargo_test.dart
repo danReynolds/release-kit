@@ -78,7 +78,7 @@ version = "3.0.0"
     ]) {
       final crate = read(source);
       expect(crate.name, isNull, reason: source);
-      expect(crate.codes, ['RK-PKG-003'], reason: source);
+      expect(crate.codes, ['RK-RES-002'], reason: source);
     }
   });
 

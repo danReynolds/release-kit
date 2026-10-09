@@ -858,7 +858,7 @@ class ReleaseCommand {
     }
     for (final project in unit.projects) {
       Changelog.check(
-        tree: tree,
+        changelog: project.changelog,
         manifestDirectory: project.pubspec.directory,
         packageName: project.name,
         version: project.version,

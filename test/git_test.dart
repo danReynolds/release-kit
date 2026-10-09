@@ -300,56 +300,95 @@ void main() {
       },
     );
 
+    test('a commit\'s files are its own, not the worktree\'s', () async {
+      write('packages/tool/pubspec.yaml', 'name: tool\nversion: 1.0.0\n');
+      commit();
+      final files = CommitFiles(
+        root.path,
+        (await GitState.read(root.path)).head,
+      );
+      write('packages/tool/pubspec.yaml', 'name: tool\nversion: 9.9.9\n');
+      write('packages/tool/untracked.txt', 'not released\n');
+
+      expect((await files.entries).map((entry) => entry.path), [
+        'packages/tool/pubspec.yaml',
+      ]);
+      final read = await files.read([
+        'packages/tool/pubspec.yaml',
+        'packages/tool/untracked.txt',
+        'packages/tool',
+      ]);
+      expect(
+        String.fromCharCodes(read['packages/tool/pubspec.yaml']!.bytes),
+        'name: tool\nversion: 1.0.0\n',
+      );
+      expect(read['packages/tool/untracked.txt'], isNull);
+      expect(read['packages/tool']!.type, 'tree');
+    });
+
     test(
-      'a commit source tree holds the commit\'s paths, not the worktree\'s',
+      'a commit is read in one batch, byte for byte, with each entry\'s mode',
       () async {
-        write('packages/tool/pubspec.yaml', 'name: tool\nversion: 1.0.0\n');
+        if (Platform.isWindows) return;
+        File('${root.path}/data.bin')
+          ..createSync()
+          ..writeAsBytesSync([0, 255, 10, 13, 10]);
+        write('with space/run', '#!/bin/sh\n');
+        Process.runSync('chmod', ['+x', '${root.path}/with space/run']);
+        Link('${root.path}/link').createSync('data.bin');
         commit();
-        final source = GitCommitSourceTree(
+        final asked = <String>[];
+        final files = CommitFiles(
           root.path,
           (await GitState.read(root.path)).head,
+          tools: _Asked(asked),
         );
-        write('packages/tool/untracked.txt', 'not released\n');
 
-        expect(source.exists('packages/tool'), isTrue);
-        expect(source.exists('packages/tool/untracked.txt'), isFalse);
+        final read = await files.read([
+          '',
+          'data.bin',
+          'gone.txt',
+          'with space',
+          'with space/run',
+        ]);
+
+        expect(asked, ['git cat-file --batch']);
+        expect(read['data.bin']!.bytes, [0, 255, 10, 13, 10]);
+        expect(read['gone.txt'], isNull);
+        expect(
+          String.fromCharCodes(read['with space/run']!.bytes),
+          '#!/bin/sh\n',
+        );
+        expect(files.modesIn(read['']!), {
+          'data.bin': '100644',
+          'link': '120000',
+          'with space': '040000',
+        });
+        expect(files.modesIn(read['with space']!), {'run': '100755'});
       },
     );
 
-    test('repeated reads of a commit hand out copies', () async {
-      write('a.txt', 'one\n');
+    test('a path that a batch cannot carry is read alone', () async {
+      if (Platform.isWindows) return;
+      write('new\nline.txt', 'both halves\n');
+      write('plain.txt', 'plain\n');
       commit();
-      final head = (await GitState.read(root.path)).head;
-      final tree = GitSourceTree(root.path);
-
-      // Each reader scribbles on what it got back.
-      tree.readBytesAt(head, 'a.txt')[0] = 0x58;
-      (await tree.readBytesBatchAt(head, ['a.txt']))['a.txt']![1] = 0x58;
-      tree.trackedEntriesAt(head).clear();
-
-      expect(String.fromCharCodes(tree.readBytesAt(head, 'a.txt')), 'one\n');
-      expect(
-        String.fromCharCodes(
-          (await tree.readBytesBatchAt(head, ['a.txt']))['a.txt']!,
-        ),
-        'one\n',
+      final asked = <String>[];
+      final files = CommitFiles(
+        root.path,
+        (await GitState.read(root.path)).head,
+        tools: _Asked(asked),
       );
-      expect(tree.trackedFilesAt(head), ['a.txt']);
-    });
 
-    test('a symbolic commit is read afresh after it moves', () async {
-      write('a.txt', 'one\n');
-      commit();
-      final tree = GitSourceTree(root.path);
-      expect(String.fromCharCodes(tree.readBytesAt('HEAD', 'a.txt')), 'one\n');
-      expect(tree.trackedFilesAt('HEAD'), ['a.txt']);
+      final read = await files.read(['new\nline.txt', 'plain.txt']);
 
-      write('a.txt', 'two\n');
-      write('b.txt', 'new\n');
-      commit();
-
-      expect(String.fromCharCodes(tree.readBytesAt('HEAD', 'a.txt')), 'two\n');
-      expect(tree.trackedFilesAt('HEAD'), ['a.txt', 'b.txt']);
+      expect(
+        String.fromCharCodes(read['new\nline.txt']!.bytes),
+        'both halves\n',
+      );
+      expect(String.fromCharCodes(read['plain.txt']!.bytes), 'plain\n');
+      expect(asked, hasLength(3));
+      expect(asked.last, 'git cat-file --batch');
     });
 
     test(
@@ -505,15 +544,10 @@ void main() {
     );
   });
 
-  test('a commit source tree rejects every escaping read path', () {
-    final source = GitCommitSourceTree('/repo', 'a' * 40);
-    for (final operation in <Object? Function()>[
-      () => source.read('../outside'),
-      () => source.readBytes('../outside'),
-      () => source.exists('../outside'),
-    ]) {
-      expect(operation, throwsArgumentError);
-    }
+  test('a commit is never asked for a path outside it', () {
+    final files = CommitFiles('/repo', 'a' * 40);
+    expect(() => files.read(['../outside']), throwsArgumentError);
+    expect(() => files.read(['packages/../../outside']), throwsArgumentError);
   });
 
   group('latest release tag on origin', () {
@@ -742,6 +776,7 @@ final class _Asked implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) {
     asked.add('$executable ${arguments.join(' ')}');
     return const SystemTools().run(
@@ -750,6 +785,7 @@ final class _Asked implements Tools {
       workingDirectory: workingDirectory,
       environment: environment,
       timeout: timeout,
+      stdin: stdin,
     );
   }
 

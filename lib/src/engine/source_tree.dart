@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
 import 'timings.dart';
+import 'tools.dart';
 
 /// Read access to the repository being released.
 ///
@@ -62,46 +63,78 @@ class GitTreeEntry {
   };
 }
 
-/// A repository on disk, listing files through git so untracked material is
-/// invisible.
-class GitSourceTree implements SourceTree {
-  GitSourceTree(this.root);
+/// The repository's files as they are on disk.
+///
+/// In Git ([git]) its files are those `git ls-files` lists, so untracked
+/// material is invisible, and a read follows a symbolic link as the checkout
+/// does. Outside Git, as for status, plan and init in a directory and for
+/// the projects `rk use` installs from, the directory is walked, and a path
+/// through a symbolic link is refused.
+final class WorkingTree implements SourceTree {
+  WorkingTree(this.root, {required this.git});
 
   final String root;
+  final bool git;
 
   @override
   String get description => root;
 
   String _resolve(String path) {
-    final parts = path.split('/').where((p) => p.isNotEmpty && p != '.');
-    if (parts.contains('..')) {
+    final parts = path
+        .split('/')
+        .where((part) => part.isNotEmpty && part != '.')
+        .join('/');
+    if (path.startsWith('/') ||
+        parts.isNotEmpty && relativeSegments(parts) == null) {
       throw ArgumentError('path escapes the repository: $path');
     }
-    return [root, ...parts].join('/');
+    var resolved = root;
+    for (final part in parts.isEmpty ? const <String>[] : parts.split('/')) {
+      resolved = '$resolved/$part';
+      if (!git &&
+          FileSystemEntity.typeSync(resolved, followLinks: false) ==
+              FileSystemEntityType.link) {
+        throw SourceUnreadable(
+          path,
+          'the path component "$part" is a symbolic link',
+        );
+      }
+    }
+    return resolved;
   }
 
   @override
   String? read(String path) {
-    final file = File(_resolve(path));
-    if (!file.existsSync()) return null;
+    final bytes = readBytes(path);
+    if (bytes == null) return null;
+    // Outside Git a file that is not UTF-8 still throws: it is the genuine
+    // crash test/end_to_end_test.dart proves the crash path against.
+    if (!git) return utf8.decode(bytes);
     try {
-      return file.readAsStringSync();
-    } on FileSystemException catch (error) {
-      // Not null: null means "there is nothing here", and a file rk is not
-      // allowed to open is not a file that does not exist. Collapsing the two
-      // would answer "no release.toml — run rk init" for a release.toml that
-      // is sitting right there.
-      throw SourceUnreadable(path, error.osError?.message ?? '$error');
+      return utf8.decode(bytes);
+    } on FormatException {
+      throw SourceUnreadable(path, 'it is not UTF-8 text');
     }
   }
 
   @override
   List<int>? readBytes(String path) {
     final file = File(_resolve(path));
-    if (!file.existsSync()) return null;
+    final type = FileSystemEntity.typeSync(file.path, followLinks: git);
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      // In Git a directory holds no file here, as the index would say.
+      // Outside Git nothing says what it is, so it is refused.
+      if (git) return null;
+      throw SourceUnreadable(path, 'the path is not a regular file');
+    }
     try {
       return file.readAsBytesSync();
     } on FileSystemException catch (error) {
+      // Not null: null means "there is nothing here", and a file rk is not
+      // allowed to open is not a file that does not exist. Collapsing the two
+      // would answer "no release.toml — run rk init" for a release.toml that
+      // is sitting right there.
       throw SourceUnreadable(path, error.osError?.message ?? '$error');
     }
   }
@@ -115,8 +148,9 @@ class GitSourceTree implements SourceTree {
   List<String>? _tracked;
 
   @override
-  List<String> trackedFiles() {
-    if (_tracked != null) return _tracked!;
+  List<String> trackedFiles() => _tracked ??= git ? _listed() : _walked();
+
+  List<String> _listed() {
     final result = timedRunSync('git', const [
       'ls-files',
       '-z',
@@ -131,242 +165,13 @@ class GitSourceTree implements SourceTree {
         (result.stderr as String).trim(),
       );
     }
-    final out = result.stdout as String;
-    return _tracked = out.split('\u0000').where((p) => p.isNotEmpty).toList();
-  }
-
-  /// Files and bytes from one immutable commit, bypassing the worktree and
-  /// index. Release staging uses these after it captures HEAD and its tree so
-  /// a concurrent edit cannot be trusted under the old tree identity.
-  List<GitTreeEntry> trackedEntriesAt(String commit) {
-    if (!_CommittedObjects.isObjectId(commit)) {
-      return _listTrackedEntriesAt(commit);
-    }
-    final cached =
-        _CommittedObjects.trees[_CommittedObjects.key(root, commit)] ??=
-            List.unmodifiable(_listTrackedEntriesAt(commit));
-    return List.of(cached);
-  }
-
-  List<GitTreeEntry> _listTrackedEntriesAt(String commit) {
-    final result = timedRunSync('git', [
-      'ls-tree',
-      '-r',
-      '-z',
-      commit,
-    ], workingDirectory: root);
-    if (result.exitCode != 0) {
-      throw SourceUnreadable(
-        'the source tree at $commit',
-        (result.stderr as String).trim(),
-      );
-    }
-    final entries = <GitTreeEntry>[];
-    for (final record
-        in (result.stdout as String)
-            .split('\u0000')
-            .where((r) => r.isNotEmpty)) {
-      final separator = record.indexOf('\t');
-      if (separator <= 0 || separator == record.length - 1) {
-        throw SourceUnreadable(
-          'the source tree at $commit',
-          'git returned a malformed tree entry',
-        );
-      }
-      final metadata = record.substring(0, separator).split(' ');
-      final path = record.substring(separator + 1);
-      if (metadata.length != 3 ||
-          !RegExp(r'^[0-7]{6}$').hasMatch(metadata[0]) ||
-          !_CommittedObjects.isObjectId(metadata[2])) {
-        throw SourceUnreadable(
-          'the source tree at $commit',
-          'git returned malformed mode, type, or object metadata for $path',
-        );
-      }
-      _resolve(path);
-      entries.add(
-        GitTreeEntry(path: path, mode: metadata[0], type: metadata[1]),
-      );
-    }
-    return entries;
-  }
-
-  List<String> trackedFilesAt(String commit) =>
-      trackedEntriesAt(commit).map((entry) => entry.path).toList();
-
-  /// Every tracked blob at [commit], in one `git cat-file --batch`.
-  ///
-  /// One `git show` per file is a subprocess per file: measured at 2.44s for
-  /// this repository's 165 tracked files, against 0.065s batched. Staging
-  /// reads the whole snapshot at once, so it asks once.
-  ///
-  /// A path containing a newline cannot be expressed in the batch protocol
-  /// and is read on its own, so no path is silently skipped.
-  Future<Map<String, Uint8List>> readBytesBatchAt(
-    String commit,
-    List<String> paths,
-  ) => Timings.timeTallyAsync(
-    'git cat-file --batch',
-    () => _readBytesBatchAt(commit, paths),
-  );
-
-  Future<Map<String, Uint8List>> _readBytesBatchAt(
-    String commit,
-    List<String> paths,
-  ) async {
-    final result = <String, Uint8List>{};
-    final batched = <String>[];
-    for (final path in paths) {
-      _resolve(path); // validates that [path] cannot escape the repository.
-      if (path.contains('\n')) {
-        result[path] = Uint8List.fromList(readBytesAt(commit, path));
-      } else {
-        batched.add(path);
-      }
-    }
-    if (batched.isEmpty) return result;
-
-    final process = await Process.start('git', const [
-      'cat-file',
-      '--batch',
-    ], workingDirectory: root);
-    // Copies as it accumulates. `copy: false` would retain the stream's own
-    // buffers, and the snapshot every release verifies is not the place to
-    // depend on dart:io never reusing one.
-    final incoming = BytesBuilder();
-    final collected = process.stdout.forEach(incoming.add);
-    final failure = process.stderr.transform(utf8.decoder).join();
-    for (final path in batched) {
-      process.stdin.write('$commit:$path\n');
-    }
-    await process.stdin.close();
-    final code = await process.exitCode;
-    await collected;
-    if (code != 0) {
-      throw SourceUnreadable(batched.first, (await failure).trim());
-    }
-    final stdoutBytes = incoming.takeBytes();
-
-    // Each answer is `<oid> <type> <size>\n`, then exactly size bytes, then
-    // a newline. Answers arrive in the order asked.
-    var at = 0;
-    for (final path in batched) {
-      final endOfHeader = stdoutBytes.indexOf(0x0a, at);
-      if (endOfHeader < 0) {
-        throw SourceUnreadable(path, 'git cat-file ended early');
-      }
-      final header = utf8.decode(stdoutBytes.sublist(at, endOfHeader));
-      final fields = header.split(' ');
-      if (fields.length != 3) {
-        throw SourceUnreadable(path, header);
-      }
-      final size = int.tryParse(fields[2]);
-      if (size == null) throw SourceUnreadable(path, header);
-      final start = endOfHeader + 1;
-      if (start + size > stdoutBytes.length) {
-        throw SourceUnreadable(path, 'git cat-file returned a short object');
-      }
-      result[path] = Uint8List.sublistView(stdoutBytes, start, start + size);
-      at = start + size + 1; // the newline that closes the object
-    }
-    return result;
-  }
-
-  List<int> readBytesAt(String commit, String path) {
-    _resolve(path); // validates that [path] cannot escape the repository.
-    return _showBytesAt(commit, path);
-  }
-
-  List<int> _showBytesAt(String commit, String path) {
-    final result = timedRunSync(
-      'git',
-      ['show', '$commit:$path'],
-      workingDirectory: root,
-      stdoutEncoding: null,
-    );
-    if (result.exitCode != 0) {
-      throw SourceUnreadable(path, '${result.stderr}'.trim());
-    }
-    return List<int>.from(result.stdout as List<int>);
-  }
-
-  /// The repository root containing [start], or null when there is none.
-  static String? findRoot(String start) {
-    final result = timedRunSync('git', const [
-      'rev-parse',
-      '--show-toplevel',
-    ], workingDirectory: start);
-    if (result.exitCode != 0) return null;
-    return (result.stdout as String).trim();
-  }
-}
-
-/// A directory with no Git identity, read as it is: status, plan and init
-/// work outside Git, and `rk use` reads the projects it installs from.
-class FileSystemSourceTree implements SourceTree {
-  FileSystemSourceTree(this.root);
-
-  final String root;
-
-  @override
-  String get description => root;
-
-  String _resolve(String path) {
-    final parts = path
-        .split('/')
-        .where((part) => part.isNotEmpty && part != '.')
+    return (result.stdout as String)
+        .split('\u0000')
+        .where((p) => p.isNotEmpty)
         .toList();
-    if (path.startsWith('/') ||
-        path.startsWith('\\') ||
-        path.contains('\\') ||
-        path.contains('\u0000') ||
-        RegExp(r'^[A-Za-z]:').hasMatch(path) ||
-        parts.contains('..')) {
-      throw ArgumentError('path escapes the source directory: $path');
-    }
-    var resolved = root;
-    for (final part in parts) {
-      resolved = '$resolved/$part';
-      if (FileSystemEntity.typeSync(resolved, followLinks: false) ==
-          FileSystemEntityType.link) {
-        throw SourceUnreadable(
-          path,
-          'the path component "$part" is a symbolic link',
-        );
-      }
-    }
-    return resolved;
   }
 
-  @override
-  String? read(String path) {
-    final bytes = readBytes(path);
-    return bytes == null ? null : utf8.decode(bytes);
-  }
-
-  @override
-  List<int>? readBytes(String path) {
-    final file = File(_resolve(path));
-    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
-    if (type == FileSystemEntityType.notFound) return null;
-    if (type != FileSystemEntityType.file) {
-      throw SourceUnreadable(path, 'the path is not a regular file');
-    }
-    try {
-      return file.readAsBytesSync();
-    } on FileSystemException catch (error) {
-      throw SourceUnreadable(path, error.osError?.message ?? '$error');
-    }
-  }
-
-  @override
-  bool exists(String path) {
-    final full = _resolve(path);
-    return File(full).existsSync() || Directory(full).existsSync();
-  }
-
-  @override
-  List<String> trackedFiles() {
+  List<String> _walked() {
     final files = <String>[];
     for (final entity in Directory(
       root,
@@ -386,114 +191,167 @@ class FileSystemSourceTree implements SourceTree {
     }
     return files..sort();
   }
+
+  /// The repository root containing [start], or null when there is none.
+  static String? findRoot(String start) {
+    final result = timedRunSync('git', const [
+      'rev-parse',
+      '--show-toplevel',
+    ], workingDirectory: start);
+    if (result.exitCode != 0) return null;
+    return (result.stdout as String).trim();
+  }
 }
 
-String _normalizeSourcePath(String path) =>
-    path.split('/').where((part) => part.isNotEmpty && part != '.').join('/');
+/// An object in a commit: its type (`blob`, `tree`, `commit`) and its bytes.
+typedef GitObject = ({String type, Uint8List bytes});
 
-/// One immutable Git commit exposed through the synchronous [SourceTree]
-/// contract.
+/// One immutable commit's files, read through [tools], never the worktree's.
 ///
-/// Status uses this when no local release stage exists. A dirty worktree is a
-/// problem to report, but it must not make an exact published package look
-/// different from the committed source the target version names.
-class GitCommitSourceTree implements SourceTree {
-  GitCommitSourceTree(String root, this.commit)
-    : _repository = GitSourceTree(root);
+/// Reading a whole commit, as a stage does, or a few release inputs, as
+/// status and plan do, is one `git cat-file --batch` either way. One
+/// `git show` per file is a process per file: 2.44s for this repository's
+/// 165 files, against 0.065s batched.
+final class CommitFiles {
+  CommitFiles(this.root, this.commit, {this.tools = const SystemTools()});
 
-  final GitSourceTree _repository;
+  final String root;
+
+  /// The commit's full object id.
   final String commit;
-  Map<String, GitTreeEntry>? _entries;
+  final Tools tools;
 
-  @override
-  String get description => '${_repository.root}@$commit';
+  /// Every tracked entry with its mode (`git ls-tree -r -z`), read once.
+  late final Future<List<GitTreeEntry>> entries = _listEntries();
 
-  String _path(String path) {
-    final parts = path
-        .split('/')
-        .where((part) => part.isNotEmpty && part != '.');
-    if (parts.contains('..')) {
-      throw ArgumentError('path escapes the committed source: $path');
-    }
-    return parts.join('/');
-  }
-
-  @override
-  List<String> trackedFiles() => List.unmodifiable(_treeEntries.keys);
-
-  /// Git metadata from the selected immutable commit, never worktree modes.
-  List<GitTreeEntry> trackedEntries() => List.unmodifiable(_treeEntries.values);
-
-  /// Bulk source capture for staging and receipt authorization. The caller
-  /// checks entry kinds before requesting blobs so unsupported entries retain
-  /// their useful symlink/submodule diagnostic.
-  Future<Map<String, Uint8List>> readBytesBatch(List<String> paths) =>
-      _repository.readBytesBatchAt(commit, paths);
-
-  Map<String, GitTreeEntry> get _treeEntries => _entries ??= {
-    for (final entry in _repository.trackedEntriesAt(commit)) entry.path: entry,
-  };
-
-  @override
-  bool exists(String path) {
-    final target = _path(path);
-    if (target.isEmpty) return true;
-    if (trackedFiles().contains(target)) return true;
-    final prefix = '$target/';
-    return trackedFiles().any((candidate) => candidate.startsWith(prefix));
-  }
-
-  @override
-  List<int>? readBytes(String path) {
-    final target = _path(path);
-    final entry = _treeEntries[target];
-    if (entry == null) return null;
-    if (!entry.isRegularFile) {
+  Future<List<GitTreeEntry>> _listEntries() async {
+    final listed = await tools.run('git', [
+      'ls-tree',
+      '-r',
+      '-z',
+      commit,
+    ], workingDirectory: root);
+    if (!listed.ok) {
       throw SourceUnreadable(
-        target,
-        'the committed entry is a ${entry.unsupportedKind}, not a regular '
-        'file',
+        'the source tree at $commit',
+        listed.stderr.trim(),
       );
     }
-    return _repository.readBytesAt(commit, target);
+    return [
+      for (final record in listed.stdout.split('\u0000'))
+        if (record.isNotEmpty) _entry(record),
+    ];
   }
 
-  @override
-  String? read(String path) {
-    final bytes = readBytes(path);
-    return bytes == null ? null : utf8.decode(bytes);
-  }
-}
-
-/// An in-memory tree, for tests and for rendering a repository rk has read
-/// from somewhere other than a working copy.
-class MemorySourceTree implements SourceTree {
-  MemorySourceTree(this.files, {this.description = 'memory'});
-
-  final Map<String, String> files;
-
-  @override
-  final String description;
-
-  @override
-  String? read(String path) => files[_normalizeSourcePath(path)];
-
-  @override
-  List<int>? readBytes(String path) {
-    final text = read(path);
-    return text == null ? null : utf8.encode(text);
+  GitTreeEntry _entry(String record) {
+    final tab = record.indexOf('\t');
+    final metadata = record.substring(0, tab < 0 ? 0 : tab).split(' ');
+    if (tab < 0 || metadata.length != 3) {
+      throw SourceUnreadable(
+        'the source tree at $commit',
+        'git returned a malformed tree entry',
+      );
+    }
+    return GitTreeEntry(
+      path: record.substring(tab + 1),
+      mode: metadata[0],
+      type: metadata[1],
+    );
   }
 
-  @override
-  bool exists(String path) {
-    final target = _normalizeSourcePath(path);
-    if (files.containsKey(target)) return true;
-    final prefix = '$target/';
-    return files.keys.any((p) => p.startsWith(prefix));
+  /// The object at each path (`<commit>:<path>`; '' is the root tree), in
+  /// one `git cat-file --batch`, or null where the commit has none. A path
+  /// that contains a newline, which the protocol cannot carry, is read
+  /// alone, and must be there.
+  Future<Map<String, GitObject?>> read(Iterable<String> paths) async {
+    final found = <String, GitObject?>{};
+    final batched = <String>[];
+    for (final path in paths) {
+      // Git ends the whole batch at a path that climbs out of the commit.
+      if (path.split('/').contains('..')) {
+        throw ArgumentError('path escapes the commit: $path');
+      }
+      if (path.contains('\n')) {
+        found[path] = await _readAlone(path);
+      } else {
+        batched.add(path);
+      }
+    }
+    if (batched.isEmpty) return found;
+    final answer = await tools.run(
+      'git',
+      const ['cat-file', '--batch'],
+      workingDirectory: root,
+      stdin: utf8.encode(batched.map((path) => '$commit:$path\n').join()),
+    );
+    if (!answer.ok) {
+      throw SourceUnreadable('the commit $commit', answer.stderr.trim());
+    }
+    // In the order asked, each answer is `<name> missing`, or
+    // `<oid> <type> <size>` followed by exactly size bytes and a newline.
+    final out = answer.bytes;
+    var at = 0;
+    for (final path in batched) {
+      final end = out.indexOf(0x0a, at);
+      final header = end < 0
+          ? ''
+          : utf8.decode(out.sublist(at, end), allowMalformed: true);
+      final fields = header.split(' ');
+      final size = int.tryParse(fields.last);
+      if (header.endsWith(' missing')) {
+        found[path] = null;
+        at = end + 1;
+      } else if (fields.length != 3 ||
+          size == null ||
+          end + 1 + size > out.length) {
+        throw SourceUnreadable(path, 'git cat-file answered "$header"');
+      } else {
+        found[path] = (
+          type: fields[1],
+          bytes: Uint8List.sublistView(out, end + 1, end + 1 + size),
+        );
+        at = end + 2 + size;
+      }
+    }
+    return found;
   }
 
-  @override
-  List<String> trackedFiles() => files.keys.toList();
+  Future<GitObject> _readAlone(String path) async {
+    final name = '$commit:$path';
+    final type = await tools.run('git', [
+      'cat-file',
+      '-t',
+      name,
+    ], workingDirectory: root);
+    final content = type.ok
+        ? await tools.run('git', [
+            'cat-file',
+            type.stdout.trim(),
+            name,
+          ], workingDirectory: root)
+        : type;
+    if (!content.ok) throw SourceUnreadable(path, content.stderr.trim());
+    return (type: type.stdout.trim(), bytes: content.bytes);
+  }
+
+  /// The entries of [tree], a tree object read from this commit, by name,
+  /// with their modes as `git ls-tree` writes them.
+  Map<String, String> modesIn(GitObject tree) {
+    // Each entry is `<mode> <name>\0` and the raw object id, as wide as the
+    // commit's: 20 bytes for SHA-1, 32 for SHA-256.
+    final bytes = tree.bytes;
+    final modes = <String, String>{};
+    var at = 0;
+    while (at < bytes.length) {
+      final space = bytes.indexOf(0x20, at);
+      final end = space < 0 ? -1 : bytes.indexOf(0x00, space);
+      if (end < 0) break;
+      modes[utf8.decode(bytes.sublist(space + 1, end), allowMalformed: true)] =
+          ascii.decode(bytes.sublist(at, space)).padLeft(6, '0');
+      at = end + 1 + commit.length ~/ 2;
+    }
+    return modes;
+  }
 }
 
 /// A file that is there and that rk could not read.
@@ -511,22 +369,15 @@ class SourceUnreadable implements Exception {
   String toString() => '$path could not be read: $reason';
 }
 
-/// What this process has already read from immutable commits.
-///
-/// A commit named by its full object id cannot change, so neither can its
-/// tree or any blob in it. A release reads the same few manifests hundreds
-/// of times, each read a `git show` subprocess; answering repeats from memory
-/// leaves one read per file. Callers get copies, so nothing they do to a
-/// result reaches the cache. Symbolic names (HEAD, a branch) are never
-/// cached: they move.
-abstract final class _CommittedObjects {
-  static final Map<String, List<GitTreeEntry>> trees = {};
-
-  static final _objectId = RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$');
-
-  static bool isObjectId(String commit) => _objectId.hasMatch(commit);
-
-  /// The key of [commit]'s tree in the repository at [root], or of the blob
-  /// at [path] in it.
-  static String key(String root, String commit) => '$root\u0000$commit';
+/// The segments of [path] when it names a place inside a directory: relative,
+/// with no empty, `.` or `..` segment, backslash, NUL or drive letter.
+List<String>? relativeSegments(String path) {
+  final parts = path.split('/');
+  if (path.contains('\\') ||
+      path.contains('\u0000') ||
+      RegExp(r'^[A-Za-z]:').hasMatch(path) ||
+      parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
+    return null;
+  }
+  return parts;
 }

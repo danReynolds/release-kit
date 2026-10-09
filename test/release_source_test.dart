@@ -1,6 +1,11 @@
 import 'dart:io';
 
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/release_source.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 /// Where status, plan, stage and release read release.toml from, against
@@ -40,12 +45,120 @@ publish = ["pub.dev"]
     final source = await ReleaseSource.open(root.path);
     // An edit after Git said clean does not reach what is staged.
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 9.9.9\n');
+    _write(root, 'CHANGELOG.md', '## 9.9.9\n');
 
-    final read = source.readConfig() as ConfigResolved;
+    final read = await source.readConfig() as ConfigResolved;
 
     expect(source.inRepository, isTrue);
-    expect(read.resolution.unit('tool')!.version.canonical, '1.0.0');
+    final unit = read.resolution.unit('tool')!;
+    expect(unit.version.canonical, '1.0.0');
+    expect(unit.projects.single.changelog, '## 1.0.0\n');
     expect(source.git.stagingProblem(), isNull);
+  });
+
+  test(
+    'a clean repository\'s release inputs are read in two batches',
+    () async {
+      _write(root, 'packages/a/pubspec.yaml', 'name: a\nversion: 1.0.0\n');
+      _write(
+        root,
+        'packages/b/Cargo.toml',
+        '[package]\nname = "b"\nversion = "2.0.0"\n',
+      );
+      _write(root, 'release.toml', '''
+schema = 2
+
+[release.tool]
+publish = ["pub.dev"]
+
+[release.a]
+path = "packages/a"
+publish = ["pub.dev"]
+
+[release.b]
+path = "packages/b"
+build = ["tool/build.sh", "{out}"]
+assets = ["b.tar.gz"]
+publish = ["git-tag", "github-release"]
+''');
+      commitAll();
+      final asked = <String>[];
+      final source = await ReleaseSource.open(root.path, tools: _Asked(asked));
+      asked.clear();
+
+      final read = await source.readConfig() as ConfigResolved;
+
+      expect(read.resolution.units.map((unit) => unit.version.canonical), [
+        '1.0.0',
+        '1.0.0',
+        '2.0.0',
+      ]);
+      // The root tree and release.toml, then each project's directory and
+      // the files in it: never a process per file, nor the whole tree.
+      expect(asked, ['git cat-file --batch', 'git cat-file --batch']);
+    },
+  );
+
+  test(
+    'a committed changelog that links into the commit is read through',
+    () async {
+      if (Platform.isWindows) return;
+      _write(root, 'packages/a/pubspec.yaml', 'name: a\nversion: 1.0.0\n');
+      Link(
+        '${root.path}/packages/a/CHANGELOG.md',
+      ).createSync('../../CHANGELOG.md');
+      _write(root, 'release.toml', '''
+schema = 2
+
+[release.a]
+path = "packages/a"
+publish = ["pub.dev"]
+''');
+      commitAll();
+
+      final read =
+          await (await ReleaseSource.open(root.path)).readConfig()
+              as ConfigResolved;
+      expect(
+        read.resolution.unit('a')!.projects.single.changelog,
+        '## 1.0.0\n',
+      );
+
+      // One that leads out of the commit is refused, as a stage refuses it.
+      Link('${root.path}/packages/a/CHANGELOG.md')
+        ..deleteSync()
+        ..createSync('/etc/hosts');
+      git(['commit', '-qam', 'out']);
+      final refused =
+          await (await ReleaseSource.open(root.path)).readConfig()
+              as ConfigProblems;
+      expect(refused.problems.single.code, 'RK-SRC-003');
+      expect(refused.problems.single.remedy, contains('symbolic link'));
+    },
+  );
+
+  test('installing reads no changelog: a link to one is never refused', () {
+    if (Platform.isWindows) return;
+    File('${root.path}/CHANGELOG.md').renameSync('${root.path}/NEWS.md');
+    Link('${root.path}/CHANGELOG.md').createSync('NEWS.md');
+    final tree = WorkingTree(root.path, git: false);
+    final config = ReleaseConfig.parse(
+      tree.read('release.toml')!,
+      'release.toml',
+      Diagnostics(),
+    )!;
+
+    final installing = Resolution.resolve(
+      config,
+      tree,
+      Diagnostics(),
+      releasing: false,
+    );
+    expect(installing!.unit('tool')!.projects.single.changelog, isNull);
+    expect(
+      () => Resolution.resolve(config, tree, Diagnostics()),
+      throwsA(isA<SourceUnreadable>()),
+    );
   });
 
   test('a dirty repository is read as it is, and cannot be staged', () async {
@@ -53,7 +166,7 @@ publish = ["pub.dev"]
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
 
     final source = await ReleaseSource.open(root.path);
-    final read = source.readConfig() as ConfigResolved;
+    final read = await source.readConfig() as ConfigResolved;
 
     expect(read.resolution.unit('tool')!.version.canonical, '1.1.0');
     final problem = source.git.stagingProblem()!;
@@ -66,7 +179,7 @@ publish = ["pub.dev"]
     git(['init', '-q']);
 
     final source = await ReleaseSource.open(root.path);
-    final read = source.readConfig() as ConfigResolved;
+    final read = await source.readConfig() as ConfigResolved;
 
     expect(read.resolution.units.map((unit) => unit.name), ['tool']);
     expect(source.git.hasCommit, isFalse);
@@ -77,12 +190,33 @@ publish = ["pub.dev"]
     'outside Git the directory is read, and nothing can be staged',
     () async {
       final source = await ReleaseSource.open(root.path);
-      final read = source.readConfig() as ConfigResolved;
+      final read = await source.readConfig() as ConfigResolved;
 
       expect(source.inRepository, isFalse);
       expect(read.resolution.units.map((unit) => unit.name), ['tool']);
-      expect(source.git.stagingProblem()?.code, 'RK-SRC-004');
+      expect(source.git.stagingProblem()?.code, 'RK-GIT-001');
       expect(source.git.unpushedProblem(), isNull);
+    },
+  );
+
+  test(
+    'the working tree follows a link in Git, and refuses one outside it',
+    () {
+      if (Platform.isWindows) return;
+      Link('${root.path}/linked.md').createSync('CHANGELOG.md');
+      Directory('${root.path}/docs').createSync();
+      final inGit = WorkingTree(root.path, git: true);
+      final outside = WorkingTree(root.path, git: false);
+
+      expect(inGit.read('linked.md'), '## 1.0.0\n');
+      expect(inGit.read('docs'), isNull);
+      for (final path in ['linked.md', 'docs']) {
+        expect(() => outside.read(path), throwsA(isA<SourceUnreadable>()));
+      }
+      for (final tree in [inGit, outside]) {
+        expect(() => tree.read('../escape'), throwsArgumentError);
+        expect(tree.read('CHANGELOG.md'), '## 1.0.0\n');
+      }
     },
   );
 
@@ -92,7 +226,7 @@ publish = ["pub.dev"]
 
     final source = await ReleaseSource.open(root.path);
 
-    expect(source.readConfig(), isA<ConfigMissing>());
+    expect(await source.readConfig(), isA<ConfigMissing>());
   });
 }
 
@@ -100,4 +234,38 @@ void _write(Directory root, String path, String contents) {
   File('${root.path}/$path')
     ..createSync(recursive: true)
     ..writeAsStringSync(contents);
+}
+
+/// Real tools that write down what they were asked.
+final class _Asked implements Tools {
+  _Asked(this.asked);
+
+  final List<String> asked;
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+    List<int>? stdin,
+  }) {
+    asked.add('$executable ${arguments.join(' ')}');
+    return const SystemTools().run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+      stdin: stdin,
+    );
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) => throw UnimplementedError();
 }

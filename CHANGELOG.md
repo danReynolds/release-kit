@@ -13,8 +13,8 @@ published finishes with 0.1.14.
 ### Releasing
 
 - A release is of a commit. `rk stage` and `rk release` refuse uncommitted
-  changes for every unit (`RK-GIT-001`, "commit first") and a directory
-  outside Git (`RK-SRC-004`); `RK-SRC-001` and `RK-SRC-002` are gone.
+  changes for every unit and a directory outside Git (`RK-GIT-001`,
+  "commit first"); `RK-SRC-001` and `RK-SRC-002` are gone.
   `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
   does.
 - A release reads public state once and asks one question for every unit's
@@ -135,6 +135,47 @@ published finishes with 0.1.14.
   order.
 - `rk clean` removes what it showed, and leaves alone an entry that changed
   while you answered.
+
+### Configuration and diagnostics
+
+- A clean commit's release inputs are read in two `git cat-file --batch`
+  calls: release.toml with the root tree, then each project's directory,
+  pubspec.yaml, Cargo.toml and CHANGELOG.md. `rk plan` on Fleury's four
+  packages reads them in about 0.03s instead of 0.1s.
+- `rk status` and `rk release` check the changelog of the commit they
+  release, not the working tree's. A changelog committed as a link to
+  another file in the commit is read through it, as a stage reads it; one
+  that cannot be read is refused up front (`RK-SRC-003`), as an unreadable
+  pubspec is. `rk use` does not read changelogs.
+- A table header inside an array of tables, such as
+  `[release.core.project.x]`, is a TOML error (`RK-TOML-001`).
+- A diagnostic code names the kind of mistake; the message names the
+  setting, and the location its line. Codes that repeat another are merged,
+  and doc/codes.md lists 96 codes, down from 150:
+
+  | was | now |
+  |---|---|
+  | `RK-CONF-001` | `RK-CONF-002` |
+  | `RK-CONF-008`, `RK-CONF-016`, `RK-CONF-038` | `RK-CONF-003` |
+  | `RK-CONF-004`, `006`, `007`, `010`, `013`, `014`, `015`, `017`, `018`, `020`, `022`, `023`, `027`, `028`, `029`, `032`, `033`, `037`, `040`, `042`, `043`; `RK-CONF-041` for a malformed list | `RK-CONF-005` |
+  | `RK-CONF-012`, `019`, `024`, `025`, `036`, `039`, `044`, `045`; `RK-CONF-041` without binary_platforms | `RK-CONF-009` |
+  | `RK-CONF-011` | removed: it only followed another refusal |
+  | `RK-CONF-034` | `RK-SRC-003` |
+  | `RK-RES-012` | `RK-CONF-009`, refused before any manifest is read |
+  | `RK-RES-014` | `RK-RES-003` |
+  | `RK-RES-005`, `RK-RES-015` | `RK-RES-004` |
+  | `RK-RES-007` | `RK-RES-006` |
+  | `RK-RES-017` | `RK-RES-009`, once for a unit whose release several projects build |
+  | `RK-YAML-001` | `RK-PKG-001` |
+  | `RK-PKG-003` | `RK-RES-002` |
+  | `RK-CHG-002` | `RK-CHG-001` |
+  | `RK-CLI-001` | `RK-CLI-005` |
+  | `RK-CLI-008`, `RK-CLI-009` | `RK-CLI-003` |
+  | `RK-CLEAN-001`, `RK-CLEAN-002` | `RK-STAGE-006` |
+  | `RK-CLEAN-004` | `RK-AUTH-001` |
+  | `RK-GIT-002` | `RK-GIT-003` |
+  | `RK-SRC-004` | `RK-GIT-001` |
+  | `RK-INIT-005` | `RK-INIT-004` |
 
 ### rk use
 

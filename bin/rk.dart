@@ -294,7 +294,7 @@ Future<void> runRk(
   if (!_verbs.contains(command)) {
     output.problem(
       Diagnostic(
-        code: 'RK-CLI-008',
+        code: 'RK-CLI-003',
         message: 'rk has no command named "$command"',
         remedy: _commands,
       ),
@@ -313,7 +313,7 @@ Future<void> runRk(
     // asked for in JSON is not answered in prose it cannot read.
     output.problem(
       Diagnostic(
-        code: 'RK-CLI-001',
+        code: 'RK-CLI-005',
         message: 'rk does not have ${unknown.join(', ')}',
         remedy: _takes(command),
       ),
@@ -504,7 +504,7 @@ Future<void> _help(
   if (usage == null) {
     return refuse(
       Diagnostic(
-        code: 'RK-CLI-008',
+        code: 'RK-CLI-003',
         message: 'rk has no command named "$named"',
         remedy: _commands,
       ),
@@ -543,7 +543,7 @@ void _reportTimings(
   if (!requested) return;
   stderr.write('\n${output.timeline.breakdown()}');
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
   final directory = '$root/.rk';
@@ -595,7 +595,7 @@ void _recordDiagnosis(Output output, int code, {String? crash}) {
     return;
   }
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
 
@@ -618,11 +618,9 @@ Future<int> _init(
   required bool interactive,
   required bool write,
 }) async {
-  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
+  final gitRoot = WorkingTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
-  final tree = gitRoot == null
-      ? FileSystemSourceTree(root)
-      : GitSourceTree(gitRoot) as SourceTree;
+  final tree = WorkingTree(root, git: gitRoot != null);
   final git = gitRoot == null ? null : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
@@ -682,7 +680,7 @@ Future<int> _clean(
   required bool interactive,
 }) {
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   return CleanCommand(
     store: StageStore(root),
@@ -848,7 +846,7 @@ class _Prepared {
 /// from the working tree otherwise — for status, plan, stage and release.
 Future<_Prepared> _prepare(Output output) async {
   final source = await ReleaseSource.open(Directory.current.absolute.path);
-  switch (source.readConfig()) {
+  switch (await source.readConfig()) {
     case ConfigMissing():
       output.repository(name: source.root.split('/').last);
       output.blank();

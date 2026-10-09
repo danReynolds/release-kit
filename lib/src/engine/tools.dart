@@ -15,13 +15,16 @@ abstract class Tools {
   ///
   /// [timeout] bounds this one call, whatever the toolset's own bound is:
   /// some commands wait for a person, and a caller that has captured their
-  /// output has taken away the prompt they are waiting on.
+  /// output has taken away the prompt they are waiting on. [stdin] is what
+  /// the command reads, such as the requests `git cat-file --batch` answers;
+  /// either way its input is closed.
   Future<ToolResult> run(
     String executable,
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   });
 
   /// Runs [executable] attached to the terminal, so a native prompt — a
@@ -53,13 +56,24 @@ abstract interface class StreamingTools implements Tools {
 class ToolResult {
   ToolResult({
     required this.exitCode,
-    required this.stdout,
+    required String stdout,
     required this.stderr,
-  });
+  }) : _stdout = stdout;
+
+  /// What a process wrote, decoded only if it is read as text: the bytes of
+  /// a whole commit are not.
+  ToolResult._captured(this.exitCode, Uint8List bytes, this.stderr)
+    : _bytes = bytes;
 
   final int exitCode;
-  final String stdout;
   final String stderr;
+  String? _stdout;
+  Uint8List? _bytes;
+
+  String get stdout => _stdout ??= _lenient.decode(_bytes!);
+
+  /// [stdout] exactly as written, for output framed by byte counts.
+  Uint8List get bytes => _bytes ??= utf8.encode(_stdout!);
 
   bool get ok => exitCode == 0;
 
@@ -124,6 +138,9 @@ const _unattended = {'GIT_TERMINAL_PROMPT': '0'};
 /// `Stream.join` hides that handle. That is harmless for an ordinary child,
 /// but not for a child that exits after giving its pipe to a grandchild: the
 /// stream remains open and there is then no way to honor the caller's bound.
+///
+/// Copied as they arrive, so what a caller keeps, such as a commit's files,
+/// never depends on dart:io leaving its own buffers alone.
 final class _CapturedOutput {
   _CapturedOutput(Stream<List<int>> stream) {
     _subscription = stream.listen(
@@ -137,12 +154,12 @@ final class _CapturedOutput {
     );
   }
 
-  final BytesBuilder _bytes = BytesBuilder(copy: false);
+  final BytesBuilder _bytes = BytesBuilder();
   final Completer<void> _done = Completer<void>();
   late final StreamSubscription<List<int>> _subscription;
 
   Future<void> get done => _done.future;
-  String get text => _lenient.decode(_bytes.toBytes());
+  Uint8List takeBytes() => _bytes.takeBytes();
 
   Future<void> cancel() => _subscription.cancel();
 }
@@ -173,6 +190,7 @@ class SystemTools implements StreamingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) {
     Future<ToolResult> run() => _run(
       executable,
@@ -180,6 +198,7 @@ class SystemTools implements StreamingTools {
       workingDirectory: workingDirectory,
       environment: environment,
       timeout: timeout,
+      stdin: stdin,
     );
     return Timings.enabled
         ? Timings.timeTallyAsync(
@@ -195,6 +214,7 @@ class SystemTools implements StreamingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (cancellation?.cancelled == true) {
       return ToolResult(
@@ -207,37 +227,27 @@ class SystemTools implements StreamingTools {
         timeout ??
         this.timeout ??
         (cancellation == null ? null : const Duration(minutes: 2));
-    if (bound == null) {
-      final result = await Process.run(
-        executable,
-        arguments,
-        workingDirectory: workingDirectory,
-        environment: environment,
-        stdoutEncoding: _lenient,
-        stderrEncoding: _lenient,
-      );
-      return ToolResult(
-        exitCode: result.exitCode,
-        stdout: result.stdout as String,
-        stderr: result.stderr as String,
-      );
-    }
-
     final process = await Process.start(
       executable,
       arguments,
       workingDirectory: workingDirectory,
-      environment: {..._unattended, ...?environment},
+      environment: bound == null
+          ? environment
+          : {..._unattended, ...?environment},
     );
-    // The same closed stdin an unbounded run gets from Process.run. Left
-    // open, a tool that reads stdin blocks on a pipe nobody will ever write
-    // to and burns the whole bound before rk kills it; closed, it sees EOF
-    // and fails in milliseconds. This governs stdin only — a tool that
-    // prompts on /dev/tty still holds rk's terminal, and the lever for those
-    // is the environment (GIT_TERMINAL_PROMPT and its kind), not this.
-    unawaited(process.stdin.close().catchError((Object _) {}));
+    // Read before anything is written: a command that answers as it reads,
+    // as `git cat-file --batch` does, would otherwise fill its output pipe
+    // and stop reading while rk is still writing to it.
     final stdout = _CapturedOutput(process.stdout);
     final stderr = _CapturedOutput(process.stderr);
+    // Then the input is closed. Left open, a tool that reads stdin blocks on
+    // a pipe nobody will ever write to and burns the whole bound before rk
+    // kills it; closed, it sees EOF and fails in milliseconds. This governs
+    // stdin only — a tool that prompts on /dev/tty still holds rk's
+    // terminal, and the lever for those is the environment
+    // (GIT_TERMINAL_PROMPT and its kind), not this.
+    if (stdin != null) process.stdin.add(stdin);
+    unawaited(process.stdin.close().catchError((Object _) {}));
     int? observedExitCode;
     final exitCode = process.exitCode.then((code) {
       observedExitCode = code;
@@ -248,6 +258,14 @@ class SystemTools implements StreamingTools {
       stdout.done,
       stderr.done,
     ]);
+    if (bound == null) {
+      await completed;
+      return ToolResult._captured(
+        observedExitCode!,
+        stdout.takeBytes(),
+        _lenient.decode(stderr.takeBytes()),
+      );
+    }
     final deadline = Completer<void>();
     final timer = Timer(bound, deadline.complete);
     late final bool timedOut;
@@ -285,14 +303,13 @@ class SystemTools implements StreamingTools {
       await _cancel(stdout, stderr);
     }
 
-    final capturedOut = stdout.text;
-    final capturedErr = stderr.text;
-    return ToolResult(
-      exitCode: timedOut
+    final capturedErr = _lenient.decode(stderr.takeBytes());
+    return ToolResult._captured(
+      timedOut
           ? (cancellation?.cancelled == true ? 130 : 124)
           : observedExitCode!,
-      stdout: capturedOut,
-      stderr: timedOut
+      stdout.takeBytes(),
+      timedOut
           ? [
               capturedErr.trimRight(),
               cancellation?.cancelled == true
@@ -481,6 +498,7 @@ class RecordingTools implements StreamingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     final key = '$executable ${arguments.join(' ')}';
     calls.add(key);

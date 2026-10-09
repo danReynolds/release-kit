@@ -4,16 +4,16 @@ import 'diagnostic.dart';
 import 'publish_target.dart';
 import 'pubspec.dart';
 import 'release_dependencies.dart';
+import 'release_source.dart';
 import 'source_tree.dart';
 import 'version.dart';
 
 /// Release intent resolved against the repository: what the author asked for,
 /// joined to what the manifests say.
 class Resolution {
-  Resolution({required this.units, required this.tree});
+  Resolution({required this.units});
 
   final List<ResolvedUnit> units;
-  final SourceTree tree;
 
   /// The one dependency graph over this resolution. Everything that orders
   /// projects, units, or prerequisites reads it from here, so a plan can
@@ -36,23 +36,25 @@ class Resolution {
   static Resolution? resolve(
     ReleaseConfig config,
     SourceTree tree,
-    Diagnostics diagnostics,
-  ) => _resolve(config, tree, diagnostics, developmentSources: false);
-
-  /// Discovers installation targets without applying release source policy.
-  /// Local checkouts may depend on unpublished path or Git packages. Release
-  /// callers continue to use [resolve] and retain all publication checks.
-  static Resolution? forInstallation(
-    ReleaseConfig config,
-    SourceTree tree,
-    Diagnostics diagnostics,
-  ) => _resolve(config, tree, diagnostics, developmentSources: true);
-
-  static Resolution? _resolve(
-    ReleaseConfig config,
-    SourceTree tree,
     Diagnostics diagnostics, {
-    required bool developmentSources,
+    bool releasing = true,
+  }) => fromManifests(
+    config,
+    Manifests.readFrom(tree, Manifests.pathsFor(config)),
+    diagnostics,
+    releasing: releasing,
+  );
+
+  /// Resolves [config] against [manifests], everything it declares read
+  /// from one source. [releasing] applies the release source policy and
+  /// reads each changelog; a local checkout being installed may depend on
+  /// unpublished path or Git packages, and its changelogs are not asked
+  /// about.
+  static Resolution? fromManifests(
+    ReleaseConfig config,
+    Manifests manifests,
+    Diagnostics diagnostics, {
+    bool releasing = true,
   }) {
     final projects = <ResolvedProject>[];
     final byUnit = <String, List<ResolvedProject>>{};
@@ -63,9 +65,9 @@ class Resolution {
         final project = _project(
           unit,
           declared,
-          tree,
+          manifests,
           diagnostics,
-          developmentSources: developmentSources,
+          releasing: releasing,
         );
         if (project != null) {
           list.add(project);
@@ -78,38 +80,18 @@ class Resolution {
     _rejectOverlappingPaths(projects, diagnostics);
     _rejectDuplicateNames(projects, diagnostics);
 
-    final taggedUnits = config.units
-        .where((unit) => unit.publish.contains(PublishTarget.gitTag))
-        .toList();
-    final tagUnits = taggedUnits.length;
-    if (tagUnits > 1) {
-      final implicit = taggedUnits.where((unit) => unit.tagPattern == null);
-      for (final unit in implicit) {
-        diagnostics.add(
-          'RK-RES-012',
-          'unit "${unit.name}" needs an explicit tag pattern',
-          source: unit.location,
-          remedy:
-              'this repository tags several units; declaring '
-              'tag = "${unit.name}-v{version}" keeps this unit\'s public '
-              'tag namespace stable if the repository changes again',
-        );
-      }
-    }
-
     final units = <ResolvedUnit>[];
     for (final declared in config.units) {
       final resolved = byUnit[declared.name] ?? const [];
       if (resolved.length != declared.projects.length) continue;
+      // A unit that tags and declares no tag is the one unit of one project
+      // that tags: release.toml refuses any other (RK-CONF-009).
       final tags = declared.publish.contains(PublishTarget.gitTag);
       units.add(
         ResolvedUnit(
           name: declared.name,
           publish: declared.publish,
-          tagPattern: tags
-              ? declared.tagPattern ??
-                    _derivedTagPattern(resolved.single, tagUnits > 1)
-              : null,
+          tagPattern: tags ? declared.tagPattern ?? 'v{version}' : null,
           tagWasDeclared: declared.tagPattern != null,
           homebrewTap: declared.homebrewTap,
           projects: resolved,
@@ -120,23 +102,13 @@ class Resolution {
 
     for (final unit in units) {
       _checkUnitVersions(unit, diagnostics);
-      _checkSingleBinaryProject(unit, diagnostics);
-      _checkSingleAssetProject(unit, diagnostics);
+      _checkOneAssetProject(unit, diagnostics);
     }
     _rejectSharedTags(units, diagnostics);
 
     if (diagnostics.isNotEmpty) return null;
-    return Resolution(units: units, tree: tree);
+    return Resolution(units: units);
   }
-
-  /// A sole tagged unit gets the ordinary `v{version}` convention. The
-  /// prefixed fallback is used only while constructing a refused multi-unit
-  /// resolution so downstream validation remains total; multi-unit success
-  /// requires every tag pattern to be explicit above.
-  static String _derivedTagPattern(
-    ResolvedProject project,
-    bool releasesSeveral,
-  ) => releasesSeveral ? '${project.pubspec.name}-v{version}' : 'v{version}';
 
   /// Two units cannot share a tag.
   ///
@@ -182,28 +154,36 @@ class Resolution {
   static ResolvedProject? _project(
     UnitConfig unit,
     ProjectConfig declared,
-    SourceTree tree,
+    Manifests manifests,
     Diagnostics diagnostics, {
-    required bool developmentSources,
+    required bool releasing,
   }) {
     final manifestPath = declared.path == '.'
         ? 'pubspec.yaml'
         : '${declared.path}/pubspec.yaml';
 
-    final source = tree.read(manifestPath);
+    final source = manifests.text(manifestPath);
     if (source == null) {
       final crate = declared.path == '.'
           ? 'Cargo.toml'
           : '${declared.path}/Cargo.toml';
-      final crateSource = tree.read(crate);
+      final crateSource = manifests.text(crate);
       if (crateSource != null) {
-        return _crate(unit, declared, crate, crateSource, diagnostics);
+        final project = _crate(unit, declared, crate, crateSource, diagnostics);
+        return project == null || !releasing
+            ? project
+            : ResolvedProject(
+                unitName: project.unitName,
+                config: declared,
+                pubspec: project.pubspec,
+                changelog: manifests.text(_changelog(declared)),
+              );
       }
       diagnostics.add(
         'RK-RES-001',
         'no package at "${declared.path}"',
         source: declared.location,
-        remedy: tree.exists(declared.path)
+        remedy: manifests.exists(declared.path)
             ? 'that directory has no pubspec.yaml or Cargo.toml'
             : 'that directory does not exist in the repository',
       );
@@ -226,42 +206,42 @@ class Resolution {
       return null;
     }
 
-    if (pubspec.vetoesRegistry &&
-        declared.publish.contains(PublishTarget.pubDev)) {
-      diagnostics.add(
-        'RK-RES-003',
-        '"${pubspec.name}" sets publish_to: none but is asked to publish to '
-            'pub.dev',
-        source: declared.location,
-        remedy:
-            'the manifest\'s veto wins — drop "pub.dev" from publish, or '
-            'remove publish_to from the manifest',
-      );
-      return null;
-    }
     if (!pubspec.declaresPubDev &&
         declared.publish.contains(PublishTarget.pubDev)) {
       diagnostics.add(
-        'RK-RES-014',
-        '"${pubspec.name}" names a custom package registry but is asked to '
-            'publish to pub.dev',
+        'RK-RES-003',
+        pubspec.vetoesRegistry
+            ? '"${pubspec.name}" sets publish_to: none but is asked to '
+                  'publish to pub.dev'
+            : '"${pubspec.name}" names a custom package registry but is '
+                  'asked to publish to pub.dev',
         source: declared.location,
-        remedy:
-            'this rk build has no custom Dart-registry target. Remove '
-            '"pub.dev" from publish; do not copy the custom URL into '
-            'release.toml',
+        remedy: pubspec.vetoesRegistry
+            ? 'the manifest\'s veto wins — drop "pub.dev" from publish, or '
+                  'remove publish_to from the manifest'
+            : 'this rk build has no custom Dart-registry target. Remove '
+                  '"pub.dev" from publish; do not copy the custom URL into '
+                  'release.toml',
       );
       return null;
     }
 
-    if (declared.wantsBinaries && pubspec.executables.isEmpty) {
+    final executables = pubspec.executables;
+    if (declared.wantsBinaries && executables.length != 1) {
       diagnostics.add(
         'RK-RES-004',
-        '"${pubspec.name}" ships binaries but declares no executable',
-        source: declared.location,
-        remedy:
-            'add an executables: entry to the manifest, or drop the '
-            'binary channels',
+        executables.isEmpty
+            ? '"${pubspec.name}" ships binaries but declares no executable'
+            : '"${pubspec.name}" declares ${executables.length} executables, '
+                  'so rk cannot tell which one to ship',
+        source: executables.isEmpty
+            ? declared.location
+            : SourceLocation(manifestPath, pubspec.nameLine),
+        remedy: executables.isEmpty
+            ? 'add an executables: entry to the manifest, or drop the '
+                  'binary channels'
+            : 'binary channels support one executable per project: '
+                  '${executables.join(', ')}',
       );
       return null;
     }
@@ -272,7 +252,7 @@ class Resolution {
         escaping.add('$name -> ${dependency.describeRequirement()}');
       }
     });
-    if (!developmentSources && escaping.isNotEmpty) {
+    if (releasing && escaping.isNotEmpty) {
       diagnostics.add(
         'RK-DART-201',
         '"${pubspec.name}" is built from sources this repository does not '
@@ -288,25 +268,12 @@ class Resolution {
       return null;
     }
 
-    if (declared.wantsBinaries && pubspec.executables.length > 1) {
-      diagnostics.add(
-        'RK-RES-005',
-        '"${pubspec.name}" declares ${pubspec.executables.length} executables, '
-            'so rk cannot tell which one to ship',
-        source: SourceLocation(manifestPath, pubspec.nameLine),
-        remedy:
-            'binary channels support one executable per project: '
-            '${pubspec.executables.join(', ')}',
-      );
-      return null;
-    }
-
     final defines = <String, String>{};
     for (final field in declared.dartDefinesFromPubspec) {
       final value = pubspec.stringAt(field);
       if (value == null || value.trim().isEmpty || value.contains('\u0000')) {
         diagnostics.add(
-          'RK-RES-015',
+          'RK-RES-004',
           '$field must be non-empty text in $manifestPath',
           source: declared.location,
           remedy:
@@ -321,8 +288,12 @@ class Resolution {
       unitName: unit.name,
       config: declared,
       pubspec: pubspec,
+      changelog: releasing ? manifests.text(_changelog(declared)) : null,
     );
   }
+
+  static String _changelog(ProjectConfig project) =>
+      project.path == '.' ? 'CHANGELOG.md' : '${project.path}/CHANGELOG.md';
 
   /// A Cargo crate, which rk releases only through the build it declares:
   /// its name and version come from `Cargo.toml`, and its declared assets
@@ -396,7 +367,7 @@ class Resolution {
         continue;
       }
       diagnostics.add(
-        'RK-RES-007',
+        'RK-RES-006',
         'the package "$name" is declared by two projects',
         source: project.config.location,
         remedy:
@@ -406,48 +377,35 @@ class Resolution {
     }
   }
 
-  /// One release unit may ship one standalone program.
+  /// A unit's GitHub release is built by one project: its binaries, or the
+  /// assets its own build writes.
   ///
   /// Several registry packages can still share a version and tag. Several
   /// programs have independent signing identities and public lifecycles, so
   /// they belong in separate units instead of growing a second aggregation
   /// model inside a unit.
-  static void _checkSingleBinaryProject(
+  static void _checkOneAssetProject(
     ResolvedUnit unit,
     Diagnostics diagnostics,
   ) {
-    final binary = unit.projects.where((p) => p.config.wantsBinaries).toList();
-    if (binary.length < 2) return;
+    final binary = unit.projects.where((p) => p.config.wantsBinaries);
+    final projects = [...binary, ...unit.projects.where((p) => p.buildsAssets)];
+    if (projects.length < 2) return;
+    final binaries = binary.length == projects.length;
+    final names = projects.map((project) => project.name).join(', ');
     diagnostics.add(
       'RK-RES-009',
-      'the unit "${unit.name}" ships binaries from ${binary.length} projects',
-      source: binary[1].config.location,
-      remedy:
-          'a release unit ships one standalone program; give '
-          '${binary.map((project) => project.name).join(', ')} separate '
-          'units',
-    );
-  }
-
-  /// A unit's GitHub release is built by one project: its binaries, or the
-  /// assets its own build writes.
-  static void _checkSingleAssetProject(
-    ResolvedUnit unit,
-    Diagnostics diagnostics,
-  ) {
-    final building = unit.projects.where((p) => p.buildsAssets).toList();
-    final binary = unit.projects.where((p) => p.config.wantsBinaries).toList();
-    if (building.isEmpty || building.length + binary.length < 2) return;
-    final projects = [...binary, ...building];
-    diagnostics.add(
-      'RK-RES-017',
-      'the unit "${unit.name}" builds its GitHub release from '
-          '${projects.length} projects',
-      source: building.last.config.location,
-      remedy:
-          'a unit\'s release assets come from one project; give '
-          '${projects.map((project) => project.name).join(', ')} separate '
-          'units',
+      binaries
+          ? 'the unit "${unit.name}" ships binaries from ${projects.length} '
+                'projects'
+          : 'the unit "${unit.name}" builds its GitHub release from '
+                '${projects.length} projects',
+      source: projects[binaries ? 1 : projects.length - 1].config.location,
+      remedy: binaries
+          ? 'a release unit ships one standalone program; give $names '
+                'separate units'
+          : 'a unit\'s release assets come from one project; give $names '
+                'separate units',
     );
   }
 
@@ -526,7 +484,7 @@ class ResolvedUnit {
   bool get shipsBinaries => binaryProject != null;
 
   /// The project whose own build writes the unit's release assets, when it
-  /// has one. Resolution refuses a second one (RK-RES-017).
+  /// has one. Resolution refuses a second one (RK-RES-009).
   ResolvedProject? get assetProject =>
       projects.where((project) => project.buildsAssets).firstOrNull;
 
@@ -543,7 +501,7 @@ class ResolvedUnit {
   }.any((target) => target.requiresGit);
 
   /// A project carried by a typed checklist step. Project names are unique
-  /// across the resolution (RK-RES-007), so they are stable producer ids too.
+  /// across the resolution (RK-RES-006), so they are stable producer ids too.
   ResolvedProject project(String name) =>
       projects.firstWhere((project) => project.name == name);
 
@@ -560,12 +518,17 @@ class ResolvedProject {
     required this.config,
     required this.pubspec,
     this.dartDefines = const {},
+    this.changelog,
   });
 
   final String unitName;
   final ProjectConfig config;
   final Pubspec pubspec;
   final Map<String, String> dartDefines;
+
+  /// This project's CHANGELOG.md, read from the same source as its manifest:
+  /// null when it has none, or when it was resolved to be installed.
+  final String? changelog;
 
   String get name => pubspec.name;
   Version get version => pubspec.version!;

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'atomic_file.dart';
+import 'source_tree.dart';
 
 /// Where a release keeps its intermediates, addressed by name.
 ///
@@ -44,15 +45,7 @@ class Workspace {
 }
 
 String _artifactName(String name) {
-  final parts = name.split('/');
-  final drive = RegExp(r'^[A-Za-z]:');
-  if (name.isEmpty ||
-      name.startsWith('/') ||
-      name.startsWith('\\') ||
-      name.contains('\\') ||
-      name.contains('\u0000') ||
-      drive.hasMatch(name) ||
-      parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
+  if (relativeSegments(name) == null) {
     throw ArgumentError('artifact names stay inside the workspace: $name');
   }
   return name;

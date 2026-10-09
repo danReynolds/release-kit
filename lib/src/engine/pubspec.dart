@@ -16,7 +16,6 @@ class Pubspec {
     required this.version,
     required this.publishTo,
     required this.repository,
-    required this.sdkConstraint,
     required this.executables,
     required this.dependencies,
     required this.devDependencies,
@@ -49,8 +48,6 @@ class Pubspec {
 
   /// The package's native project identity, when its pubspec declares one.
   final String? repository;
-
-  final String? sdkConstraint;
 
   /// Executable names, which say `dart pub global activate` works — not that
   /// the package wants a signed binary shipped.
@@ -146,7 +143,6 @@ class Pubspec {
       version: version,
       publishTo: doc.string('publish_to'),
       repository: doc.string('repository'),
-      sdkConstraint: doc.map('environment')?.string('sdk'),
       executables: doc.map('executables')?.keys.toList() ?? const [],
       dependencies: _dependencies(doc.map('dependencies')),
       devDependencies: _dependencies(doc.map('dev_dependencies')),

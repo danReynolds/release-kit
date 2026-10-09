@@ -5,12 +5,12 @@ import 'package:rk/src/commands/init.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/init_plan.dart';
 import 'package:rk/src/engine/release_choice.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/tui/init_picker.dart';
 import 'package:rk/src/tui/terminal.dart';
 import 'package:test/test.dart';
 
 import 'support/screen.dart';
+import 'support/memory_source_tree.dart';
 
 String textOutput(FakeTerminalDriver driver) =>
     driver.output.replaceAll(RegExp(r'\x1b\[[0-?]*[ -/]*[@-~]'), '');

@@ -5,6 +5,7 @@ import '../engine/config.dart';
 import '../engine/diagnostic.dart';
 import '../engine/init_plan.dart';
 import '../engine/release_choice.dart';
+import '../engine/release_source.dart';
 import '../output/output.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -78,14 +79,7 @@ class InitCommand {
     try {
       existing = tree.read('release.toml');
     } on SourceUnreadable catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-CONF-034',
-          message: 'release.toml is there and rk could not read it',
-          source: SourceLocation('release.toml', 1),
-          remedy: error.reason,
-        ),
-      );
+      output.problem(ReleaseSource.unreadable(error));
       return ExitCodes.refused;
     }
     // Already configured is where init leads, not a problem: rk never edits
@@ -173,7 +167,11 @@ class InitCommand {
       final proposal = plan.renderToml();
       final problems = Diagnostics();
       final parsed = ReleaseConfig.parse(proposal, 'release.toml', problems);
-      if (parsed != null) Resolution.resolve(parsed, tree, problems);
+      try {
+        if (parsed != null) Resolution.resolve(parsed, tree, problems);
+      } on SourceUnreadable catch (error) {
+        problems.report(ReleaseSource.unreadable(error));
+      }
       if (problems.isNotEmpty) {
         output.blank();
         output.problem(
@@ -231,7 +229,7 @@ class InitCommand {
         } on SourceUnreadable catch (error) {
           output.problem(
             Diagnostic(
-              code: 'RK-INIT-005',
+              code: 'RK-INIT-004',
               message: '.gitignore changed or became unreadable during init',
               remedy:
                   '${error.reason}\nnothing was written; review it and '
@@ -243,7 +241,7 @@ class InitCommand {
         if (current != gitignore) {
           output.problem(
             const Diagnostic(
-              code: 'RK-INIT-005',
+              code: 'RK-INIT-004',
               message: '.gitignore changed while init was being reviewed',
               remedy: 'nothing was written; review it and run rk init again',
             ),
@@ -366,7 +364,8 @@ extension on InitCommand {
   /// Candidate manifest paths under `packages/`, from the filesystem — which
   /// is the point: these are exactly the files git cannot list.
   Iterable<String>? _packageDirs() {
-    final root = tree is GitSourceTree ? (tree as GitSourceTree).root : null;
+    final tree = this.tree;
+    final root = tree is WorkingTree && tree.git ? tree.root : null;
     if (root == null) return null;
     final packages = Directory('$root/packages');
     if (!packages.existsSync()) return null;

@@ -1,6 +1,5 @@
 import 'package:rk/src/engine/changelog.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
@@ -86,9 +85,7 @@ void main() {
     test('passes when the entry is there', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        tree: MemorySourceTree({
-          'packages/keybay/CHANGELOG.md': '## 0.2.0\n\n- a change\n',
-        }),
+        changelog: '## 0.2.0\n\n- a change\n',
         manifestDirectory: 'packages/keybay',
         packageName: 'keybay',
         version: v('0.2.0'),
@@ -100,7 +97,7 @@ void main() {
     test('reports a missing file with the path to create', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        tree: MemorySourceTree({}),
+        changelog: null,
         manifestDirectory: 'packages/keybay',
         packageName: 'keybay',
         version: v('0.2.0'),
@@ -116,13 +113,13 @@ void main() {
     test('reports a missing entry with the heading to add', () {
       final diagnostics = Diagnostics();
       Changelog.check(
-        tree: MemorySourceTree({'CHANGELOG.md': '## 0.1.0\n'}),
+        changelog: '## 0.1.0\n',
         manifestDirectory: '.',
         packageName: 'keybay',
         version: v('0.2.0'),
         diagnostics: diagnostics,
       );
-      expect(diagnostics.found.single.code, 'RK-CHG-002');
+      expect(diagnostics.found.single.code, 'RK-CHG-001');
       expect(diagnostics.found.single.remedy, contains('## 0.2.0'));
     });
   });
