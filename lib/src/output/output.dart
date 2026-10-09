@@ -480,6 +480,7 @@ class Output {
         StepKind.build ||
         StepKind.notarize ||
         StepKind.archive ||
+        StepKind.sourceSnapshot ||
         StepKind.buildAssets ||
         StepKind.targetStage => VisualRole.localWork,
         StepKind.completeStage => VisualRole.checkpoint,

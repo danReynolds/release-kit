@@ -1,4 +1,3 @@
-import '../engine/stage_board.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
@@ -160,7 +159,7 @@ final class StageReleaseProgress {
   }
 
   void _addRows(String? unit) {
-    for (final group in board.groups) {
+    for (final group in board) {
       for (final row in group.rows) {
         _controllers[row] = live.addRow(
           id: row.id,
@@ -171,20 +170,29 @@ final class StageReleaseProgress {
     }
   }
 
-  final StageBoard board;
+  /// The rows this stage fills, by destination: see [UnitRelease.board].
+  final List<BoardGroup> board;
   final LiveProgress live;
   final bool _owned;
-  final Map<StageBoardRow, ProgressRowController> _controllers = {};
+  final Map<BoardRow, ProgressRowController> _controllers = {};
   final Map<String, StageStep> _recorded = {};
 
+  /// The rows [producer] fills, in board order. Work whose output reaches
+  /// no destination — the release notes — fills none, and says nothing.
+  List<BoardRow> _rowsFor(String producer) => [
+    for (final group in board)
+      for (final row in group.rows)
+        if (row.filledBy.any((work) => work.name == producer)) row,
+  ];
+
   ProgressHandle? handleFor(String producer) {
-    final rows = board.rowsFor(producer);
+    final rows = _rowsFor(producer);
     if (rows.isEmpty) return null;
     return ProgressHandle.combine(rows.map((row) => _controllers[row]!.handle));
   }
 
   void begin(String producer, ProgressActivity activity) {
-    for (final row in board.rowsFor(producer)) {
+    for (final row in _rowsFor(producer)) {
       final controller = _controllers[row]!;
       if (controller.state == ProgressRowState.complete) continue;
       controller.handle.begin(activity);
@@ -197,9 +205,9 @@ final class StageReleaseProgress {
     for (final step in steps) {
       _recorded[step.name] = step;
     }
-    for (final group in board.groups) {
+    for (final group in board) {
       for (final row in group.rows) {
-        final expected = board.producersFor(row);
+        final expected = {for (final work in row.filledBy) work.name};
         if (expected.isEmpty || !expected.every(_recorded.containsKey)) {
           continue;
         }
@@ -239,7 +247,7 @@ final class StageReleaseProgress {
   }
 
   void fail(String producer) {
-    for (final row in board.rowsFor(producer)) {
+    for (final row in _rowsFor(producer)) {
       final controller = _controllers[row]!;
       if (controller.state == ProgressRowState.active) {
         controller.fail();
@@ -267,7 +275,7 @@ final class StageReleaseProgress {
   }
 
   void concludeStopped() {
-    for (final group in board.groups) {
+    for (final group in board) {
       for (final row in group.rows) {
         final controller = _controllers[row]!;
         if (controller.state == ProgressRowState.active) {

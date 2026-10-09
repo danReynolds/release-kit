@@ -1,11 +1,10 @@
 import 'dart:convert';
 
+import 'package:rk/src/commands/plan.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/release_plan.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/stage_contract.dart';
 import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/release_plan.dart';
@@ -69,19 +68,153 @@ final _assetTree = MemorySourceTree({
   'native/parser/Cargo.toml': '[package]\nname = "parser"\nversion = "0.3.0"\n',
 }, description: '/source/example');
 
-RepositoryReleasePlan _plan({String config = _config, MemorySourceTree? tree}) {
+/// A Dart package whose own build writes the release assets, and which is
+/// published to pub.dev too.
+const _assetsPubConfig = '''
+schema = 2
+
+[release.native]
+tag = "native-v{version}"
+publish = ["git-tag", "pub.dev", "github-release"]
+build = ["tool/build.sh", "{out}"]
+assets = ["libnative-macos-arm64.dylib", "libnative-linux-x64.so"]
+''';
+
+final _assetsPubTree = MemorySourceTree({
+  'pubspec.yaml': 'name: native_assets\nversion: 1.2.0\n',
+}, description: '/source/native');
+
+/// What `rk plan --json` reported for that unit before the release model,
+/// as rk 0.1.14 at 9fc714f printed it. No golden repository has a unit like
+/// it, so this pins its rows, their order and their edges.
+const _assetsPubPlan = {
+  'units': [
+    {
+      'name': 'native',
+      'version': '1.2.0',
+      'tag': 'native-v1.2.0',
+      'requires_units': [],
+      'nodes': [
+        {
+          'id': 'native/stage/source',
+          'kind': 'sourceSnapshot',
+          'phase': 'stage',
+          'summary': 'source snapshot',
+          'needs': [],
+        },
+        {
+          'id': 'native/stage/pub-archive:native_assets',
+          'kind': 'targetStage',
+          'phase': 'stage',
+          'summary': 'package archive',
+          'needs': ['native/stage/source'],
+          'producer': 'pub-archive:native_assets',
+          'project': 'native_assets',
+          'target': 'pubDev',
+          'coordinate': 'native_assets',
+          'lane': 'pubDev',
+        },
+        {
+          'id': 'native/stage/release-notes',
+          'kind': 'targetStage',
+          'phase': 'stage',
+          'summary': 'release notes',
+          'needs': ['native/stage/source'],
+          'producer': 'release-notes',
+          'target': 'githubRelease',
+          'coordinate': 'example/native/releases/tag/native-v1.2.0',
+          'lane': 'githubRelease',
+        },
+        {
+          'id': 'native/build/native_assets',
+          'kind': 'buildAssets',
+          'phase': 'stage',
+          'summary': 'build the release assets',
+          'needs': ['native/stage/source'],
+          'producer': 'assets:native_assets',
+          'project': 'native_assets',
+        },
+        {
+          'id': 'native/stage/complete',
+          'kind': 'completeStage',
+          'phase': 'stage',
+          'summary': 'complete and validate stage',
+          'needs': [
+            'native/stage/source',
+            'native/stage/pub-archive:native_assets',
+            'native/stage/release-notes',
+            'native/build/native_assets',
+          ],
+          'producer': 'complete-stage',
+        },
+        {
+          'id': 'native/tag/native-v1.2.0',
+          'kind': 'tag',
+          'phase': 'publish',
+          'summary': 'tag native-v1.2.0',
+          'needs': ['native/stage/complete'],
+          'target': 'gitTag',
+          'coordinate': 'native-v1.2.0',
+          'lane': 'gitTag',
+        },
+        {
+          'id': 'native/pub.dev/native_assets@1.2.0',
+          'kind': 'publishRegistry',
+          'phase': 'publish',
+          'summary': 'publish native_assets 1.2.0 to pub.dev',
+          'needs': ['native/tag/native-v1.2.0'],
+          'project': 'native_assets',
+          'target': 'pubDev',
+          'coordinate': 'native_assets@1.2.0',
+          'lane': 'pubDev',
+        },
+        {
+          'id': 'native/github-release/native-v1.2.0',
+          'kind': 'publishRelease',
+          'phase': 'publish',
+          'summary': 'publish 3 assets to the native-v1.2.0 release',
+          'needs': ['native/tag/native-v1.2.0'],
+          'target': 'githubRelease',
+          'coordinate': 'example/native/releases/tag/native-v1.2.0',
+          'lane': 'githubRelease',
+        },
+      ],
+    },
+  ],
+};
+
+/// Every unit's release, as `rk plan` derives them.
+List<UnitRelease> _plan({
+  String config = _config,
+  MemorySourceTree? tree,
+  String? repository = 'example/repository',
+}) {
   final diagnostics = Diagnostics();
-  final plan = RepositoryReleasePlan.derive(
-    resolution: _resolve(config, tree ?? _tree),
-    repository: 'example/repository',
-    diagnostics: diagnostics,
+  final plan = UnitRelease.all(
+    _resolve(config, tree ?? _tree),
+    repository: repository,
+    problems: diagnostics,
   );
   expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
   return plan!;
 }
 
+List<UnitRelease> _select(List<UnitRelease> plan, String unit) => [
+  for (final release in plan)
+    if (release.unit.name == unit) release,
+];
+
+/// The units [release] needs first, as `rk plan --json` reports them.
+List<Object?> _requiresUnits(UnitRelease release) =>
+    ((planJson([release])['units']! as List).single
+            as Map<String, Object?>)['requires_units']!
+        as List<Object?>;
+
+Iterable<PlanNode> _phase(UnitRelease release, StepPhase phase) =>
+    release.planNodes.where((node) => node.phase == phase);
+
 String _render(
-  RepositoryReleasePlan plan, {
+  List<UnitRelease> plan, {
   required bool terminal,
   required bool color,
   int? width,
@@ -111,11 +244,11 @@ void main() {
     test('orders units and exposes the cross-unit publication requirement', () {
       final plan = _plan();
 
-      expect(plan.units.map((unit) => unit.name), ['core', 'cli']);
-      expect(plan.units.first.requiresUnits, isEmpty);
-      expect(plan.units.last.requiresUnits, ['core']);
+      expect(plan.map((release) => release.unit.name), ['core', 'cli']);
+      expect(_requiresUnits(plan.first), isEmpty);
+      expect(_requiresUnits(plan.last), ['core']);
 
-      final requirement = plan.units.last.requirements.single;
+      final requirement = _phase(plan.last, StepPhase.inspect).single;
       expect(requirement.id, 'cli/requires/pub.dev/example_core/1.2.0');
       expect(requirement.coordinate, 'pub.dev/example_core/1.2.0');
       expect(requirement.requiresUnit, 'core');
@@ -162,29 +295,21 @@ dependencies:
   shared_core: ^1.2.0
 ''',
       });
-      final diagnostics = Diagnostics();
-      final plan = RepositoryReleasePlan.derive(
-        resolution: _resolve(config, tree),
-        repository: null,
-        diagnostics: diagnostics,
-      );
-      expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
+      final plan = _plan(config: config, tree: tree, repository: null);
 
-      final consumers = plan!.units.singleWhere(
-        (unit) => unit.name == 'consumers',
-      );
-      final requirement = consumers.requirements.single;
+      final consumers = _select(plan, 'consumers').single;
+      final requirement = _phase(consumers, StepPhase.inspect).single;
       expect(requirement.coordinate, 'pub.dev/shared_core/1.2.0');
       expect(requirement.project, isNull);
       expect(requirement.requiresUnit, 'core');
-      final publications = consumers.public.toList();
+      final publications = _phase(consumers, StepPhase.publish).toList();
       expect(publications, hasLength(2));
       expect(
         publications.every((node) => node.needs.contains(requirement.id)),
         isTrue,
       );
       final rendered = _render(
-        plan.select('consumers'),
+        _select(plan, 'consumers'),
         terminal: true,
         color: false,
         width: 180,
@@ -198,69 +323,39 @@ dependencies:
       );
     });
 
-    test('is an exact projection of the receipt producer graph', () {
-      final resolution = _resolve(_config, _tree);
-      final plan = _plan();
-
-      for (final unitPlan in plan.units) {
-        final unit = resolution.unit(unitPlan.name)!;
-        final diagnostics = Diagnostics();
-        final release = UnitRelease.derive(
-          unit,
-          resolution,
-          repository: 'example/repository',
-          problems: diagnostics,
-        );
-        expect(diagnostics.found, isEmpty);
-        final graph = StageProducerGraph.forWork(release.work);
-        // The plan starts from the source every producer builds from, which
-        // the receipt names by its identity rather than as a step.
-        final source = unitPlan.stage.singleWhere(
-          (node) => node.kind == ReleasePlanNodeKind.sourceSnapshot,
-        );
-        final stage = unitPlan.stage.where((node) => node != source).toList();
-        final producerById = {for (final node in stage) node.id: node.producer};
-
-        expect(stage.map((node) => node.producer), graph.producerNames);
-        for (final node in stage) {
-          expect(
-            node.needs
-                .where((id) => id != source.id)
-                .map((id) => producerById[id])
-                .toSet(),
-            graph.dependenciesOf(node.producer!),
-            reason: '${unit.name}: ${node.producer}',
-          );
-        }
-      }
+    test('a unit with its own build and a pub.dev package keeps its rows, '
+        'their order and their edges', () {
+      expect(
+        planJson(
+          _plan(
+            config: _assetsPubConfig,
+            tree: _assetsPubTree,
+            repository: 'example/native',
+          ),
+        ),
+        _assetsPubPlan,
+      );
     });
 
     test('preserves every direct public dependency from the release', () {
-      final resolution = _resolve(_config, _tree);
-      final plan = _plan();
-
-      for (final unitPlan in plan.units) {
-        final release = UnitRelease.derive(
-          resolution.unit(unitPlan.name)!,
-          resolution,
-          repository: 'example/repository',
-          problems: Diagnostics(),
-        );
+      for (final release in _plan()) {
         final expected = {
           for (final target in release.targets)
             target.id: [for (final need in target.needs) need.id],
         };
         final actual = {
-          for (final node in unitPlan.public) node.id: node.needs,
+          for (final node in _phase(release, StepPhase.publish))
+            node.id: node.needs,
         };
         expect(actual, expected);
       }
     });
 
     test('emits unique, self-contained nodes in dependency order', () {
-      for (final unit in _plan().units) {
+      for (final release in _plan()) {
+        final unit = release.unit;
         final seen = <String>{};
-        for (final node in unit.nodes) {
+        for (final node in release.planNodes) {
           expect(seen.add(node.id), isTrue, reason: '${unit.name}: ${node.id}');
           expect(
             seen,
@@ -272,7 +367,7 @@ dependencies:
     });
 
     test('JSON describes topology without inventing observations', () {
-      final json = _plan().toJson();
+      final json = planJson(_plan());
       final encoded = jsonEncode(json);
       final units = (json['units']! as List).cast<Map<String, Object?>>();
       final cli = units.singleWhere((unit) => unit['name'] == 'cli');
@@ -331,16 +426,16 @@ dependencies:
         'publishHomebrew',
       ];
       expect(
-        ReleasePlanNodeKind.values.map((kind) => kind.name),
+        StepKind.values.map((kind) => kind.name),
         kindVocabulary,
         reason:
             'kind names are what a --json caller keys on, not incidental '
             'implementation labels',
       );
 
-      final json = _plan().toJson();
+      final json = planJson(_plan());
       final units = (json['units']! as List).cast<Map<String, Object?>>();
-      final built = _plan(config: _assetConfig, tree: _assetTree).toJson();
+      final built = planJson(_plan(config: _assetConfig, tree: _assetTree));
       final allNodes =
           [...units, ...(built['units']! as List).cast<Map<String, Object?>>()]
               .expand(
@@ -390,13 +485,13 @@ dependencies:
 
     test('unit selection changes scope without rewriting its graph', () {
       final plan = _plan();
-      final selected = plan.select('cli');
+      final selected = _select(plan, 'cli');
 
-      expect(selected.units.map((unit) => unit.name), ['cli']);
-      expect(selected.units.single.requiresUnits, ['core']);
+      expect(selected.map((release) => release.unit.name), ['cli']);
+      expect(_requiresUnits(selected.single), ['core']);
       expect(
-        selected.units.single.nodes.map((node) => node.toJson()),
-        plan.units.last.nodes.map((node) => node.toJson()),
+        selected.single.planNodes.map((node) => node.toJson()),
+        plan.last.planNodes.map((node) => node.toJson()),
       );
     });
 
@@ -418,21 +513,15 @@ executables:
   local: local_tool
 ''',
         });
-        final diagnostics = Diagnostics();
-        final plan = RepositoryReleasePlan.derive(
-          resolution: _resolve(config, tree),
-          repository: null,
-          diagnostics: diagnostics,
-        );
-        expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
+        final plan = _plan(config: config, tree: tree, repository: null);
 
-        final unit = plan!.units.single;
-        expect(unit.public, isEmpty);
-        expect(unit.stage.map((node) => node.kind), [
-          ReleasePlanNodeKind.sourceSnapshot,
-          ReleasePlanNodeKind.build,
-          ReleasePlanNodeKind.archive,
-          ReleasePlanNodeKind.completeStage,
+        final unit = plan.single;
+        expect(_phase(unit, StepPhase.publish), isEmpty);
+        expect(_phase(unit, StepPhase.stage).map((node) => node.kind), [
+          StepKind.sourceSnapshot,
+          StepKind.build,
+          StepKind.archive,
+          StepKind.completeStage,
         ]);
         expect(
           _render(plan, terminal: true, color: false, width: 180),
@@ -465,15 +554,15 @@ dependencies:
       final resolution = _resolve(incompatible, tree);
       final diagnostics = Diagnostics();
 
-      final plan = RepositoryReleasePlan.derive(
-        resolution: resolution,
+      final plan = UnitRelease.all(
+        resolution,
         repository: 'example/repository',
-        diagnostics: diagnostics,
+        problems: diagnostics,
       );
 
       expect(plan, isNotNull);
       expect(diagnostics.found, isEmpty);
-      expect(plan!.units.last.requiresUnits, isEmpty);
+      expect(_requiresUnits(plan!.last), isEmpty);
     });
   });
 
@@ -509,7 +598,7 @@ dependencies:
 
     test('narrow terminals fall back to a dependency-complete outline', () {
       final rendered = _render(
-        _plan().select('cli'),
+        _select(_plan(), 'cli'),
         terminal: true,
         color: false,
         width: 52,
@@ -543,7 +632,7 @@ dependencies:
 
     test('a pipe gets the append-only outline with no control codes', () {
       final rendered = _render(
-        _plan().select('cli'),
+        _select(_plan(), 'cli'),
         terminal: false,
         color: true,
         width: 180,

@@ -450,13 +450,222 @@ final class UnitRelease {
     }
     return null;
   }
+
+  /// The rows `rk plan` shows, in release order: the requirements, the
+  /// source every piece of work starts from, the work, then the targets.
+  /// Work with no input of its own, and the barrier, start from the source.
+  List<PlanNode> get planNodes {
+    final source = PlanNode(
+      id: '${unit.name}/stage/source',
+      kind: StepKind.sourceSnapshot,
+      summary: 'source snapshot',
+      needs: const [],
+    );
+    return [
+      for (final requirement in requirements)
+        PlanNode(
+          id: requirement.id,
+          kind: requirement.kind,
+          summary: requirement.summary,
+          needs: const [],
+          coordinate: requirement.coordinate,
+          target: PublishTarget.pubDev,
+          requiresUnit: requirement.provider.unitName,
+        ),
+      source,
+      for (final work in work)
+        PlanNode(
+          id: work.id,
+          kind: work.kind,
+          summary: work == barrier
+              ? 'complete and validate stage'
+              : work.summary,
+          needs: [
+            if (work == barrier || work.inputs.isEmpty) source.id,
+            for (final input in work.inputs) input.id,
+          ],
+          producer: work.name,
+          project: work.project?.name,
+          platform: work.platform,
+          target: work.target,
+          coordinate: preparing(work)?.coordinate,
+          lane: work.target?.wireName,
+        ),
+      for (final target in targets)
+        PlanNode(
+          id: target.id,
+          kind: target.kind,
+          summary: target.summary,
+          needs: [for (final need in target.needs) need.id],
+          project: target.project?.name,
+          target: target.target,
+          coordinate: target.target == PublishTarget.pubDev
+              ? '${target.project!.name}@${target.project!.version}'
+              : target.coordinate,
+          lane: target.target.wireName,
+        ),
+    ];
+  }
+
+  /// The rows staging fills, grouped by destination, each with the work
+  /// that fills it.
+  ///
+  /// The steps rk runs and the files it produces are not the same list: four
+  /// producers — build, sign, notarize, archive — make one macOS archive, and
+  /// naming each of them told the operator about rk's internals rather than
+  /// about their release. The rows here are the files, and a row narrates its
+  /// own production: which work is filling it now, and when the stage settles
+  /// what that work proved.
+  ///
+  /// A target that publishes no file of its own — a Git tag — has no group.
+  /// pub.dev has one row per package: it uploads no file rk makes, but it does
+  /// validate the staged source, and that check is the most common reason a
+  /// release stops later than it should have. A formula fills its own row,
+  /// under Homebrew; the release notes fill none.
+  List<BoardGroup> get board {
+    // Every piece of one platform's work reports against that platform's
+    // archive: the binary itself never leaves the stage.
+    bool fills(Work work, String name) => switch (work.kind) {
+      StepKind.completeStage => name == ReleaseAssets.manifest,
+      StepKind.targetStage =>
+        work.target == PublishTarget.homebrew &&
+            ReleaseAssets.formulaName(work.project!.executable!) == name,
+      StepKind.buildAssets => work.project!.assets.any(
+        (declared) => ReleaseAssets.assetName(declared) == name,
+      ),
+      _ =>
+        work.platform != null &&
+            ReleaseAssets.archiveName(
+                  work.project!.executable!,
+                  work.project!.version.canonical,
+                  work.platform!,
+                ) ==
+                name,
+    };
+    List<Work> filling(String name) => [
+      for (final work in work)
+        if (fills(work, name)) work,
+    ];
+    final groups = <BoardGroup>[];
+    for (final target in targets) {
+      final rows = [
+        for (final name in target.artifacts)
+          BoardRow('${target.id}/$name', name, filling(name)),
+        if (target.preparedBy case final work?
+            when work.target == PublishTarget.pubDev)
+          BoardRow('${target.id}/${work.name}/source', 'package archive', [
+            work,
+          ]),
+      ];
+      // Production order, not alphabetical. The manifest covers everything,
+      // so listing it first would put the last row to fill at the top, where
+      // a pending mark reads as skipped rather than as not yet.
+      rows.sort(
+        (left, right) => (left.name == ReleaseAssets.manifest ? 1 : 0)
+            .compareTo(right.name == ReleaseAssets.manifest ? 1 : 0),
+      );
+      if (rows.isNotEmpty) groups.add(BoardGroup(target.label, rows));
+    }
+
+    // Archives no target publishes are the stage's own output, named as the
+    // file is: the path inside the stage means nothing to a reader, and the
+    // stage says where its archives are.
+    final published = {for (final target in targets) ...target.artifacts};
+    if (unit.binaryProject case final project?) {
+      final local = [
+        for (final platform in [...project.binaryPlatforms]..sort())
+          if (ReleaseAssets.archiveName(
+                project.executable!,
+                project.version.canonical,
+                platform,
+              )
+              case final name when !published.contains(name))
+            BoardRow('local/${project.name}/$platform', name, filling(name)),
+      ];
+      if (local.isNotEmpty) groups.add(BoardGroup('Local binaries', local));
+    }
+    return groups;
+  }
 }
 
-enum StepKind {
-  tag,
+/// One row of `rk plan`, and what `--json` reports for it.
+final class PlanNode {
+  PlanNode({
+    required this.id,
+    required this.kind,
+    required this.summary,
+    required Iterable<String> needs,
+    this.producer,
+    this.project,
+    this.platform,
+    this.target,
+    this.coordinate,
+    this.requiresUnit,
+    this.lane,
+  }) : needs = List.unmodifiable(needs);
 
+  final String id;
+  final StepKind kind;
+  final String summary;
+  final List<String> needs;
+  final String? producer;
+  final String? project;
+  final String? platform;
+  final PublishTarget? target;
+  final String? coordinate;
+  final String? requiresUnit;
+  final String? lane;
+
+  StepPhase get phase => kind.phase;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'kind': kind.name,
+    'phase': phase.name,
+    'summary': summary,
+    'needs': needs,
+    if (producer != null) 'producer': producer,
+    if (project != null) 'project': project,
+    if (platform != null) 'platform': platform,
+    if (target != null) 'target': target!.wireName,
+    if (coordinate != null) 'coordinate': coordinate,
+    if (requiresUnit != null) 'requires_unit': requiresUnit,
+    if (lane != null) 'lane': lane,
+  };
+}
+
+/// The stage rows for one destination.
+final class BoardGroup {
+  BoardGroup(this.label, Iterable<BoardRow> rows)
+    : rows = List.unmodifiable(rows);
+
+  final String label;
+  final List<BoardRow> rows;
+}
+
+/// One file staging makes, and the work that fills its row.
+final class BoardRow {
+  BoardRow(this.id, this.name, Iterable<Work> filledBy)
+    : filledBy = List.unmodifiable(filledBy);
+
+  final String id;
+  final String name;
+  final List<Work> filledBy;
+}
+
+/// What a step or plan row is. The names are what a `--json` caller keys on,
+/// in `steps[]` and in `rk plan`, so they are frozen.
+enum StepKind {
   /// Something another unit released, which must already be public.
   prerequisite,
+
+  /// The commit's source, read once: every piece of work starts from it.
+  /// Only `rk plan` shows it.
+  sourceSnapshot,
+
+  /// A target's own input to the stage: a package archive, the release
+  /// notes, a formula.
+  targetStage,
 
   /// Compile the platform binary — and on macOS, sign it, as one step.
   build,
@@ -466,12 +675,9 @@ enum StepKind {
   /// Run a project's own build and keep the release assets it declares.
   buildAssets,
 
-  /// A target's own input to the stage: a package archive, the release
-  /// notes, a formula.
-  targetStage,
-
   /// The locally validated release receipt exists and is complete.
   completeStage,
+  tag,
   publishRegistry,
   publishRelease,
   publishHomebrew,
@@ -487,6 +693,7 @@ enum StepPhase { inspect, stage, publish }
 extension StepKindFacts on StepKind {
   StepPhase get phase => switch (this) {
     StepKind.prerequisite => StepPhase.inspect,
+    StepKind.sourceSnapshot ||
     StepKind.build ||
     StepKind.notarize ||
     StepKind.archive ||

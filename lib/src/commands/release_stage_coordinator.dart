@@ -5,14 +5,12 @@ import '../binary_chain.dart';
 import '../builds/capability.dart';
 import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
-import '../engine/dependency_graph.dart';
 import '../engine/git.dart';
 import '../engine/identity.dart';
 import '../engine/producer_lane.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/stage_source.dart';
@@ -133,7 +131,6 @@ final class ReleaseStageCoordinator {
       :fromSource,
       :signing,
       :producerSteps,
-      :targetWorkByName,
       :outputsByProducer,
     ) = staging;
     final stageProgress =
@@ -226,20 +223,15 @@ final class ReleaseStageCoordinator {
     }
 
     stageProgress.restore(progress);
-    final producersByName = {for (final work in producerSteps) work.name: work};
-    final runnable = {...producersByName.keys, ...targetWorkByName.keys};
-    final graph = DependencyGraph<String>(
-      stage.producerNames,
-      idOf: (producer) => producer,
-      dependenciesOf: stage.producerDependencies,
-    );
     final completed = {for (final step in progress) step.name};
 
     // Producers build from the commit the stage names, read once into
     // memory when anything remains to produce; each exports it into a
     // directory of its own.
     late final StageSourceSnapshot source;
-    if (runnable.difference(completed).isNotEmpty) {
+    if (release.work.any(
+      (work) => work != release.barrier && !completed.contains(work.name),
+    )) {
       try {
         source = await stage.captureSource();
       } on Object catch (error) {
@@ -273,10 +265,10 @@ final class ReleaseStageCoordinator {
       }
     }
 
-    Future<_StageWorkCompletion> runTargetStage(
-      String receiptName,
-      Work work,
-    ) async {
+    /// Runs [work], a target's input; null when it is recorded, and
+    /// otherwise how the stage stopped.
+    Future<HaltKind?> runTargetStage(Work work) async {
+      final receiptName = work.name;
       final target = release.preparing(work)!;
       try {
         final result = await targets
@@ -302,36 +294,30 @@ final class ReleaseStageCoordinator {
           _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
           stageProgress.fail(receiptName);
           output.problem(diagnostic, unit: unit);
-          return _StageWorkCompletion.failed(
-            receiptName,
-            HaltKind.beforeActing,
-          );
+          return HaltKind.beforeActing;
         }
         try {
           record((result as TargetStageSuccess).step);
-          return _StageWorkCompletion.succeeded(receiptName);
+          return null;
         } on Object catch (error) {
           stageProgress.fail(receiptName);
           _stageProgressProblem(error);
-          return _StageWorkCompletion.failed(
-            receiptName,
-            HaltKind.beforeActing,
-          );
+          return HaltKind.beforeActing;
         }
       } on Object catch (error) {
         _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
-        return _StageWorkCompletion.failed(
-          receiptName,
-          _stageOperationProblem('${target.label} stage preparation', error),
+        return _stageOperationProblem(
+          '${target.label} stage preparation',
+          error,
         );
       }
     }
 
-    Future<_StageWorkCompletion> runProducer(
-      String receiptName,
-      Work step,
-    ) async {
+    /// Runs [step], local work; null when it is recorded, and otherwise how
+    /// the stage stopped.
+    Future<HaltKind?> runProducer(Work step) async {
+      final receiptName = step.name;
       // A project's own build has no platform; it is one lane of its own.
       final laneName = step.platform == null
           ? '${step.project!.name}/build'
@@ -360,77 +346,65 @@ final class ReleaseStageCoordinator {
           _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
           stageProgress.fail(receiptName);
           _stageOperationProblem(step.summary, error);
-          return _StageWorkCompletion.failed(
-            receiptName,
-            HaltKind.stoppedPartway,
-          );
+          return HaltKind.stoppedPartway;
         }
         if (!act.ok) {
           _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
           stageProgress.fail(receiptName);
-          return _StageWorkCompletion.failed(
-            receiptName,
-            act.halt ?? HaltKind.stoppedPartway,
-          );
+          return act.halt ?? HaltKind.stoppedPartway;
         }
         try {
           record(_captureProducerStep(stage, step, act));
-          return _StageWorkCompletion.succeeded(receiptName);
+          return null;
         } on Object catch (error) {
           stageProgress.fail(receiptName);
           _stageProgressProblem(error);
-          return _StageWorkCompletion.failed(
-            receiptName,
-            HaltKind.beforeActing,
-          );
+          return HaltKind.beforeActing;
         }
       } on Object catch (error) {
         _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
-        return _StageWorkCompletion.failed(
-          receiptName,
-          _stageOperationProblem('the ${unit.name} stage', error),
-        );
+        return _stageOperationProblem('the ${unit.name} stage', error);
       }
     }
 
-    Future<_StageWorkCompletion> runWork(String name) {
-      final targetWork = targetWorkByName[name];
-      if (targetWork != null) return runTargetStage(name, targetWork);
-      final producer = producersByName[name];
-      if (producer != null) return runProducer(name, producer);
-      throw StateError('the stage graph has no executor for "$name"');
+    /// Runs [work] in order, skipping what is recorded. Once any lane has
+    /// failed, it starts nothing new; what is already running finishes.
+    Future<void> lane(Iterable<Work> work) async {
+      for (final piece in work) {
+        if (failures.isNotEmpty) return;
+        if (completed.contains(piece.name)) continue;
+        final halt = piece.kind == StepKind.targetStage
+            ? await runTargetStage(piece)
+            : await runProducer(piece);
+        if (halt != null) {
+          failures.add(halt);
+          return;
+        }
+        completed.add(piece.name);
+      }
     }
 
-    final active = <String, Future<_StageWorkCompletion>>{};
-    while (completed.intersection(runnable).length < runnable.length ||
-        active.isNotEmpty) {
-      if (failures.isEmpty) {
-        final ready = graph
-            .ready(completed: completed, active: active.keys.toSet())
-            .where(runnable.contains)
-            .toList();
-        for (final name in ready) {
-          active[name] = runWork(name);
-        }
-        if (active.isEmpty && ready.isEmpty) {
-          _stageOperationProblem(
-            'the ${unit.name} stage dependency graph',
-            StateError('no producer is ready'),
-          );
-          failures.add(HaltKind.beforeActing);
-          break;
-        }
-      }
-      if (active.isEmpty) break;
-      final result = await Future.any(active.values);
-      active.remove(result.producer);
-      if (result.halt case final halt?) {
-        failures.add(halt);
-      } else {
-        completed.add(result.producer);
-      }
+    // Fixed lanes, started in the work's order: each package archive, the
+    // release notes, and each platform's build, notarization and archive
+    // (or the project's own build) side by side; each formula once every
+    // archive is there.
+    final platforms = <String?, List<Work>>{};
+    for (final work in producerSteps) {
+      (platforms[work.platform] ??= []).add(work);
     }
+    await Future.wait([
+      for (final work in release.work)
+        if (work.kind == StepKind.targetStage &&
+            work.target != PublishTarget.homebrew)
+          lane([work]),
+      Future.wait([for (final chain in platforms.values) lane(chain)]).then(
+        (_) => lane([
+          for (final work in release.work)
+            if (work.target == PublishTarget.homebrew) work,
+        ]),
+      ),
+    ]);
 
     for (final laneSource in laneSources.values) {
       try {
@@ -1026,7 +1000,7 @@ final class UnitStaging {
   ReleaseSigningContext? _signing;
 
   /// The rows this unit's stage fills.
-  StageBoard get board => StageBoard.forUnit(release);
+  List<BoardGroup> get board => release.board;
 
   /// The local work: builds, notarizations, archives, a project's own build.
   late final List<Work> producerSteps = [
@@ -1036,23 +1010,9 @@ final class UnitStaging {
         work,
   ];
 
-  late final Map<String, Work> targetWorkByName = {
-    for (final work in release.work)
-      if (work.kind == StepKind.targetStage) work.name: work,
-  };
-
   late final Map<String, Set<String>> outputsByProducer = {
     for (final work in release.work)
       if (work.kind != StepKind.completeStage)
         work.name: work.outputs.keys.toSet(),
   };
-}
-
-final class _StageWorkCompletion {
-  const _StageWorkCompletion.succeeded(this.producer) : halt = null;
-
-  const _StageWorkCompletion.failed(this.producer, this.halt);
-
-  final String producer;
-  final HaltKind? halt;
 }

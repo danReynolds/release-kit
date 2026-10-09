@@ -17,7 +17,6 @@ enum StageIssueKind {
   wrongType,
   symlink,
   unreadable,
-  invalidStructure,
 }
 
 class StageIssue {
