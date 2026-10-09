@@ -170,7 +170,8 @@ final class ArchiveReader {
       }
       offset += padding;
       modes[name] = modeValue.toRadixString(8).padLeft(4, '0');
-      files[name] = List.unmodifiable(bytes);
+      files[name] = (bytes is Uint8List ? bytes : Uint8List.fromList(bytes))
+          .asUnmodifiableView();
     }
 
     if (zeroBlocks != 2) {

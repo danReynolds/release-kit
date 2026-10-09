@@ -55,7 +55,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
           FileSystemEntityType.file) {
         throw StateError('native Pub output is not a regular archive file');
       }
-      context.stage.write(archivePath, archive.readAsBytesSync());
+      context.stage.copy(archivePath, archive);
     }
     return result;
   } finally {

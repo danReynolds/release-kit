@@ -190,7 +190,20 @@ class Registry implements RegistryReader {
       request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
       final response = await request.close().timeout(responseTimeout);
 
-      // Only an authenticated negative means "not there".
+      // Every response is consumed for connection reuse or cancelled at its
+      // deadline. Error bodies are discarded: their contents cannot change
+      // the status. A successful response needs its complete, valid body.
+      final body = StringBuffer();
+      final reading = response.statusCode == 200
+          ? response.transform(utf8.decoder).listen(body.write)
+          : response.listen(null);
+      try {
+        await reading.asFuture<void>().timeout(responseTimeout);
+      } on Object {
+        if (response.statusCode == 200) rethrow;
+      } finally {
+        await reading.cancel();
+      }
       if (response.statusCode == 404) return null;
       if (response.statusCode != 200) {
         throw RegistryUnavailable(
@@ -198,11 +211,7 @@ class Registry implements RegistryReader {
         );
       }
 
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(responseTimeout);
-      final decoded = jsonDecode(body);
+      final decoded = jsonDecode(body.toString());
       if (decoded is! Map) {
         throw RegistryUnavailable('$host returned something unreadable');
       }

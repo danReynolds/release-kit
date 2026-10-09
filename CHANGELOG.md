@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Decoded binary archives keep compact immutable byte buffers, reducing
+  extraction time and peak memory without changing their contents.
+- Native Pub archives are copied into the stage through the existing atomic
+  replacement boundary instead of being loaded into memory first.
+- Registry responses release their bodies, allowing connection reuse. A
+  stalled body is cancelled within the existing response timeout; successful
+  responses still require complete valid data, and errors retain their status.
+
 - Staging shares four build and package-validation slots across the
   repository, preventing larger runs from starting a compiler for every
   package at once. Notarization waits remain concurrent.

@@ -242,3 +242,29 @@ figures are medians of three runs; the sixteen-job worker comparisons used
 two runs per bound. Existing archive samples predate this rk change and were
 only read. Receipt shape, stage identity, publication ordering and recovery
 checks are unchanged.
+
+Follow-up measurements against `283ea98`, on the same SDK and host:
+
+- **Keep compact decoded bytes.** The binary archive reader copied each
+  file into a general-purpose immutable integer list. Keeping the owned copy
+  as an immutable byte buffer reduced median decoding of the same Keybay
+  archive from 136 to 19 ms and peak process RSS from 98 to 43 MiB. A
+  synthetic tar containing a 16 MiB executable fell from 265 to 5 ms and
+  175 to 47 MiB. Three runs per variant; byte digests matched, input mutation
+  did not affect decoded files, and decoded files remained immutable.
+- **Keep direct file copying.** Native Pub already writes an archive to a
+  file. Copying it to a flushed sibling and atomically renaming that sibling
+  avoids reading it into a Dart byte array. A synthetic 16 MiB copy used
+  16 rather than 31 MiB of peak process RSS, with both paths taking about
+  46 ms. The existing atomic replacement helper owns cleanup for both
+  operations. The source remains intact until the producer removes its
+  scratch directory.
+- **Keep HTTP response cleanup.** Twenty sequential missing-version reads
+  against a local HTTP server opened twenty connections; consuming their
+  unused bodies reduced that to two in the prototype. The implementation
+  also cancels a stalled body's subscription within the response timeout.
+  A stalled 200 body previously retained the only connection in a bounded
+  pool and kept the next healthy lookup from reaching the server; the same
+  response cleanup now releases it. A 404 still means absent, and failed or
+  incomplete 200 responses remain unknown. This is
+  evidence of connection reuse, not an internet latency measurement.

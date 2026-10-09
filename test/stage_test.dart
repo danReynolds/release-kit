@@ -102,6 +102,47 @@ void main() {
         isEmpty,
       );
     });
+
+    test('copying keeps the source and replaces only the destination', () {
+      final source = File('${root.path}/source')..writeAsBytesSync([1, 2, 3]);
+      final destination = File('${root.path}/artifact')
+        ..writeAsStringSync('old');
+      AtomicFile.copy(destination.path, source);
+      expect(source.readAsBytesSync(), [1, 2, 3]);
+      expect(destination.readAsBytesSync(), [1, 2, 3]);
+      expect(
+        root.listSync().where((file) => file.path.contains('.tmp.')),
+        isEmpty,
+      );
+    });
+
+    test(
+      'failed copies preserve existing bytes and remove private siblings',
+      () {
+        final destination = File('${root.path}/artifact')
+          ..writeAsStringSync('old');
+        expect(
+          () => AtomicFile.copy(destination.path, File('${root.path}/missing')),
+          throwsA(isA<FileSystemException>()),
+        );
+        expect(destination.readAsStringSync(), 'old');
+
+        final source = File('${root.path}/source')..writeAsStringSync('new');
+        final occupied = Directory('${root.path}/occupied')..createSync();
+        final sentinel = File('${occupied.path}/keep')
+          ..writeAsStringSync('keep');
+        expect(
+          () => AtomicFile.copy(occupied.path, source),
+          throwsA(isA<FileSystemException>()),
+        );
+        expect(source.readAsStringSync(), 'new');
+        expect(sentinel.readAsStringSync(), 'keep');
+        expect(
+          root.listSync().where((file) => file.path.contains('.tmp.')),
+          isEmpty,
+        );
+      },
+    );
   });
 
   group('receipt', () {

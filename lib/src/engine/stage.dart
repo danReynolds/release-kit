@@ -132,6 +132,14 @@ final class Stage {
     AtomicFile.write(handle.path, bytes);
   }
 
+  /// Places a completed native output at [file] by an atomic copy, without
+  /// holding the entire artifact in memory.
+  void copy(String file, File source) {
+    final handle = File(pathOf(file));
+    handle.parent.createSync(recursive: true);
+    AtomicFile.copy(handle.path, source);
+  }
+
   /// What this stage is, for [release]: its receipt, checked against the
   /// files it records. An interrupted stage is checked for every file, since
   /// work resumes from them; a complete one for every file [release]
