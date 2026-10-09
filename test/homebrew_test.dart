@@ -47,6 +47,38 @@ String render({Map<String, PlatformAsset> assets = _assets}) =>
       executable: 'keybay',
     );
 
+({ResolvedUnit unit, Target target}) _release() {
+  final diagnostics = Diagnostics();
+  final resolution = Resolution.resolve(
+    ReleaseConfig.parse(
+      '''
+schema = 2
+[release.cli]
+tag = "v{version}"
+homebrew_tap = "owner/homebrew-tap"
+publish = ["git-tag", "github-release", "homebrew"]
+binary_platforms = ["linux-x64"]
+''',
+      'release.toml',
+      diagnostics,
+    )!,
+    MemorySourceTree({
+      'pubspec.yaml': 'name: tool\nversion: 1.0.0\nexecutables:\n  tool:\n',
+    }),
+    diagnostics,
+  )!;
+  final unit = resolution.unit('cli')!;
+  return (
+    unit: unit,
+    target: UnitRelease.derive(
+      unit,
+      resolution,
+      repository: 'owner/tool',
+      problems: diagnostics,
+    ).homebrew!,
+  );
+}
+
 void main() {
   test('points at the release that produced the assets', () {
     final formula = render();
@@ -276,33 +308,7 @@ void main() {
 
     test('without a stage, a formula already at this version is published, '
         'and only the tap is read', () async {
-      final diagnostics = Diagnostics();
-      final resolution = Resolution.resolve(
-        ReleaseConfig.parse(
-          '''
-schema = 2
-
-[release.cli]
-tag = "v{version}"
-homebrew_tap = "owner/homebrew-tap"
-publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["linux-x64"]
-''',
-          'release.toml',
-          diagnostics,
-        )!,
-        MemorySourceTree({
-          'pubspec.yaml': 'name: tool\nversion: 1.0.0\nexecutables:\n  tool:\n',
-        }),
-        diagnostics,
-      )!;
-      final unit = resolution.unit('cli')!;
-      final target = UnitRelease.derive(
-        unit,
-        resolution,
-        repository: 'owner/tool',
-        problems: diagnostics,
-      ).homebrew!;
+      final (:unit, :target) = _release();
       const module = HomebrewTargetModule();
       // Written by an earlier renderer: what the tap holds at this version
       // is what its users install, whatever rk would render now.
@@ -330,6 +336,68 @@ binary_platforms = ["linux-x64"]
         'gh api repos/owner/homebrew-tap/contents/Formula/tool.rb',
       ]);
     });
+
+    for (final missing in [true, false]) {
+      test('recovery reads the ${missing ? 'missing' : 'older'} formula once '
+          'and preserves its exact update base', () async {
+        final (:unit, :target) = _release();
+        final older = generated('0.9.0', 'sha256 "old"');
+        List<int>? public = missing ? null : older;
+        const formulaRead =
+            'gh api repos/owner/homebrew-tap/contents/Formula/tool.rb';
+        final tools = RecordingTools(
+          answers: (key) => switch (key) {
+            formulaRead =>
+              public == null
+                  ? failed('not found (HTTP 404)')
+                  : ok(jsonEncode({'content': base64Encode(public)})),
+            'gh repo view owner/homebrew-tap --json name' => ok('{}'),
+            'gh api repos/owner/tool/releases/tags/v1.0.0' => ok(
+              jsonEncode({
+                'id': 1,
+                'tag_name': 'v1.0.0',
+                'draft': false,
+                'prerelease': false,
+                'assets': [
+                  for (final name in ReleaseAssets.expectedForUnit(unit))
+                    {'name': name, 'digest': 'sha256:${'a' * 64}'},
+                ],
+              }),
+            ),
+            _ => null,
+          },
+        );
+        final reads = TargetReadContext(
+          registry: null,
+          pubDev: null,
+          git: GitState.none('/repo'),
+          tools: tools,
+          repository: 'owner/tool',
+        );
+        const module = HomebrewTargetModule();
+        final recovered = (await module.read(reads, unit, target)).state;
+        expect(recovered.isAbsent, isTrue);
+        expect(recovered.recoversWithoutStage, isTrue);
+        final authority = recovered.authority! as HomebrewUpdateAuthority;
+        expect(authority.accepts(public), isTrue);
+        expect(
+          authority.accepts(utf8.encode('changed after inspection')),
+          isFalse,
+        );
+        expect(
+          HomebrewFormula.versionIn(authority.replacement!)?.canonical,
+          '1.0.0',
+        );
+        expect(tools.calls.where((call) => call == formulaRead), hasLength(1));
+
+        // A later read, including the one before publishing, remains fresh.
+        public = generated('1.1.0', 'sha256 "newer"');
+        final changed = (await module.read(reads, unit, target)).state;
+        expect(changed.verdict, Verdict.conflict);
+        expect(changed.recoversWithoutStage, isFalse);
+        expect(tools.calls.where((call) => call == formulaRead), hasLength(2));
+      });
+    }
   });
 
   group('formula version locator', () {

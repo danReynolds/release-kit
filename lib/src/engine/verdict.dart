@@ -45,11 +45,11 @@ class Inspection {
        );
 
   /// This observation, which can finish from public inputs alone.
-  Inspection recovering() => Inspection(
+  Inspection recovering({Object? authority}) => Inspection(
     verdict,
     detail: detail,
     evidence: evidence,
-    authority: authority,
+    authority: authority ?? this.authority,
     sourceMismatch: sourceMismatch,
     releasedFrom: releasedFrom,
     recoversWithoutStage: true,

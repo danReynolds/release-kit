@@ -88,15 +88,15 @@ final class HomebrewTargetModule extends TargetModule {
       }
       return current.inspection;
     }
-    final recovered = await destination.inspect(
-      formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
-      intendedVersion: project.version,
-      expectedBytes: current.bytes,
-    );
-    // An update rendered from public digests needs no stage.
-    return recovered.authority is HomebrewUpdateAuthority
-        ? recovered.recovering()
-        : recovered;
+    // Keep the tap base already observed. The publish transaction checks it
+    // against the fresh clone before updating it; rendering the replacement
+    // does not require reading the same formula again.
+    final authority = publicFormula.authority;
+    return authority is HomebrewUpdateAuthority
+        ? publicFormula.recovering(
+            authority: authority.replacingWith(current.bytes!),
+          )
+        : publicFormula;
   }
 
   Future<({Inspection inspection, List<int>? bytes})> _publishedFormula(
