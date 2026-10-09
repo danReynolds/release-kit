@@ -2,9 +2,9 @@ import '../targets/target_module.dart';
 import 'diagnostic.dart';
 import 'inspect.dart';
 import 'publish_target.dart';
-import 'release_stage.dart';
+import 'receipt.dart';
 import 'resolve.dart';
-import 'stage_inspection.dart';
+import 'stage.dart';
 import 'unit_release.dart';
 import 'verdict.dart';
 
@@ -20,7 +20,7 @@ final class UnitSnapshot {
     required Iterable<Diagnostic> releaseProblems,
     required this.inspector,
     required this.stage,
-    required this.stageInspection,
+    required this.stageCheck,
     required this.stageError,
   }) : releaseProblems = List.unmodifiable(releaseProblems);
 
@@ -35,7 +35,7 @@ final class UnitSnapshot {
     required Inspector inspector,
     required String? repository,
     required bool hasCommit,
-    ReleaseStage Function(ResolvedUnit unit)? stageFor,
+    Stage Function(ResolvedUnit unit)? stageFor,
   }) {
     final releaseProblems = Diagnostics();
     final release = UnitRelease.derive(
@@ -44,13 +44,13 @@ final class UnitSnapshot {
       repository: repository,
       problems: releaseProblems,
     );
-    ReleaseStage? stage;
-    StageInspection? inspection;
+    Stage? stage;
+    StageCheck? check;
     Object? error;
     if (hasCommit && stageFor != null) {
       try {
         stage = stageFor(unit);
-        inspection = stage.inspect();
+        check = stage.check(release);
       } on Object catch (caught) {
         error = caught;
       }
@@ -60,7 +60,7 @@ final class UnitSnapshot {
       releaseProblems: releaseProblems.found,
       inspector: inspector,
       stage: stage,
-      stageInspection: inspection,
+      stageCheck: check,
       stageError: error,
     );
     snapshot.reads = {
@@ -85,8 +85,8 @@ final class UnitSnapshot {
 
   /// This commit's stage; null without a commit, or when it could not be
   /// read ([stageError]).
-  final ReleaseStage? stage;
-  final StageInspection? stageInspection;
+  final Stage? stage;
+  final StageCheck? stageCheck;
   final Object? stageError;
 
   /// Each step's read as it arrives, by step id.
@@ -137,7 +137,11 @@ final class UnitSnapshot {
           : const Inspection.unknown('local work, decided when it runs');
     }
     try {
-      return await inspector.inspect(step, unit);
+      return await inspector.inspect(
+        step,
+        unit,
+        stage: stageReusable ? stage : null,
+      );
     } on Object catch (error) {
       return Inspection.unknown('the target read failed: $error');
     }
@@ -148,7 +152,7 @@ final class UnitSnapshot {
     if (stageError case final error?) {
       return Inspection.unknown('the release stage could not be read: $error');
     }
-    return stageInspection?.asInspection ??
+    return stageCheck?.asInspection ??
         const Inspection.absent(detail: 'not staged');
   }
 
@@ -164,7 +168,7 @@ final class UnitSnapshot {
           evidence: '$stageError',
         );
 
-  bool get stageReusable => stageInspection?.reusable == true;
+  bool get stageReusable => stageCheck?.reusable == true;
 
   /// Every public target is already where this release puts it.
   bool get released =>
@@ -231,7 +235,7 @@ final class UnitSnapshot {
         ? 'the partial binary release needs its exact stage'
         : 'the partial release needs its exact stage',
     remedy:
-        'restore ${stage?.directory.path ?? '.rk/work/stages/<stage-id>'} '
+        'restore ${stage?.path ?? '.rk/work/stages/<stage-id>'} '
         'from the machine that staged this release. '
         '${unit.shipsBinaries ? 'Signed or notarized bytes' : 'Recorded archive bytes'} '
         'cannot be recreated byte-for-byte after a public target has bound '

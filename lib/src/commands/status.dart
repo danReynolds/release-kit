@@ -5,10 +5,10 @@ import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
 import '../engine/publish_target.dart';
-import '../engine/release_stage.dart';
+import '../engine/receipt.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
-import '../engine/stage_inspection.dart';
+import '../engine/stage.dart';
 import '../engine/unit_release.dart';
 import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
@@ -42,9 +42,8 @@ class StatusCommand {
   final Output output;
   final HostCapabilities capabilities;
 
-  /// An explicit seam for filesystem tests. In normal composition the same
-  /// resolver already installed on [inspector] is used.
-  final ReleaseStage Function(ResolvedUnit unit)? stageFor;
+  /// Each unit's stage at this commit; null reads none.
+  final Stage Function(ResolvedUnit unit)? stageFor;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -195,14 +194,11 @@ class StatusCommand {
   ) {
     final stage = unit.stage;
     if (stage == null || !stage.reusable) return const [];
-    final stages = {
-      for (final target in unit.release.targets)
-        if (target.preparedBy case final work?) work.name: target.id,
-    };
+    final release = unit.release;
     return [
-      for (final step in stage.receipt!.steps)
-        for (final warning in recordedTargetStageWarnings(step))
-          (target: stages[step.name], warning: warning),
+      for (final work in release.work)
+        for (final warning in stage.receipt!.warnings(work.name))
+          (target: release.preparing(work)?.id, warning: warning),
     ];
   }
 
@@ -217,7 +213,7 @@ class StatusCommand {
       inspector: inspector,
       repository: git.originUrl,
       hasCommit: git.hasCommit,
-      stageFor: stageFor ?? inspector.stageFor,
+      stageFor: stageFor,
     );
     final stageResult = _stageResult(observed);
     final diagnostics = Diagnostics();
@@ -249,7 +245,7 @@ class StatusCommand {
               expectation,
               await observed.reads[expectation.id]!,
               await observed.historyReads[expectation.id]!,
-              stageResult.inspection,
+              stageResult.check,
               artifactProblems,
             ),
           );
@@ -307,7 +303,7 @@ class StatusCommand {
     final localOutputPending = _localBinaryWorkRemains(
       unit: unit,
       targets: targets,
-      stage: stageResult.inspection,
+      stage: stageResult.check,
     );
     final issues = <StatusIssue>[
       for (final diagnostic in diagnostics.found)
@@ -374,7 +370,7 @@ class StatusCommand {
         StatusIssue(unit: unit.name, diagnostic: observed.lostStageProblem),
       if (artifactProblems.isNotEmpty &&
           !partialReleaseWithoutStage &&
-          stageResult.inspection?.reusable != true &&
+          stageResult.check?.reusable != true &&
           (targets.any((target) => !target.inspection.isExact) ||
               localOutputPending))
         _hostIssue(unit),
@@ -450,40 +446,33 @@ class StatusCommand {
         ),
       );
     }
-    final inspected = observed.stageInspection;
-    if (inspected == null) return _StageResult(state: observed.stageState);
-    final ordinaryAbsence =
-        inspected.receipt?.complete != true &&
-        inspected.issues.every(
-          (issue) =>
-              issue.kind == StageIssueKind.missingReceipt ||
-              issue.kind == StageIssueKind.incompleteReceipt,
-        );
+    final check = observed.stageCheck;
+    if (check == null) return _StageResult(state: observed.stageState);
+    final message = switch (check.state) {
+      StageState.broken =>
+        'the incomplete release stage cannot be resumed safely',
+      StageState.changed => 'the reviewed release stage no longer validates',
+      StageState.unreadable => 'the release stage receipt is invalid',
+      StageState.absent || StageState.resumable || StageState.complete => null,
+    };
     return _StageResult(
-      inspection: inspected,
+      check: check,
       state: observed.stageState,
-      issue: ordinaryAbsence || inspected.issues.isEmpty
+      issue: message == null
           ? null
           : StatusIssue(
               unit: unit.name,
               diagnostic: Diagnostic(
                 code: 'RK-STAGE-002',
-                message: inspected.incomplete
-                    ? 'the incomplete release stage cannot be resumed safely'
-                    : inspected.claimsCompletion
-                    ? 'the reviewed release stage no longer validates'
-                    : 'the release stage receipt is invalid',
-                remedy: inspected.incomplete
+                message: message,
+                remedy: check.state == StageState.broken
                     ? 're-run rk stage ${unit.name}. rk keeps '
                           'validated completed lanes when it can and replaces '
                           'only incomplete work'
                     : 'rebuild it explicitly: '
                           'rk stage ${unit.name}',
               ),
-              evidence: {
-                for (final issue in inspected.issues)
-                  issue.path ?? issue.kind.name: issue.message,
-              },
+              evidence: check.problems,
             ),
     );
   }
@@ -492,7 +481,7 @@ class StatusCommand {
     Target expectation,
     Inspection inspection,
     TargetHistory? history,
-    StageInspection? stage,
+    StageCheck? stage,
     Map<String, String> artifactProblems,
   ) {
     // A direct read of the candidate coordinate answers whether this release
@@ -527,16 +516,20 @@ class StatusCommand {
       currentDetail: currentInspection.detail,
       historyProblems: currentHistory.problems,
       artifacts: [
-        for (final name in expectation.artifacts)
-          _observeArtifact(expectation, name, stage, artifactProblems[name]),
+        for (final file in [
+          ...expectation.files,
+        ]..sort((a, b) => (a.name ?? '').compareTo(b.name ?? '')))
+          if (file.name case final name?)
+            _observeArtifact(file, name, stage, artifactProblems[name]),
       ],
     );
   }
 
+  /// What [stage] holds of [file], which a target publishes as [name].
   ArtifactObservation _observeArtifact(
-    Target target,
+    Artifact file,
     String name,
-    StageInspection? stage,
+    StageCheck? stage,
     String? productionProblem,
   ) {
     if (stage == null || stage.receipt?.complete != true) {
@@ -550,51 +543,13 @@ class StatusCommand {
       return ArtifactObservation(name: name, status: ArtifactStatus.notStaged);
     }
 
-    final complete = stage.receipt!.steps.last;
-    var stagedPath = name;
-    final releaseBindings = complete.evidence['release_assets'];
-    if (releaseBindings is Map && releaseBindings[name] is String) {
-      stagedPath = releaseBindings[name] as String;
-    }
-    final homebrewBinding = complete.evidence['homebrew_binding'];
-    if (homebrewBinding is Map &&
-        target.target == PublishTarget.homebrew &&
-        homebrewBinding['project'] == target.project?.name &&
-        homebrewBinding['staged_path'] is String) {
-      final destinationPath = homebrewBinding['path'];
-      if (destinationPath == name ||
-          destinationPath is String && destinationPath.endsWith('/$name')) {
-        stagedPath = homebrewBinding['staged_path'] as String;
-      }
-    }
-
-    final related = stage.issues.where((issue) {
-      final path = issue.path;
-      if (path == null) return false;
-      return path == stagedPath ||
-          path.startsWith('$stagedPath/') ||
-          stagedPath.startsWith('$path/');
-    }).toList();
     if (!stage.reusable) {
-      final usefulIssues = related.isEmpty ? stage.issues : related;
-      final detail = usefulIssues.map((issue) => issue.toString()).join('; ');
       return ArtifactObservation(
         name: name,
         status: ArtifactStatus.invalid,
-        problem: related.isNotEmpty
-            ? related.map((issue) => issue.message).join('; ')
-            : 'stage does not validate: $detail',
-      );
-    }
-
-    final recorded = stage.receipt!.artifacts.any(
-      (artifact) => artifact.path == stagedPath,
-    );
-    if (!recorded) {
-      return ArtifactObservation(
-        name: name,
-        status: ArtifactStatus.invalid,
-        problem: 'missing from the completed stage',
+        problem:
+            stage.problems[file.path] ??
+            'stage does not validate: ${stage.lines.join('; ')}',
       );
     }
     return ArtifactObservation(name: name, status: ArtifactStatus.staged);
@@ -984,7 +939,7 @@ class StatusCommand {
       // Where they are, once they are: a directory this repository holds.
       if (staged && snapshot.observed.stage != null) {
         output.line(
-          'in ${snapshot.observed.stage!.directory.repositoryRelativePath}/'
+          'in ${snapshot.observed.stage!.relativePath}/'
           '${ReleaseAssets.producerRoot(localProject)}/archives',
           depth: 3,
           role: VisualRole.secondary,
@@ -1209,7 +1164,7 @@ class StatusUnitSnapshot {
   final UnitSnapshot observed;
   ResolvedUnit get unit => observed.unit;
   UnitRelease get release => observed.release;
-  StageInspection? get stage => observed.stageInspection;
+  StageCheck? get stage => observed.stageCheck;
   final Map<String, Inspection> states;
   final List<TargetObservation> targets;
   final Inspection stageState;
@@ -1239,7 +1194,7 @@ bool _workRemains(StatusUnitSnapshot snapshot) =>
 bool _localBinaryWorkRemains({
   required ResolvedUnit unit,
   required Iterable<TargetObservation> targets,
-  required StageInspection? stage,
+  required StageCheck? stage,
 }) {
   final project = unit.binaryProject;
   if (project == null || stage?.reusable == true) return false;
@@ -1261,9 +1216,9 @@ bool _localBinaryWorkRemains({
 }
 
 class _StageResult {
-  const _StageResult({required this.state, this.inspection, this.issue});
+  const _StageResult({required this.state, this.check, this.issue});
 
-  final StageInspection? inspection;
+  final StageCheck? check;
   final Inspection state;
   final StatusIssue? issue;
 }

@@ -7,11 +7,10 @@ import 'engine/diagnostic.dart';
 import 'output/output.dart';
 import 'output/progress.dart';
 import 'engine/resolve.dart';
-import 'engine/release_stage.dart';
+import 'engine/stage.dart';
 import 'engine/tools.dart';
 import 'engine/unit_release.dart';
 import 'engine/verdict.dart';
-import 'engine/workspace.dart';
 import 'transforms/archive.dart';
 import 'transforms/macos.dart';
 
@@ -33,10 +32,9 @@ import 'transforms/macos.dart';
 /// made the release's ten steps a fiction: per-step verdicts were
 /// invented, a mid-chain failure was reported against the wrong step, and
 /// CI could never split what one step secretly did. Now each step is its own
-/// act: it reads what it needs from the [Workspace] by name, does one thing,
+/// act: it reads what it needs from the [Stage] by name, does one thing,
 /// and writes what it made back by name. Nothing is carried between steps
-/// in memory (CI readiness, seam 1); the workspace is the interface
-/// (seam 3).
+/// in memory (CI readiness, seam 1); the stage is the interface (seam 3).
 ///
 /// Reuse is the coordinator's job, not this class's: a producer runs only
 /// when the stage receipt lacks its step, and a validated receipt is the one
@@ -46,20 +44,20 @@ class BinaryChain {
   BinaryChain({
     required this.tools,
     required this.output,
-    required this.workspace,
+    required this.stage,
     required this.repositoryRoot,
     required this.capabilities,
     this.compilerExecutable = 'dart',
-    this.stage,
   });
 
   final Tools tools;
   final Output output;
-  final Workspace workspace;
+
+  /// Where each step finds what an earlier one made, and leaves its own.
+  final Stage stage;
   final String repositoryRoot;
   final HostCapabilities capabilities;
   final String compilerExecutable;
-  final ReleaseStage? stage;
 
   // ---- build ----
 
@@ -82,7 +80,7 @@ class BinaryChain {
 
     final name = ReleaseAssets.binaryPath(project, platform);
 
-    File(workspace.pathOf(name)).parent.createSync(recursive: true);
+    File(stage.pathOf(name)).parent.createSync(recursive: true);
     // Pub resolves the build in the lane's copy of the commit, through its
     // own cache and lockfile, as `dart compile` does anywhere.
     final built =
@@ -93,7 +91,7 @@ class BinaryChain {
         ).build(
           platform: platform,
           entryPoint: 'bin/$executable.dart',
-          output: workspace.pathOf(name),
+          output: stage.pathOf(name),
           workingDirectory: project.directoryIn(repositoryRoot),
           expectedVersion: project.version.canonical,
           defines: project.dartDefines,
@@ -136,13 +134,6 @@ class BinaryChain {
         );
       }
       return LocalProducerOutcome.succeeded(
-        outputs: [
-          for (final entry in ReleaseAssets.binaryOutputs(
-            project,
-            platform,
-          ).entries)
-            LocalProducerOutput(entry.key, entry.value),
-        ],
         evidence: {
           'smoke': smoke,
           'artifact': ReleaseAssets.binaryArtifact(project, platform).toJson(),
@@ -203,7 +194,7 @@ class BinaryChain {
           ? (shipped.toList()..sort())
           : const <String>[];
       final signed = await signer.sign(
-        binary: workspace.pathOf(name),
+        binary: stage.pathOf(name),
         identity: signing.identity,
         codeId: codeId,
         pinnedLibraries: pins,
@@ -217,9 +208,7 @@ class BinaryChain {
       }
       final record = <String, Object?>{'code_id': codeId};
       if (file.loadedByIdentity) {
-        final reading = await signer.codeDirectoryHashes(
-          workspace.pathOf(name),
-        );
+        final reading = await signer.codeDirectoryHashes(stage.pathOf(name));
         final hashes = reading.hashes;
         if (hashes == null) {
           return fail(
@@ -239,7 +228,7 @@ class BinaryChain {
     // to: the runtime's designated requirement, which must be the one
     // already published.
     final requirement = await signer.designatedRequirement(
-      workspace.pathOf('$root/${artifact.identityFile}'),
+      stage.pathOf('$root/${artifact.identityFile}'),
     );
     if (requirement == null) {
       return fail('RK-SIGN-002', 'the signature could not be read back');
@@ -277,7 +266,7 @@ class BinaryChain {
       'certificate': signing.identity.name,
     };
     final signedSmoke = await tools.run(
-      workspace.pathOf('$root/${artifact.entryPoint}'),
+      stage.pathOf('$root/${artifact.entryPoint}'),
       const ['--version'],
       timeout: const Duration(minutes: 2),
     );
@@ -290,13 +279,6 @@ class BinaryChain {
       );
     }
     return LocalProducerOutcome.succeeded(
-      outputs: [
-        for (final entry in ReleaseAssets.binaryOutputs(
-          project,
-          platform,
-        ).entries)
-          LocalProducerOutput(entry.key, entry.value),
-      ],
       evidence: {
         'artifact': artifact.toJson(),
         'smoke': smoke,
@@ -350,8 +332,8 @@ class BinaryChain {
     ResolvedProject project,
   ) async {
     final platform = step.platform!;
-    for (final path in ReleaseAssets.binaryOutputs(project, platform).keys) {
-      if (!workspace.exists(path)) {
+    for (final path in ReleaseAssets.binaryOutputs(project, platform)) {
+      if (!File(stage.pathOf(path)).existsSync()) {
         return _missingArtifact(step, path, 'the build step produces it');
       }
     }
@@ -369,7 +351,7 @@ class BinaryChain {
       ).files) {
         final copy = File('$payload/${file.path}')
           ..parent.createSync(recursive: true);
-        File(workspace.pathOf('$root/${file.path}')).copySync(copy.path);
+        File(stage.pathOf('$root/${file.path}')).copySync(copy.path);
       }
       final zip = '${scratch.path}/${project.executable}.zip';
       final zipped = await tools.run('ditto', ['-c', '-k', payload, zip]);
@@ -412,7 +394,6 @@ class BinaryChain {
       // Apple's verdict is about the signed files, which the archive step
       // packs as they are; a consumer asks Apple about the exact bytes.
       return LocalProducerOutcome.succeeded(
-        outputs: const [],
         evidence: {
           'notary': {
             'status': 'Accepted',
@@ -437,7 +418,7 @@ class BinaryChain {
     final entries = <ArchiveEntry>[];
     for (final file in artifact.files) {
       final name = '$root/${file.path}';
-      final bytes = workspace.readBytes(name);
+      final bytes = stage.readBytes(name);
       if (bytes == null) {
         return _missingArtifact(step, name, 'the build step produces it');
       }
@@ -460,7 +441,7 @@ class BinaryChain {
     }
 
     final name = ReleaseAssets.archivePath(project, platform);
-    workspace.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
+    stage.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
     output.step(
       step,
       show: false,
@@ -469,9 +450,7 @@ class BinaryChain {
       detail: name,
       note: name,
     );
-    return LocalProducerOutcome.succeeded(
-      outputs: [LocalProducerOutput(name, 'archive')],
-    );
+    return LocalProducerOutcome.succeeded();
   }
 
   LocalProducerOutcome _missingArtifact(
@@ -513,35 +492,21 @@ final class MacSigning {
   final SigningIdentity identity;
 }
 
-/// One stage-relative file a local producer created or authoritatively reused.
-class LocalProducerOutput {
-  const LocalProducerOutput(this.path, this.type);
-
-  /// A workspace-relative path, never a host filesystem path.
-  final String path;
-  final String type;
-}
-
 /// The complete handoff from one local operation to the stage receipt writer.
 ///
 /// Producers still render their established diagnostics. This value carries
 /// only the machine facts the receipt needs: whether the operation completed,
-/// which stage-relative outputs it owns, and the evidence learned while doing
-/// the work. The receipt writer therefore does not have to rediscover semantic
-/// facts from mutable workspace files after the operation returns.
+/// and the evidence learned while doing the work. The stage records the files
+/// the work writes.
 class LocalProducerOutcome {
-  LocalProducerOutcome.succeeded({
-    required Iterable<LocalProducerOutput> outputs,
-    Map<String, Object?> evidence = const {},
-  }) : ok = true,
-       problem = null,
-       halt = null,
-       outputs = List<LocalProducerOutput>.unmodifiable(outputs),
-       evidence = Map<String, Object?>.unmodifiable(evidence);
+  LocalProducerOutcome.succeeded({Map<String, Object?> evidence = const {}})
+    : ok = true,
+      problem = null,
+      halt = null,
+      evidence = Map<String, Object?>.unmodifiable(evidence);
 
   const LocalProducerOutcome.failed([this.problem, this.halt])
     : ok = false,
-      outputs = const [],
       evidence = const {};
 
   final bool ok;
@@ -552,6 +517,5 @@ class LocalProducerOutcome {
   /// coordinator speaks the halt exactly once, after the drain.
   final HaltKind? halt;
 
-  final List<LocalProducerOutput> outputs;
   final Map<String, Object?> evidence;
 }

@@ -365,7 +365,7 @@ class FakeReleases {
             tag: tag,
             commit: 'a' * 40,
             artifacts: [
-              ReleaseManifestArtifact(
+              (
                 name: _archive(version),
                 type: 'archive',
                 size: archive.length,

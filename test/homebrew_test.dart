@@ -319,7 +319,6 @@ binary_platforms = ["linux-x64"]
           git: GitState.none('/repo'),
           tools: tools,
           repository: 'owner/tool',
-          stageFor: null,
         ),
         unit,
         target,

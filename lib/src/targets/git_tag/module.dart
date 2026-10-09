@@ -3,6 +3,7 @@ import '../../engine/diagnostic.dart';
 import '../../engine/git.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
+import '../../engine/stage.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
 import '../../engine/version.dart';
@@ -31,8 +32,9 @@ final class GitTagTargetModule extends TargetModule {
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    Target target,
-  ) async {
+    Target target, {
+    Stage? stage,
+  }) async {
     final tag = requiredTargetTag(unit, PublishTarget.gitTag);
     final tools = context.tools;
     if (tools == null) {
@@ -43,20 +45,8 @@ final class GitTagTargetModule extends TargetModule {
       );
     }
     final destination = GitTag(tools: tools, root: context.git.root);
-    final stage = context.reusableStage(unit);
-    String? manifestSha256;
-    if (stage != null) {
-      try {
-        final manifest = stage.requireReceipt().artifacts.singleWhere(
-          (artifact) => artifact.path == ReleaseAssets.manifest,
-        );
-        manifestSha256 = manifest.sha256;
-      } on Object catch (error) {
-        return Inspection.unknown(
-          'the expected release tag binding could not be read: $error',
-        );
-      }
-    }
+    final manifestSha256 =
+        stage?.receipt?.files[ReleaseAssets.manifest]?.sha256;
 
     final remote = await destination.inspectReleaseBinding(
       listing: context.once(originTagsKey, destination.listTags),

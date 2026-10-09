@@ -1,4 +1,3 @@
-import '../engine/stage_receipt.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
@@ -175,7 +174,9 @@ final class StageReleaseProgress {
   final LiveProgress live;
   final bool _owned;
   final Map<BoardRow, ProgressRowController> _controllers = {};
-  final Map<String, StageStep> _recorded = {};
+
+  /// Each recorded producer's evidence, by its name.
+  final Map<String, Map<String, Object?>> _recorded = {};
 
   /// The rows [producer] fills, in board order. Work whose output reaches
   /// no destination — the release notes — fills none, and says nothing.
@@ -199,12 +200,10 @@ final class StageReleaseProgress {
     }
   }
 
-  void record(StageStep step) => restore([step]);
-
-  void restore(Iterable<StageStep> steps) {
-    for (final step in steps) {
-      _recorded[step.name] = step;
-    }
+  /// Fills the rows every producer in [producers] completes: what a
+  /// receipt records, by name, with each one's evidence.
+  void restore(Map<String, Map<String, Object?>> producers) {
+    _recorded.addAll(producers);
     for (final group in board) {
       for (final row in group.rows) {
         final expected = {for (final work in row.filledBy) work.name};
@@ -233,9 +232,9 @@ final class StageReleaseProgress {
   String _noteFor(Set<String> producers) {
     final facts = <String>['staged'];
     for (final producer in producers) {
-      final step = _recorded[producer]!;
-      final signature = step.evidence['signature'];
-      final notary = step.evidence['notary'];
+      final evidence = _recorded[producer]!;
+      final signature = evidence['signature'];
+      final notary = evidence['notary'];
       if (signature is Map && signature['certificate'] is String) {
         facts.add('signed');
       }

@@ -555,11 +555,11 @@ assets = ["assets/parser-macos-arm64.dylib", "parser-linux-x64.so", "src.tar.gz"
       ).work.singleWhere((work) => work.kind == StepKind.buildAssets);
       expect(work.name, 'assets:flark_parse');
       expect(work.inputs, isEmpty);
-      expect(work.outputs, {
-        'producers/flark_parse/assets/parser-macos-arm64.dylib': 'asset',
-        'producers/flark_parse/assets/parser-linux-x64.so': 'asset',
-        'producers/flark_parse/assets/src.tar.gz': 'asset',
-      });
+      expect(work.outputs, [
+        'producers/flark_parse/assets/parser-macos-arm64.dylib',
+        'producers/flark_parse/assets/parser-linux-x64.so',
+        'producers/flark_parse/assets/src.tar.gz',
+      ]);
     });
   });
 

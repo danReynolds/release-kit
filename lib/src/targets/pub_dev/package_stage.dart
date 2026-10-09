@@ -2,30 +2,13 @@ import 'dart:io';
 
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
-import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
-import '../../engine/stage.dart';
-import '../../engine/stage_receipt.dart';
 import '../../engine/stage_source.dart';
 import '../../engine/tools.dart';
 import '../../engine/unit_release.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'resolution.dart';
-
-/// The one native Pub archive frozen in a completed stage.
-StageArtifact requirePubArchive(ReleaseStage stage, ResolvedProject project) {
-  final path = ReleaseAssets.pubArchivePath(project);
-  final matches = stage
-      .requireReceipt()
-      .artifacts
-      .where((artifact) => artifact.path == path)
-      .toList();
-  if (matches.length != 1 || matches.single.type != 'pub-archive') {
-    throw StateError('the stage does not contain one native Pub archive');
-  }
-  return matches.single;
-}
 
 /// Stages [work]'s package: Pub's native archive, the one private input to
 /// the pub.dev lifecycle. Packaging, how Pub resolves the package, and its
@@ -40,19 +23,7 @@ Future<TargetStageOutcome> preparePubArchive(
   if (validation.diagnostic case final diagnostic?) {
     return TargetStageFailure(diagnostic, unit: project.unitName);
   }
-  return TargetStageSuccess(
-    StageStep(
-      name: work.name,
-      outputs: [
-        StageArtifact.capture(
-          stage: context.stage.directory,
-          path: ReleaseAssets.pubArchivePath(project),
-          type: 'pub-archive',
-        ),
-      ],
-    ),
-    warnings: validation.warnings,
-  );
+  return TargetStageSuccess(warnings: validation.warnings);
 }
 
 /// Stages [project]'s Pub archive.
@@ -62,7 +33,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
 ) async {
   final archivePath = ReleaseAssets.pubArchivePath(project);
   void requireAbsentDestination() {
-    final destination = context.stage.directory.resolve(archivePath);
+    final destination = context.stage.pathOf(archivePath);
     if (FileSystemEntity.typeSync(destination, followLinks: false) !=
         FileSystemEntityType.notFound) {
       throw StateError(
@@ -77,7 +48,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   // cannot leave partial bytes or empty canonical directories behind.
   final scratch = Directory.systemTemp.createTempSync('rk-pub-archive-');
   try {
-    final archive = File(_join(scratch.path, StagePath.segments(archivePath)));
+    final archive = File('${scratch.path}/$archivePath');
     archive.parent.createSync(recursive: true);
     final result = await _packageArchiveTo(context, project, archive: archive);
     if (result.diagnostic == null) {
@@ -86,10 +57,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
           FileSystemEntityType.file) {
         throw StateError('native Pub output is not a regular archive file');
       }
-      context.stage.directory.writeBytesAtomically(
-        archivePath,
-        archive.readAsBytesSync(),
-      );
+      context.stage.write(archivePath, archive.readAsBytesSync());
     }
     return result;
   } finally {
@@ -115,9 +83,8 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   late final Set<String> takenFromSource;
   try {
     final sourceRoot = _join(consumer.path, const ['source']);
-    String inSource(String directory) => directory == '.'
-        ? sourceRoot
-        : _join(sourceRoot, StagePath.segments(directory));
+    String inSource(String directory) =>
+        directory == '.' ? sourceRoot : '$sourceRoot/$directory';
     final directory = inSource(project.pubspec.directory);
 
     // The repository packages Pub takes from this source, by name with

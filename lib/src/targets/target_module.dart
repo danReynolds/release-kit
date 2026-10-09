@@ -2,15 +2,13 @@ import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/publish_target.dart';
 import '../engine/registry.dart';
-import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage_receipt.dart';
+import '../engine/stage.dart';
 import '../engine/stage_source.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
-import '../engine/workspace.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
 
@@ -51,11 +49,14 @@ abstract base class TargetModule {
 
   PublishTarget get target;
 
+  /// What [target]'s destination holds. [stage] is the unit's complete
+  /// stage, when it has one: what a release would publish from.
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    Target target,
-  );
+    Target target, {
+    Stage? stage,
+  });
 
   /// Reads the lane's public version history, when it has one.
   ///
@@ -109,7 +110,7 @@ abstract base class TargetModule {
     ResolvedUnit unit,
     Target target,
     TargetActOutcome act,
-  ) => inspectCandidate(context.reads, unit, target);
+  ) => inspectCandidate(context.reads, unit, target, stage: context.stage);
 
   /// The code and sentence for an act that did not settle exact and carried
   /// no diagnostic of its own, or whose result is a conflict, in this
@@ -273,7 +274,6 @@ final class TargetReadContext {
     required this.git,
     required this.tools,
     required this.repository,
-    required this.stageFor,
     this.shared,
   });
 
@@ -282,7 +282,6 @@ final class TargetReadContext {
   final GitState git;
   final Tools? tools;
   final String? repository;
-  final ReleaseStage Function(ResolvedUnit unit)? stageFor;
 
   /// Reads several targets share within one run, by key.
   final Map<String, Future<Object?>>? shared;
@@ -294,45 +293,34 @@ final class TargetReadContext {
     if (memo == null) return read();
     return (memo[key] ??= read()).then((value) => value as T);
   }
-
-  ReleaseStage? reusableStage(ResolvedUnit unit) {
-    final factory = stageFor;
-    if (factory == null) return null;
-    try {
-      final stage = factory(unit);
-      return stage.inspect().reusable ? stage : null;
-    } on Object {
-      return null;
-    }
-  }
 }
 
 final class TargetStageContext {
   TargetStageContext({
+    required this.unit,
     required this.tools,
     required this.git,
     required void Function(String name, String contents) attach,
     required this.stage,
     required this.source,
-    required Iterable<StageStep> priorSteps,
     this.progress,
     Map<String, String> fromSource = const {},
-  }) : priorSteps = List<StageStep>.unmodifiable(priorSteps),
-       fromSource = Map.unmodifiable(fromSource),
+  }) : fromSource = Map.unmodifiable(fromSource),
        _attach = attach;
 
+  final ResolvedUnit unit;
   final Tools tools;
   final GitState git;
   String? get repository => git.originUrl;
   final void Function(String name, String contents) _attach;
   void attach(String name, String contents) => _attach(name, contents);
-  final ReleaseStage stage;
-  Workspace get workspace => stage.directory.workspace;
+
+  /// The stage in progress: its receipt records the work done so far.
+  final Stage stage;
 
   /// The source the stage is built from. A producer that builds exports it
   /// into a directory of its own.
   final StageSourceSnapshot source;
-  final List<StageStep> priorSteps;
 
   /// The repository packages a Pub package takes from this source when it
   /// is staged, by name, with each one's directory relative to the
@@ -351,11 +339,9 @@ sealed class TargetStageOutcome {
 }
 
 final class TargetStageSuccess extends TargetStageOutcome {
-  TargetStageSuccess(StageStep step, {Iterable<Diagnostic> warnings = const []})
-    : warnings = List.unmodifiable(warnings),
-      step = _recordTargetStageWarnings(step, warnings);
+  TargetStageSuccess({Iterable<Diagnostic> warnings = const []})
+    : warnings = List.unmodifiable(warnings);
 
-  final StageStep step;
   @override
   final List<Diagnostic> warnings;
 }
@@ -371,46 +357,6 @@ final class TargetStageFailure extends TargetStageOutcome {
   final String? unit;
   @override
   final List<Diagnostic> warnings;
-}
-
-const _targetStageWarningsKey = 'rk_warnings';
-
-StageStep _recordTargetStageWarnings(
-  StageStep step,
-  Iterable<Diagnostic> warnings,
-) {
-  final recorded = warnings.toList();
-  if (recorded.isEmpty) return step;
-  return StageStep(
-    name: step.name,
-    outputs: step.outputs,
-    evidence: {
-      ...step.evidence,
-      _targetStageWarningsKey: [
-        for (final warning in recorded)
-          {
-            'code': warning.code,
-            'message': warning.message,
-            if (warning.remedy != null) 'remedy': warning.remedy,
-          },
-      ],
-    },
-  );
-}
-
-/// Nonblocking target warnings preserved by a reusable stage receipt.
-List<Diagnostic> recordedTargetStageWarnings(StageStep step) {
-  final values = step.evidence[_targetStageWarningsKey];
-  if (values is! List) return const [];
-  return [
-    for (final value in values)
-      if (value is Map && value['code'] is String && value['message'] is String)
-        Diagnostic(
-          code: value['code'] as String,
-          message: value['message'] as String,
-          remedy: value['remedy'] is String ? value['remedy'] as String : null,
-        ),
-  ];
 }
 
 final class TargetClaim {
@@ -445,12 +391,14 @@ final class TargetReleaseContext {
   final Tools tools;
   GitState get git => reads.git;
   String? get repository => reads.repository;
-  final ReleaseStage stage;
+
+  /// The complete stage the act publishes from; null when what is left
+  /// finishes from public inputs alone.
+  final Stage? stage;
   final ProgressHandle progress;
 
   /// Native inherited-stdio access, absent for JSON and redirected output.
   final ProgressInteractiveRunner? runInteractive;
-  Workspace get workspace => stage.directory.workspace;
   final Future<void> Function(Duration duration) wait;
   final Duration confirmDeadline;
   final Duration confirmInterval;

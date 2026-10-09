@@ -4,7 +4,7 @@ import 'diagnostic.dart';
 import 'git.dart';
 import 'registry.dart';
 import 'resolve.dart';
-import 'release_stage.dart';
+import 'stage.dart';
 import 'tools.dart';
 import 'unit_release.dart';
 import 'verdict.dart';
@@ -30,7 +30,6 @@ class Inspector {
     this.pubDev,
     this.tools,
     this.repository,
-    this.stageFor,
     TargetCatalog? targets,
   }) : targets = targets ?? TargetCatalog.builtIn();
 
@@ -47,10 +46,6 @@ class Inspector {
   /// `owner/name`, when the repository has an origin to ask about.
   final String? repository;
 
-  /// Resolves the one content-addressed stage both verbs inspect. Null keeps
-  /// the engine usable in narrow destination tests that have no filesystem.
-  final ReleaseStage Function(ResolvedUnit unit)? stageFor;
-
   /// The one closed target catalog shared by status and release.
   final TargetCatalog targets;
 
@@ -61,7 +56,6 @@ class Inspector {
     git: git,
     tools: tools,
     repository: repository,
-    stageFor: stageFor,
     shared: _shared,
   );
 
@@ -97,22 +91,23 @@ class Inspector {
     Verdict.exact => false,
   };
 
-  Future<Inspection> inspect(Step step, ResolvedUnit unit) =>
-      Timings.span('check ${step.id}', () => _inspect(step, unit));
-
-  Future<Inspection> _inspect(
-    Step step,
-    ResolvedUnit unit,
-  ) async => switch (step) {
-    Target() =>
-      targets.moduleFor(step.target).inspectCandidate(targetReads, unit, step),
-    Requirement() => _prerequisite(step),
-    Work(kind: StepKind.completeStage) => _stageInspection(unit),
-    Work() =>
-      targetReads.reusableStage(unit) == null
-          ? const Inspection.unknown('local work, decided when it runs')
-          : const Inspection.exact(detail: 'validated in the release stage'),
-  };
+  /// What [step]'s destination holds. [stage] is the unit's complete
+  /// stage, if it has one: a target that publishes staged bytes compares
+  /// what is public with them.
+  Future<Inspection> inspect(Step step, ResolvedUnit unit, {Stage? stage}) =>
+      Timings.span('check ${step.id}', () async {
+        return switch (step) {
+          Target() =>
+            targets
+                .moduleFor(step.target)
+                .inspectCandidate(targetReads, unit, step, stage: stage),
+          Requirement() => _prerequisite(step),
+          // Local work is decided where it runs, from the stage.
+          Work() => const Inspection.unknown(
+            'local work, decided when it runs',
+          ),
+        };
+      });
 
   /// The newest public version visible in one configured target lane.
   ///
@@ -123,18 +118,6 @@ class Inspector {
       targets
           .moduleFor(target.target)
           .inspectHistory(targetReads, unit, target);
-
-  Inspection _stageInspection(ResolvedUnit unit) {
-    final factory = stageFor;
-    if (factory == null) {
-      return const Inspection.absent(detail: 'not staged');
-    }
-    try {
-      return factory(unit).inspect().asInspection;
-    } on Object catch (error) {
-      return Inspection.unknown('the release stage could not be read: $error');
-    }
-  }
 
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Requirement requirement) async {

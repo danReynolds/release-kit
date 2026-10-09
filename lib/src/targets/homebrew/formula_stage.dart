@@ -1,9 +1,7 @@
 import 'dart:convert';
 
 import '../../engine/assets.dart';
-import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
-import '../../engine/stage_receipt.dart';
 import '../../engine/unit_release.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
@@ -15,46 +13,14 @@ Future<TargetStageOutcome> prepareFormula(
   TargetStageContext context,
   Work work,
 ) async {
-  final unit = context.stage.unit;
+  final unit = context.unit;
   final tag = requiredTargetTag(unit, PublishTarget.homebrew);
-  final repository = context.repository;
-  if (repository == null) {
-    return TargetStageFailure(
-      Diagnostic(
-        code: 'RK-GIT-003',
-        message:
-            'homebrew needs an origin remote, and this repository '
-            'has none',
-        remedy:
-            'rk publishes what others can fetch, and reads back what it '
-            'published. git remote add origin <url>, then git push -u '
-            'origin ${context.git.branch ?? 'main'}',
-      ),
-    );
-  }
-
+  // The release refused a unit with no origin before anything was staged:
+  // a GitHub release cannot be read without one.
+  final repository = context.repository!;
   final project = work.project!;
-  final archives = <String, StageArtifact>{};
-  for (final input in work.inputs) {
-    final platform = input.platform!;
-    final record = context.priorSteps
-        .where((step) => step.name == input.name)
-        .firstOrNull;
-    final artifact = record?.outputs
-        .where((output) => output.type == 'archive')
-        .firstOrNull;
-    if (artifact == null) {
-      return TargetStageFailure(
-        Diagnostic(
-          code: 'RK-WORK-001',
-          message: 'the workspace has no archive for $platform',
-          remedy: 'the archive step produces it — re-running runs it',
-        ),
-        unit: unit.name,
-      );
-    }
-    archives[platform] = artifact;
-  }
+  // The formula runs once every archive it names is recorded.
+  final recorded = context.stage.receipt!.files;
 
   final executable = project.executable!;
   context.progress?.begin(
@@ -67,31 +33,17 @@ Future<TargetStageOutcome> prepareFormula(
     tag: tag,
     executable: executable,
     assets: {
-      for (final MapEntry(key: platform, value: archive) in archives.entries)
-        platform: PlatformAsset(
+      for (final archive in work.inputs)
+        archive.platform!: PlatformAsset(
           name: ReleaseAssets.archiveName(
             executable,
             project.version.canonical,
-            platform,
+            archive.platform!,
           ),
-          sha256: archive.sha256,
+          sha256: recorded[archive.outputs.single]!.sha256,
         ),
     },
   );
-  context.workspace.write(
-    ReleaseAssets.formulaPath(project),
-    utf8.encode(contents),
-  );
-  return TargetStageSuccess(
-    StageStep(
-      name: work.name,
-      outputs: [
-        StageArtifact.capture(
-          stage: context.stage.directory,
-          path: ReleaseAssets.formulaPath(project),
-          type: 'formula',
-        ),
-      ],
-    ),
-  );
+  context.stage.write(work.outputs.single, utf8.encode(contents));
+  return TargetStageSuccess();
 }

@@ -1,119 +1,318 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'atomic_file.dart';
 import '../transforms/digest.dart';
+import 'assets.dart';
+import 'atomic_file.dart';
 import 'canonical_json.dart';
-import 'workspace.dart';
+import 'diagnostic.dart';
+import 'git.dart';
+import 'receipt.dart';
+import 'release_manifest.dart';
+import 'resolve.dart';
+import 'source_tree.dart';
+import 'stage_plan.dart';
+import 'stage_source.dart';
+import 'timings.dart';
+import 'unit_release.dart';
 
-/// Increment this only when the identity or receipt contract changes.
-const stageSchemaVersion = 16;
+/// Increment this whenever the work a stage records changes: its names, the
+/// files each writes, or the receipt's shape. The stage id hashes it, so a
+/// stage another rk built is never taken for this one's.
+const stageSchemaVersion = 17;
 
-/// The content address of one resolved release plan at one exact Git tree.
-class StageIdentity {
-  StageIdentity._({
-    required this.id,
-    required this.headCommit,
-    required this.headTree,
-    required this.planSha256,
-  });
+/// A stage's name: the commit and tree it is built from, the digest of its
+/// plan (see `stagePlanFor`), and the schema.
+final class StageId {
+  StageId._(this.commit, this.tree, this.planSha256)
+    : id = Sha256.hex(
+        utf8.encode(
+          CanonicalJson.encode({
+            'head_commit': commit,
+            'head_tree': tree,
+            'plan_sha256': planSha256,
+            'schema': stageSchemaVersion,
+          }),
+        ),
+      );
 
-  /// Canonicalizes [resolvedPlan] before hashing it: what the stage is built
-  /// from beyond the commit's bytes, the unit's configuration and its origin
-  /// (see `stagePlanFor`). The tools that build it are left out.
-  factory StageIdentity.forPlan({
-    required String headCommit,
-    required String headTree,
-    required Object? resolvedPlan,
-  }) {
-    final plan = CanonicalJson.encode(resolvedPlan);
-    return StageIdentity.fromDigests(
-      headCommit: headCommit,
-      headTree: headTree,
-      planSha256: Sha256.hex(utf8.encode(plan)),
-    );
-  }
+  factory StageId.of({
+    required String commit,
+    required String tree,
+    required Map<String, Object?> plan,
+  }) => StageId._(
+    commit,
+    tree,
+    Sha256.hex(utf8.encode(CanonicalJson.encode(plan))),
+  );
 
-  factory StageIdentity.fromDigests({
-    required String headCommit,
-    required String headTree,
-    required String planSha256,
-  }) {
-    _requireObjectId('HEAD commit', headCommit);
-    _requireObjectId('HEAD tree', headTree);
-    if (headCommit.length != headTree.length) {
-      throw ArgumentError('HEAD commit and tree use different object formats');
-    }
-    _requireSha256('resolved plan digest', planSha256);
-    final coordinates = <String, Object?>{
-      'head_commit': headCommit,
-      'head_tree': headTree,
-      'plan_sha256': planSha256,
-      'schema': stageSchemaVersion,
-    };
-    return StageIdentity._(
-      id: Sha256.hex(utf8.encode(CanonicalJson.encode(coordinates))),
-      headCommit: headCommit,
-      headTree: headTree,
-      planSha256: planSha256,
-    );
-  }
-
-  /// The identity a receipt records.
-  factory StageIdentity.fromJson(Object? value) {
-    final map = _strictMap(value, const {
-      'id',
-      'head_commit',
-      'head_tree',
-      'plan_sha256',
-    }, 'stage identity');
-    // The id is derived again from what it names: a receipt that names
-    // another stage is that stage's (see StageIssueKind.wrongStage).
-    return StageIdentity.fromDigests(
-      headCommit: _string(map, 'head_commit'),
-      headTree: _string(map, 'head_tree'),
-      planSha256: _string(map, 'plan_sha256'),
+  /// The id a receipt records, derived again from what it names: a receipt
+  /// that names another stage is that stage's.
+  factory StageId.fromJson(Object? json) {
+    final map = json as Map<String, Object?>;
+    return StageId._(
+      map['head_commit'] as String,
+      map['head_tree'] as String,
+      map['plan_sha256'] as String,
     );
   }
 
   final String id;
-  final String headCommit;
-  final String headTree;
+  final String commit;
+  final String tree;
   final String planSha256;
 
   Map<String, Object?> toJson() => {
-    'head_commit': headCommit,
-    'head_tree': headTree,
+    'head_commit': commit,
+    'head_tree': tree,
     'id': id,
     'plan_sha256': planSha256,
   };
 }
 
-/// The fixed on-disk location and safe atomic write operations for a stage.
-class StageDirectory {
-  StageDirectory({required String repositoryRoot, required this.identity})
-    : repositoryRoot = Directory(repositoryRoot).absolute.path;
+/// One unit's stage at one commit: `.rk/work/stages/<id>`, holding what a
+/// release publishes and the receipt that records it.
+///
+/// rk trusts its own stage directory, as it trusts its own writes: a stage
+/// is checked for what it publishes, not for how its directories are laid
+/// out. Only a complete receipt, whose files are intact, makes them
+/// reusable.
+final class Stage {
+  Stage({
+    required String root,
+    required this.id,
+    required Map<String, Object?> plan,
+    required this.source,
+    DartSdk Function()? sdk,
+  }) : path = '${Directory(root).absolute.path}/$_stages/${id.id}',
+       relativePath = '$_stages/${id.id}',
+       plan = CanonicalJson.normalize(plan) as Map<String, Object?>,
+       _readSdk = sdk ?? DartSdk.ambient;
 
-  final String repositoryRoot;
-  final StageIdentity identity;
+  final StageId id;
 
-  String get path =>
-      _join(repositoryRoot, ['.rk', 'work', 'stages', identity.id]);
+  /// Where the stage is, absolute for the tools that work on its files.
+  final String path;
 
-  /// The exact stage location as displayed from the repository boundary.
-  ///
-  /// The absolute path remains [path] for filesystem work and diagnostics.
-  /// Successful handoff output uses this form so a long checkout prefix does
-  /// not make the content-addressed id wrap across terminal lines.
-  String get repositoryRelativePath =>
-      _join('.rk', ['work', 'stages', identity.id]);
+  /// Where the stage is from the repository root: what a person is shown,
+  /// so a long checkout path does not wrap the id across lines.
+  final String relativePath;
 
-  Workspace get workspace => Workspace(path);
+  /// What the stage is built from beyond its commit, recorded in the
+  /// receipt so a person can read it.
+  final Map<String, Object?> plan;
 
-  String resolve(String relativePath) =>
-      _join(path, StagePath.segments(relativePath));
+  /// The repository the stage is built from, read at its commit.
+  final SourceTree source;
+
+  /// The Dart SDK producers build with, read the first time one asks.
+  DartSdk get sdk => _sdk ??= _readSdk();
+  final DartSdk Function() _readSdk;
+  DartSdk? _sdk;
+
+  /// The receipt as this process last read or wrote it: what [check] found,
+  /// with every piece of work recorded since.
+  Receipt? get receipt => _receipt;
+  Receipt? _receipt;
+
+  /// A real path for [file], for the native tools that work on files.
+  String pathOf(String file) => '$path/$file';
+
+  /// [file]'s bytes, or null when it is not here.
+  List<int>? readBytes(String file) {
+    final handle = File(pathOf(file));
+    return handle.existsSync() ? handle.readAsBytesSync() : null;
+  }
+
+  /// Places [bytes] at [file] by an atomic rename, so a crash leaves either
+  /// the old bytes or the new.
+  void write(String file, List<int> bytes) {
+    final handle = File(pathOf(file));
+    handle.parent.createSync(recursive: true);
+    AtomicFile.write(handle.path, bytes);
+  }
+
+  /// What this stage is, for [release]: its receipt, checked against the
+  /// files it records. An interrupted stage is checked for every file, since
+  /// work resumes from them; a complete one for every file [release]
+  /// publishes, which must all be recorded. The stage is named by
+  /// everything that decides its work, so a complete stage lacks one only
+  /// when an rk change forgot to bump [stageSchemaVersion].
+  StageCheck check(UnitRelease release) =>
+      Timings.spanSync('inspect stage ${release.unit.name}', () {
+        _receipt = null;
+        if (FileSystemEntity.typeSync(path) == FileSystemEntityType.notFound) {
+          return StageCheck(
+            StageState.absent,
+            problems: const {_receiptFile: 'no completed stage receipt exists'},
+          );
+        }
+        final file = File(pathOf(_receiptFile));
+        if (!file.existsSync()) {
+          return StageCheck(
+            StageState.absent,
+            problems: const {
+              _receiptFile: 'files without a stage receipt are not reusable',
+            },
+          );
+        }
+        final Receipt receipt;
+        try {
+          receipt = Receipt.parse(file.readAsStringSync());
+        } on Object catch (error) {
+          return StageCheck(
+            StageState.unreadable,
+            problems: {_receiptFile: 'stage receipt is invalid: $error'},
+          );
+        }
+        if (receipt.stage.id != id.id) {
+          return StageCheck(
+            StageState.unreadable,
+            receipt: receipt,
+            problems: const {
+              _receiptFile: 'receipt identity does not name this stage',
+            },
+          );
+        }
+        _receipt = receipt;
+        if (!receipt.complete) {
+          final problems = {
+            _receiptFile: 'receipt records an incomplete stage',
+            for (final MapEntry(key: path, value: recorded)
+                in receipt.files.entries)
+              if (_problem(path, recorded) case final problem?) path: problem,
+          };
+          return StageCheck(
+            problems.length == 1 ? StageState.resumable : StageState.broken,
+            receipt: receipt,
+            problems: problems,
+          );
+        }
+        final problems = <String, String>{};
+        for (final artifact in release.artifacts) {
+          final recorded = receipt.files[artifact.path];
+          final problem = recorded == null
+              ? 'missing from the completed stage'
+              : _problem(artifact.path, recorded);
+          if (problem != null) problems[artifact.path] = problem;
+        }
+        return StageCheck(
+          problems.isEmpty ? StageState.complete : StageState.changed,
+          receipt: receipt,
+          problems: problems,
+        );
+      });
+
+  /// Starts this stage again: whatever is here goes, and a receipt holding
+  /// only the plan takes its place.
+  void begin() {
+    Stages._delete(path);
+    _write(Receipt(stage: id, plan: plan));
+  }
+
+  /// Records [work]: every file it writes, as it is now, and [evidence],
+  /// with [warnings] kept so a reused stage says them again. The receipt is
+  /// replaced by an atomic rename.
+  void record(
+    Work work, {
+    Map<String, Object?> evidence = const {},
+    Iterable<Diagnostic> warnings = const [],
+  }) {
+    final progress = _receipt;
+    if (progress == null || progress.complete) {
+      throw StateError('only a stage in progress records work');
+    }
+    _write(
+      progress.recording(
+        work.name,
+        {...evidence, ...Receipt.keeping(warnings)},
+        {for (final file in work.outputs) file: _capture(file, work.name)},
+      ),
+    );
+  }
+
+  /// Completes the stage once every other piece of [release]'s work is
+  /// recorded: writes the release manifest, then records the barrier.
+  ReleaseManifest complete(UnitRelease release) {
+    final manifest = ReleaseManifest.of(release, _receipt!);
+    write(ReleaseAssets.manifest, utf8.encode(manifest.encode()));
+    record(
+      release.barrier,
+      evidence: {if (_sdk case final sdk?) 'dart_sdk': sdk.toJson()},
+    );
+    return manifest;
+  }
+
+  /// Removes those of [files] that the receipt does not record, so the work
+  /// that writes them can run again: a crash between a write and its record
+  /// leaves bytes no receipt vouches for.
+  void discardUnrecorded(Iterable<String> files) {
+    final recorded = _receipt?.files ?? const {};
+    for (final file in files) {
+      if (recorded.containsKey(file)) continue;
+      final handle = File(pathOf(file));
+      if (FileSystemEntity.typeSync(handle.path, followLinks: false) !=
+          FileSystemEntityType.notFound) {
+        handle.deleteSync();
+      }
+    }
+  }
+
+  /// The source this stage is built from, read once into memory: the
+  /// committed bytes. Producers export it into directories of their own,
+  /// never the mutable worktree.
+  Future<StageSourceSnapshot> captureSource() =>
+      StageSourceSnapshot.capture(source, commit: id.commit);
+
+  void _write(Receipt receipt) {
+    write(_receiptFile, utf8.encode(receipt.encode()));
+    _receipt = receipt;
+  }
+
+  /// [file] as it is now, remembered so a check in this process need not
+  /// read it again.
+  StagedFile _capture(String file, String producer) {
+    final handle = File(pathOf(file));
+    final stat = handle.statSync();
+    final bytes = handle.readAsBytesSync();
+    final captured = StagedFile(
+      producer: producer,
+      size: bytes.length,
+      sha256: Sha256.hex(bytes),
+    );
+    _noteDigested(handle.path, stat, captured.sha256);
+    return captured;
+  }
+
+  /// What is wrong with [file], which the receipt records as [recorded];
+  /// null when it is intact.
+  String? _problem(String file, StagedFile recorded) {
+    final handle = File(pathOf(file));
+    // Within one run rk trusts its own writes: a file this process hashed
+    // to the recorded digest, and that has not moved since, is not read
+    // again. A later run reads and hashes it once.
+    if (_stillStands(handle.path, recorded.sha256)) return null;
+    if (!handle.existsSync()) return 'receipt artifact is missing';
+    try {
+      final stat = handle.statSync();
+      final bytes = handle.readAsBytesSync();
+      final sha256 = Sha256.hex(bytes);
+      final differences = [
+        if (bytes.length != recorded.size) 'size',
+        if (sha256 != recorded.sha256) 'sha256',
+      ];
+      if (differences.isEmpty) {
+        _noteDigested(handle.path, stat, sha256);
+        return null;
+      }
+      return 'artifact ${differences.join(', ')} differs from the receipt';
+    } on FileSystemException catch (error) {
+      return 'artifact could not be read: ${error.message}';
+    }
+  }
 
   /// One file's cheap description: what a rewrite cannot leave untouched.
+  /// Change time is the kernel's to set, so a rewrite shows.
   static String _describe(FileStat stat) => [
     stat.type,
     stat.size,
@@ -126,190 +325,147 @@ class StageDirectory {
   /// absolute path, shared by every view of every stage.
   static final Map<String, String> _digested = {};
 
-  /// Records that [relativePath] was read and digested — provided it held
-  /// still while it was being read. A file rewritten during the read is not
-  /// remembered, so the next check reads it again.
-  void noteDigested(
-    String relativePath,
-    FileStat beforeReading,
-    String sha256,
-  ) {
-    final resolved = resolve(relativePath);
-    final settled = _describe(File(resolved).statSync());
+  /// Remembers that [path] digested to [sha256] — provided it held still
+  /// while it was read. A file rewritten during the read is not remembered,
+  /// so the next check reads it again.
+  static void _noteDigested(String path, FileStat beforeReading, String sha) {
+    final settled = _describe(File(path).statSync());
     if (settled != _describe(beforeReading)) return;
-    _digested[resolved] = '$settled\u0000$sha256';
+    _digested[path] = '$settled\u0000$sha';
   }
 
-  /// Whether [relativePath] is still the file this process digested to
-  /// [sha256]: its size, mode and both timestamps are unchanged. Change time
-  /// is the kernel's to set, so a rewrite shows; within one run that is
-  /// enough to trust rk's own writes.
-  bool digestStillStands(String relativePath, String sha256) {
-    final resolved = resolve(relativePath);
-    final when = _digested[resolved];
-    if (when == null) return false;
-    // A path that has become a link is not the file that was digested.
-    if (FileSystemEntity.typeSync(resolved, followLinks: false) !=
-        FileSystemEntityType.file) {
+  static bool _stillStands(String path, String sha256) {
+    final when = _digested[path];
+    return when != null &&
+        when == '${_describe(File(path).statSync())}\u0000$sha256';
+  }
+
+  static const _stages = '.rk/work/stages';
+  static const _receiptFile = 'stage.json';
+}
+
+/// A repository's stages: one per unit at this commit, and the lock and
+/// listing `rk clean` works from.
+final class Stages {
+  Stages(String root) : root = Directory(root).absolute.path;
+
+  final String root;
+
+  String get path => '$root/${Stage._stages}';
+
+  final Map<String, Stage> _stages = {};
+
+  /// [unit]'s stage at [git]'s commit, the same one each time it is asked.
+  Stage of(
+    ResolvedUnit unit,
+    GitState git,
+    SourceTree source, {
+    DartSdk Function()? sdk,
+  }) => _stages.putIfAbsent(unit.name, () {
+    final plan = stagePlanFor(unit, git);
+    return Stage(
+      root: root,
+      id: StageId.of(commit: git.head, tree: git.headTree, plan: plan),
+      plan: plan,
+      source: source,
+      sdk: sdk,
+    );
+  });
+
+  /// Keeps `rk clean` out while a release may write staged bytes.
+  StagesLock lock() {
+    final work = '$root/.rk/work';
+    final RandomAccessFile handle;
+    try {
+      Directory(work).createSync(recursive: true);
+      handle = File('$work/stages.lock').openSync(mode: FileMode.append);
+    } on FileSystemException catch (error) {
+      throw StageStoreUnsafe(error.message, error.path ?? work);
+    }
+    try {
+      handle.lockSync(FileLock.exclusive);
+      return StagesLock._(handle);
+    } on FileSystemException {
+      handle.closeSync();
+      throw StageStoreBusy('$work/stages.lock');
+    }
+  }
+
+  /// What is in the stages directory, broken or not, without following a
+  /// link: everything an authorized clean may remove.
+  List<StageEntry> list() {
+    final directory = Directory(path);
+    if (!directory.existsSync()) return const [];
+    return [
+      for (final entity in directory.listSync(followLinks: false))
+        StageEntry(
+          name: entity.path.substring(path.length + 1),
+          type: FileSystemEntity.typeSync(entity.path, followLinks: false),
+        ),
+    ]..sort((left, right) => left.name.compareTo(right.name));
+  }
+
+  /// Removes [entry], when it is still what was listed: the set a person
+  /// authorized may shrink, never grow.
+  bool remove(StageEntry entry) {
+    final target = '$path/${entry.name}';
+    if (FileSystemEntity.typeSync(target, followLinks: false) != entry.type) {
       return false;
     }
-    return when == '${_describe(File(resolved).statSync())}\u0000$sha256';
+    _delete(target);
+    return true;
   }
 
-  /// Creates only the fixed stage path, refusing any symlink or non-directory
-  /// component below the repository root.
-  void ensureExists() {
-    final rootType = FileSystemEntity.typeSync(
-      repositoryRoot,
-      followLinks: false,
-    );
-    if (rootType != FileSystemEntityType.directory) {
-      throw FileSystemException(
-        'repository root is not a directory',
-        repositoryRoot,
-      );
+  /// Deletes [path] whole. A link is unlinked, never followed: clean deletes
+  /// recursively, and a link could point anywhere.
+  static void _delete(String path) {
+    if (FileSystemEntity.typeSync(path, followLinks: false) ==
+        FileSystemEntityType.notFound) {
+      return;
     }
-    var current = repositoryRoot;
-    for (final component in ['.rk', 'work', 'stages', identity.id]) {
-      current = _join(current, [component]);
-      var type = FileSystemEntity.typeSync(current, followLinks: false);
-      if (type == FileSystemEntityType.notFound) {
-        Directory(current).createSync();
-        type = FileSystemEntity.typeSync(current, followLinks: false);
-      }
-      if (type != FileSystemEntityType.directory) {
-        throw FileSystemException(
-          'stage path contains a symlink or non-directory',
-          current,
-        );
-      }
-    }
+    Directory(path).deleteSync(recursive: true);
   }
+}
 
-  /// Returns the first unsafe fixed path component, without creating or
-  /// changing anything. A missing component is not unsafe; it means no stage.
-  String? unsafeFixedPath() {
-    var current = repositoryRoot;
-    for (final component in ['.rk', 'work', 'stages', identity.id]) {
-      current = _join(current, [component]);
-      final type = FileSystemEntity.typeSync(current, followLinks: false);
-      if (type == FileSystemEntityType.notFound) return null;
-      if (type != FileSystemEntityType.directory) return current;
-    }
-    return null;
-  }
+final class StageEntry {
+  const StageEntry({required this.name, required this.type});
 
-  /// Atomically places bytes in the stage before a receipt can name them.
-  void writeBytesAtomically(String relativePath, List<int> bytes) {
-    final parts = StagePath.segments(relativePath);
-    if (relativePath == 'stage.json') {
-      throw ArgumentError('stage.json is written only by StageReceiptStore');
-    }
-    ensureExists();
-    _ensureArtifactParents(parts.take(parts.length - 1));
-    final destination = resolve(relativePath);
-    final existing = FileSystemEntity.typeSync(destination, followLinks: false);
-    if (existing != FileSystemEntityType.notFound &&
-        existing != FileSystemEntityType.file) {
-      throw FileSystemException(
-        'artifact destination is a symlink or non-file',
-        destination,
-      );
-    }
-    AtomicFile.write(destination, bytes);
-  }
+  final String name;
+  final FileSystemEntityType type;
+}
 
-  /// Used by the receipt store after it has enforced the reserved filename.
-  void writeReceiptBytes(List<int> bytes) {
-    ensureExists();
-    final destination = resolve('stage.json');
-    final existing = FileSystemEntity.typeSync(destination, followLinks: false);
-    if (existing != FileSystemEntityType.notFound &&
-        existing != FileSystemEntityType.file) {
-      throw FileSystemException(
-        'stage receipt destination is a symlink or non-file',
-        destination,
-      );
-    }
-    AtomicFile.write(destination, bytes);
-  }
+final class StagesLock {
+  StagesLock._(this._handle);
 
-  void _ensureArtifactParents(Iterable<String> components) {
-    var current = path;
-    for (final component in components) {
-      current = _join(current, [component]);
-      var type = FileSystemEntity.typeSync(current, followLinks: false);
-      if (type == FileSystemEntityType.notFound) {
-        Directory(current).createSync();
-        type = FileSystemEntity.typeSync(current, followLinks: false);
-      }
-      if (type != FileSystemEntityType.directory) {
-        throw FileSystemException(
-          'artifact path contains a symlink or non-directory',
-          current,
-        );
-      }
+  final RandomAccessFile _handle;
+  var _closed = false;
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    try {
+      _handle.unlockSync();
+    } finally {
+      _handle.closeSync();
     }
   }
 }
 
-/// Repository-independent validation for paths recorded in a receipt.
-class StagePath {
-  const StagePath._();
+final class StageStoreBusy implements Exception {
+  StageStoreBusy(this.path);
 
-  static List<String> segments(String path) {
-    final parts = path.split('/');
-    if (path.isEmpty ||
-        path.startsWith('/') ||
-        path.startsWith('\\') ||
-        path.contains('\\') ||
-        path.contains('\u0000') ||
-        RegExp(r'^[A-Za-z]:').hasMatch(path) ||
-        parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
-      throw FormatException('path escapes the stage: $path');
-    }
-    return List<String>.unmodifiable(parts);
-  }
+  final String path;
 
-  static String require(String path) {
-    segments(path);
-    return path;
-  }
+  @override
+  String toString() => 'another rk command is using staged work at $path';
 }
 
-String _join(String root, Iterable<String> parts) =>
-    [root, ...parts].join(Platform.pathSeparator);
+final class StageStoreUnsafe implements Exception {
+  StageStoreUnsafe(this.message, this.path);
 
-Map<String, Object?> _strictMap(Object? value, Set<String> keys, String label) {
-  if (value is! Map) throw FormatException('$label is not an object');
-  final map = <String, Object?>{};
-  for (final entry in value.entries) {
-    if (entry.key is! String) {
-      throw FormatException('$label has a non-string key');
-    }
-    map[entry.key as String] = entry.value;
-  }
-  if (map.keys.toSet().difference(keys).isNotEmpty ||
-      keys.difference(map.keys.toSet()).isNotEmpty) {
-    throw FormatException('$label has unknown or missing fields');
-  }
-  return map;
-}
+  final String message;
+  final String path;
 
-String _string(Map<String, Object?> map, String key) {
-  final value = map[key];
-  if (value is! String) throw FormatException('$key is not a string');
-  return value;
-}
-
-void _requireObjectId(String label, String value) {
-  if (!RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$').hasMatch(value)) {
-    throw ArgumentError('$label must be a full lowercase Git object ID');
-  }
-}
-
-void _requireSha256(String label, String value) {
-  if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
-    throw ArgumentError('$label must be a lowercase SHA-256 digest');
-  }
+  @override
+  String toString() => '$message: $path';
 }

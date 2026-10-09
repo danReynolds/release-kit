@@ -7,7 +7,6 @@ import 'package:yaml/yaml.dart' as yaml;
 import 'diagnostic.dart';
 import 'file_mode.dart';
 import 'source_tree.dart';
-import 'stage.dart';
 
 /// The source a stage is built from, read once per run and held in memory.
 ///
@@ -84,9 +83,6 @@ final class StageSourceSnapshot implements SourceTree {
       for (final path in all)
         if (entries[path] == null || entries[path]!.isRegularFile) path,
     ];
-    for (final path in [...paths, ...links]) {
-      StagePath.require(path);
-    }
     // A non-Git snapshot must own its complete inventory and bytes before the
     // first asynchronous boundary, just as ordinary source production does.
     final batched = git == null ? null : await git.read([...paths, ...links]);
@@ -237,9 +233,7 @@ final class StageSourceSnapshot implements SourceTree {
     final modes = <String, String>{};
     for (final MapEntry(key: path, value: bytes) in _files.entries) {
       if (!selected.contains(path)) continue;
-      final file = File(
-        [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
-      );
+      final file = File('$root/$path');
       file.parent.createSync(recursive: true);
       file.writeAsBytesSync(bytes);
       modes[file.path] = _executable.contains(path) ? '0755' : '0644';
@@ -247,9 +241,7 @@ final class StageSourceSnapshot implements SourceTree {
     setFileModes(modes);
     for (final MapEntry(key: path, value: target) in _links.entries) {
       if (!selected.contains(path)) continue;
-      final link = Link(
-        [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
-      );
+      final link = Link('$root/$path');
       if (link.existsSync()) continue;
       link.createSync(target, recursive: true);
     }
@@ -413,6 +405,8 @@ String _path(String path) {
       .split('/')
       .where((part) => part.isNotEmpty && part != '.')
       .join('/');
-  if (value.isNotEmpty) StagePath.require(value);
+  if (value.isNotEmpty && relativeSegments(value) == null) {
+    throw FormatException('path escapes the repository: $value');
+  }
   return value;
 }

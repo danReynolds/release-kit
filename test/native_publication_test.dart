@@ -7,7 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/receipt.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
@@ -332,14 +332,17 @@ Future<Map<String, _Saved>> _stage(NativePublicationFixture fixture) async {
                 )['evidence']
             as Map;
     final directory = '${fixture.repository.path}/${evidence['stage path']}';
-    final receipt = StageReceipt.parse(
+    final receipt = Receipt.parse(
       File('$directory/stage.json').readAsStringSync(),
     );
-    final archive = receipt.artifacts.singleWhere(
-      (artifact) => artifact.type == 'pub-archive',
-    );
     final name = 'rk_qualification_${unit['name']}';
-    final file = File('$directory/${archive.path}');
+    // The one package each unit stages, by the path its archive is staged
+    // at.
+    final path = receipt.files.keys.singleWhere(
+      (path) => path.startsWith('producers/$name/pub/'),
+    );
+    final archive = receipt.files[path]!;
+    final file = File('$directory/$path');
     expect(Sha256.hex(file.readAsBytesSync()), archive.sha256);
     saved[name] = (
       file: file,

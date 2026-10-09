@@ -11,12 +11,13 @@ import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/unit_release.dart';
-import 'package:rk/src/engine/workspace.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
 import 'support/memory_source_tree.dart';
+import 'support/scratch_stage.dart';
 
 final _certificateSha1 = 'a' * 40;
 
@@ -28,18 +29,18 @@ final _identity = SigningIdentity(
 );
 
 /// The chain, one step at a time — each step gets a FRESH chain instance
-/// over the same workspace, which is the no-state proof: everything a later
+/// over the same stage, which is the no-state proof: everything a later
 /// step needs must have been written by name, because the object that knew
 /// it in memory is gone.
 void main() {
   late Directory scratch;
-  late Workspace workspace;
+  late Stage stage;
   late StringBuffer buffer;
   late Output output;
 
   setUp(() {
     scratch = Directory.systemTemp.createTempSync('rk-steps-');
-    workspace = Workspace('${scratch.path}/work');
+    stage = scratchStage(scratch.path);
     buffer = StringBuffer();
     output = Output(sink: buffer.write, isTerminal: false, useColor: false);
   });
@@ -91,7 +92,7 @@ executables:
     tools: tools,
     compilerExecutable: fixtureDartSdk(scratch),
     output: output,
-    workspace: workspace,
+    stage: stage,
     repositoryRoot: scratch.path,
     capabilities: HostCapabilities(
       hostPlatform: 'macos-arm64',
@@ -155,16 +156,14 @@ executables:
       ),
     );
     expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-    expect(built.outputs.map((output) => (output.path, output.type)), [
-      for (final entry in ReleaseAssets.binaryOutputs(
-        project,
-        'macos-arm64',
-      ).entries)
-        (entry.key, entry.value),
-    ]);
+    for (final file in ReleaseAssets.binaryOutputs(project, 'macos-arm64')) {
+      expect(File(stage.pathOf(file)).existsSync(), isTrue, reason: file);
+    }
     expect(built.evidence['smoke'], {'status': 'passed'});
     expect(
-      workspace.exists(ReleaseAssets.binaryPath(project, 'macos-arm64')),
+      File(
+        stage.pathOf(ReleaseAssets.binaryPath(project, 'macos-arm64')),
+      ).existsSync(),
       isTrue,
       reason: 'the build wrote the binary where the next step will look',
     );
@@ -190,7 +189,9 @@ executables:
       reason: notarized.problem ?? buffer.toString(),
     );
     expect(
-      notarized.outputs,
+      Directory(stage.path)
+          .listSync(recursive: true)
+          .where((entity) => entity.path.endsWith('.zip')),
       isEmpty,
       reason: 'the zip is Apple\'s input, made outside the stage',
     );
@@ -203,16 +204,15 @@ executables:
       tools,
     ).archiveStep(step(StepKind.archive), project);
     expect(archived.ok, isTrue, reason: archived.problem);
-    expect(archived.outputs.map((output) => (output.path, output.type)), [
-      (ReleaseAssets.archivePath(project, 'macos-arm64'), 'archive'),
-    ]);
     expect(
       tools.calls.where((call) => call.startsWith('codesign --force')),
       hasLength(3),
       reason: 'each code file is signed once',
     );
     expect(
-      workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
+      File(
+        stage.pathOf(ReleaseAssets.archivePath(project, 'macos-arm64')),
+      ).existsSync(),
       isTrue,
     );
   });
@@ -376,7 +376,7 @@ executables:
         ),
       );
       expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-      workspace.write(
+      stage.write(
         '${ReleaseAssets.binaryRoot(project, 'macos-arm64')}/lib/tool/'
         'dartaotruntime.cstemp',
         utf8.encode('half-written signature'),
@@ -410,11 +410,8 @@ executables:
         return null;
       },
     );
-    for (final file in ReleaseAssets.binaryOutputs(
-      project,
-      'macos-arm64',
-    ).keys) {
-      workspace.write(file, utf8.encode('BINARY'));
+    for (final file in ReleaseAssets.binaryOutputs(project, 'macos-arm64')) {
+      stage.write(file, utf8.encode('BINARY'));
     }
 
     final notarized = await chain(
@@ -439,11 +436,8 @@ executables:
         return null;
       },
     );
-    for (final file in ReleaseAssets.binaryOutputs(
-      project,
-      'macos-arm64',
-    ).keys) {
-      workspace.write(file, utf8.encode('BINARY'));
+    for (final file in ReleaseAssets.binaryOutputs(project, 'macos-arm64')) {
+      stage.write(file, utf8.encode('BINARY'));
     }
 
     final notarized = await chain(

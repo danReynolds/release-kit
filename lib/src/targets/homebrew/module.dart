@@ -5,6 +5,7 @@ import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
+import '../../engine/stage.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
 import '../../output/progress.dart';
@@ -33,8 +34,9 @@ final class HomebrewTargetModule extends TargetModule {
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    Target target,
-  ) async {
+    Target target, {
+    Stage? stage,
+  }) async {
     final tools = context.tools;
     if (tools == null) {
       return const Inspection.unknown('no tools to read the tap with');
@@ -46,31 +48,19 @@ final class HomebrewTargetModule extends TargetModule {
     final tap = unit.tapFor(repository);
     final project = target.project!;
     final executable = project.executable!;
-    final stage = context.reusableStage(unit);
-    final name = ReleaseAssets.formulaName(executable);
-    final stagedPath = ReleaseAssets.formulaPath(project);
-    if (stage != null) {
-      final expected = File(stage.directory.resolve(stagedPath));
-      if (!expected.existsSync()) {
-        return Inspection.conflict('the completed stage has no $name');
-      }
-      final destination = HomebrewTarget(
-        tools: tools,
-        tap: tap,
-        workingDirectory: context.git.root,
-      );
-      return destination.inspect(
-        formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
-        intendedVersion: project.version,
-        expectedBytes: expected.readAsBytesSync(),
-      );
-    }
-
     final destination = HomebrewTarget(
       tools: tools,
       tap: tap,
       workingDirectory: context.git.root,
     );
+    if (stage != null) {
+      return destination.inspect(
+        formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
+        intendedVersion: project.version,
+        expectedBytes: stage.readBytes(target.files.single.path)!,
+      );
+    }
+
     final publicFormula = await destination.inspect(
       formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
@@ -225,20 +215,11 @@ final class HomebrewTargetModule extends TargetModule {
     }
     final project = target.project!;
     final executable = project.executable!;
-    // A recovered payload is authenticated public input. A non-reusable stage
-    // may still contain stale files, so it must never outrank that authority.
+    // A recovered payload is authenticated public input; without one, the
+    // stage was checked just before this act.
     final formula =
         authority.replacement ??
-        context.workspace.readBytes(ReleaseAssets.formulaPath(project));
-    if (formula == null) {
-      return TargetActOutcome(
-        ok: false,
-        problem:
-            'the workspace has no '
-            '${ReleaseAssets.formulaName(executable)}; the staging phase '
-            'renders it — re-running runs it',
-      );
-    }
+        context.stage!.readBytes(target.files.single.path)!;
     final Directory scratch;
     try {
       scratch = Directory.systemTemp.createTempSync('rk-tap-');

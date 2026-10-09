@@ -13,13 +13,11 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/version.dart';
-import 'package:rk/src/engine/stage.dart';
-import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
@@ -305,37 +303,24 @@ Future<Ran> release({
   addTearDown(() {
     if (stageRoot.existsSync()) stageRoot.deleteSync(recursive: true);
   });
-  final stageCache = <String, ReleaseStage>{};
-  ReleaseStage stageFor(ResolvedUnit unit) =>
-      stageCache.putIfAbsent(unit.name, () {
-        final plan = <String, Object?>{
-          'unit': unit.name,
-          'version': unit.version.canonical,
-          'fixture_head': effectiveGit.head,
-        };
-        final identity = StageIdentity.forPlan(
-          headCommit: '1111111111111111111111111111111111111111',
-          headTree: '2222222222222222222222222222222222222222',
-          resolvedPlan: plan,
-        );
-        final directory = StageDirectory(
-          repositoryRoot: stageRoot.path,
-          identity: identity,
-        );
-        return ReleaseStage(
-          unit: unit,
-          source: tree,
-          directory: directory,
-          repository: effectiveGit.originUrl,
-          release: UnitRelease.derive(
-            unit,
-            resolution,
-            repository: effectiveGit.originUrl,
-            problems: Diagnostics(),
-          ),
-          resolvedPlan: plan,
-        );
-      });
+  final stageCache = <String, Stage>{};
+  Stage stageFor(ResolvedUnit unit) => stageCache.putIfAbsent(unit.name, () {
+    final plan = <String, Object?>{
+      'unit': unit.name,
+      'version': unit.version.canonical,
+      'fixture_head': effectiveGit.head,
+    };
+    return Stage(
+      root: stageRoot.path,
+      id: StageId.of(
+        commit: '1111111111111111111111111111111111111111',
+        tree: '2222222222222222222222222222222222222222',
+        plan: plan,
+      ),
+      plan: plan,
+      source: tree,
+    );
+  });
 
   // The answers go through FakeRegistry's memo, as the real client's do, so
   // a release sees its own upload only once it forgets what it read before.
@@ -421,7 +406,7 @@ Future<Ran> release({
               .firstOrNull;
           final manifest = unit == null
               ? null
-              : File(stageFor(unit).directory.resolve(ReleaseAssets.manifest));
+              : File(stageFor(unit).pathOf(ReleaseAssets.manifest));
           final digest = manifest != null && manifest.existsSync()
               ? Sha256.hex(manifest.readAsBytesSync())
               : 'b' * 64;
@@ -501,7 +486,6 @@ Future<Ran> release({
       pubDev: PubDevTarget(registry: effectiveRegistry),
       tools: recorder,
       repository: 'example/keybay',
-      stageFor: stageFor,
     ),
     tools: recorder,
     // Yields to the event queue rather than completing in a microtask, so a

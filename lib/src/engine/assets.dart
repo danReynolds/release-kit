@@ -40,13 +40,11 @@ abstract final class ReleaseAssets {
   static String binaryRoot(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/$platform';
 
-  static Map<String, String> binaryOutputs(
-    ResolvedProject project,
-    String platform,
-  ) => {
-    for (final file in binaryArtifact(project, platform).files)
-      '${binaryRoot(project, platform)}/${file.path}': file.type,
-  };
+  static List<String> binaryOutputs(ResolvedProject project, String platform) =>
+      [
+        for (final file in binaryArtifact(project, platform).files)
+          '${binaryRoot(project, platform)}/${file.path}',
+      ];
 
   static String archivePath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/archives/'
@@ -62,11 +60,10 @@ abstract final class ReleaseAssets {
   static String assetPath(ResolvedProject project, String declared) =>
       '${producerRoot(project)}/assets/${assetName(declared)}';
 
-  /// Every staged path a project's own build leaves, with its artifact type.
-  static Map<String, String> assetOutputs(ResolvedProject project) => {
-    for (final declared in project.assets)
-      assetPath(project, declared): 'asset',
-  };
+  /// Every staged path a project's own build leaves.
+  static List<String> assetOutputs(ResolvedProject project) => [
+    for (final declared in project.assets) assetPath(project, declared),
+  ];
 
   /// Private native package bytes uploaded to pub.dev.
   ///

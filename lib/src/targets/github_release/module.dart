@@ -2,8 +2,8 @@ import 'dart:io';
 
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
-import '../../engine/release_bundle.dart';
 import '../../engine/resolve.dart';
+import '../../engine/stage.dart';
 import '../../engine/tools.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
@@ -35,8 +35,9 @@ final class GithubReleaseTargetModule extends TargetModule {
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    Target target,
-  ) async {
+    Target target, {
+    Stage? stage,
+  }) async {
     final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
     final tools = context.tools;
     if (tools == null) {
@@ -52,7 +53,6 @@ final class GithubReleaseTargetModule extends TargetModule {
       repository: repository,
       workingDirectory: context.git.root,
     );
-    final stage = context.reusableStage(unit);
     if (stage == null) {
       return destination.inspect(
         tag,
@@ -60,20 +60,15 @@ final class GithubReleaseTargetModule extends TargetModule {
         prerelease: unit.version.isPrerelease,
       );
     }
-
-    final resolvedBundle = ReleaseBundle.resolve(stage, unit);
-    if (resolvedBundle case ReleaseBundleInvalid(
-      :final message,
-      :final evidence,
-    )) {
-      return Inspection.conflict(message, evidence: evidence);
-    }
-    final bundle = (resolvedBundle as ReleaseBundleAvailable).bundle;
+    final staged = stage.receipt!.files;
     return destination.inspectExact(
       GithubReleaseExpectation(
         tag: tag,
         prerelease: unit.version.isPrerelease,
-        assetSha256: bundle.sha256ByPublicName,
+        assetSha256: {
+          for (final file in target.files)
+            if (file.name case final name?) name: staged[file.path]!.sha256,
+        },
       ),
     );
   }
@@ -118,43 +113,21 @@ final class GithubReleaseTargetModule extends TargetModule {
         ),
       );
     }
-    final resolvedBundle = ReleaseBundle.resolve(context.stage, unit);
-    if (resolvedBundle case ReleaseBundleInvalid(
-      :final message,
-      :final producer,
-    )) {
-      return TargetActOutcome(
-        ok: false,
-        diagnostic: Diagnostic(
-          code: 'RK-WORK-001',
-          message: message,
-          remedy: '${producer ?? 'the stage producer'} — re-running runs it',
-        ),
-      );
-    }
-    final bundle = (resolvedBundle as ReleaseBundleAvailable).bundle;
+    // The stage was checked just before this act: it holds every file the
+    // release publishes, as its receipt records them.
+    final stage = context.stage!;
+    final staged = stage.receipt!.files;
     final assets = [
-      for (final asset in bundle.assets)
-        GithubReleaseAssetUpload(
-          publicName: asset.publicName,
-          stagedPath: context.stage.directory.resolve(asset.artifact.path),
-          size: asset.artifact.size,
-          sha256: asset.artifact.sha256,
-        ),
+      for (final file in target.files)
+        if (file.name case final name?)
+          GithubReleaseAssetUpload(
+            publicName: name,
+            stagedPath: stage.pathOf(file.path),
+            size: staged[file.path]!.size,
+            sha256: staged[file.path]!.sha256,
+          ),
     ];
-    final notesPath = context.workspace.pathOf('release-notes.md');
-    if (!File(notesPath).existsSync()) {
-      return const TargetActOutcome(
-        ok: false,
-        diagnostic: Diagnostic(
-          code: 'RK-CHG-003',
-          message: 'the release body was not prepared',
-          remedy:
-              'this is a bug in rk: the preflight prepares it whenever '
-              'a github-release step remains',
-        ),
-      );
-    }
+    final notesPath = stage.pathOf(target.preparedBy!.outputs.single);
 
     final release = GithubRelease(
       tools: context.tools,

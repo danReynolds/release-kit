@@ -45,7 +45,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-CHG-001` | the changelog has no entry for this version, or there is no changelog | `lib/src/engine/changelog.dart` |
-| `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release/module.dart`, `lib/src/targets/github_release/release_notes_stage.dart` |
+| `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release/release_notes_stage.dart` |
 | `RK-CHG-004` | the changelog entry for ${project.version} is empty | `lib/src/targets/github_release/release_notes_stage.dart` |
 
 RK-CHG-002 (no entry for the version) is now RK-CHG-001, and is not reused.
@@ -104,7 +104,7 @@ stages the package) is retired and not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-GIT-001` | there is no commit to release: uncommitted paths, or no commit at all | `lib/src/engine/git.dart` |
-| `RK-GIT-003` | origin cannot fetch this commit: no remote, no upstream, or HEAD is ahead of it | `lib/src/engine/git.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart`, `lib/src/targets/homebrew/module.dart` |
+| `RK-GIT-003` | origin cannot fetch this commit: no remote, no upstream, or HEAD is ahead of it | `lib/src/engine/git.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart` |
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart` |
 | `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
@@ -253,9 +253,9 @@ RK-SRC-004 (no commit to release) is now RK-GIT-001, and is not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-STAGE-001` | the release stage could not be located or replaced safely | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart` |
-| `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-STAGE-001` | the old release stage could not be replaced safely | `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/unit_snapshot.dart` |
+| `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release_stage_coordinator.dart`, `lib/src/engine/stage_source.dart` |
 | `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart` |
 | `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart`, `lib/src/commands/clean.dart` |
 
@@ -277,7 +277,7 @@ RK-SRC-004 (no commit to release) is now RK-GIT-001, and is not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/binary_chain.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart` |
+| `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/binary_chain.dart` |
 
 ## Executable installations
 

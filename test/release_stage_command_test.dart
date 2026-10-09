@@ -12,11 +12,12 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/receipt.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/transforms/archive.dart';
@@ -102,16 +103,15 @@ void main() {
   tearDown(() => harness.close());
 
   test('an interrupted stage resumes past files it does not own', () async {
-    final stage = harness.stage;
-    stage.writeProgress(const []);
-    final plan = stage.inspect().receipt!.plan;
-    final extra = File(stage.directory.resolve('unowned'))
+    harness.stage.begin();
+    final plan = harness.checked.receipt!.plan;
+    final extra = File(harness.stage.pathOf('unowned'))
       ..writeAsStringSync('keep');
     final run = await harness.run(stageOnly: true, confirm: null);
     expect(run.code, ExitCodes.ok, reason: run.text);
     expect(run.publicMutations, isEmpty);
-    expect(stage.inspect().reusable, isTrue);
-    expect(stage.inspect().receipt!.plan, plan);
+    expect(harness.checked.reusable, isTrue);
+    expect(harness.checked.receipt!.plan, plan);
     expect(extra.readAsStringSync(), 'keep');
   });
 
@@ -225,7 +225,7 @@ void main() {
 
         // A later commit that leaves the unit alone, never staged, while the
         // forge cannot be read.
-        harness.stage.reset();
+        harness.resetStage();
         harness.git = harness.gitAt(
           head: _otherHead,
           tags: const ['v1.2.3'],
@@ -258,7 +258,7 @@ void main() {
       );
       expect(released.code, ExitCodes.ok, reason: released.text);
 
-      harness.stage.reset();
+      harness.resetStage();
       harness.git = harness.gitAt(
         head: _otherHead,
         tags: const ['v1.2.3'],
@@ -319,7 +319,7 @@ void main() {
         'RK-MONO-004',
       );
       expect(
-        harness.stage.inspect().reusable,
+        harness.checked.reusable,
         isTrue,
         reason: 'the conflict appeared after private work completed',
       );
@@ -348,6 +348,31 @@ void main() {
       );
     });
   }
+
+  test('without an origin, a unit that renders a formula refuses before '
+      'staging anything', () async {
+    // The formula names the GitHub release its archives are downloaded
+    // from, so it is never rendered without an origin: the snapshot
+    // refuses first, before any lane starts.
+    harness.git = harness.gitAt(originUrl: null);
+
+    final run = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('the refusal needs no authorization'),
+    );
+
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(run.text, contains('no origin remote to ask'));
+    expect(
+      run.keys.where((key) => key.startsWith('dart compile exe')),
+      isEmpty,
+    );
+    expect(
+      run.keys,
+      isNot(contains('dart pub publish --to-archive <archive>')),
+    );
+    expect(harness.receipt, isNull);
+  });
 
   test('uncommitted changes refuse a unit whatever it publishes', () async {
     final pub = _Harness(pubOnly: true);
@@ -403,7 +428,7 @@ void main() {
         expect(run.text, isNot(contains('Written to')));
         expect(run.text, isNot(contains('Ready to publish')));
         final archiveDirectory =
-            '${local.stage.directory.repositoryRelativePath}/'
+            '${local.stage.relativePath}/'
             'producers/tool/archives';
         expect(run.text, contains('Archives'));
         expect(run.text, contains(archiveDirectory));
@@ -414,17 +439,17 @@ void main() {
           isTrue,
           reason: 'the displayed location leads to the completed archive',
         );
-        expect(run.text, isNot(contains(local.stage.directory.path)));
+        expect(run.text, isNot(contains(local.stage.path)));
         final completed =
             ((run.report['units'] as List).single['steps'] as List).singleWhere(
               (step) => step['kind'] == 'completeStage',
             );
         expect(completed['evidence'], {
-          'stage id': local.stage.directory.identity.id,
-          'stage path': local.stage.directory.repositoryRelativePath,
+          'stage id': local.stage.id.id,
+          'stage path': local.stage.relativePath,
         });
         expect(run.report['next'], isEmpty);
-        expect(local.stage.inspect().reusable, isTrue);
+        expect(local.checked.reusable, isTrue);
       }
     },
   );
@@ -449,22 +474,21 @@ void main() {
     final ran = await local.run(stageOnly: true, confirm: null);
 
     expect(ran.code, ExitCodes.ok, reason: ran.text);
-    expect(local.stage.inspect().reusable, isTrue);
-    final receipt = StageReceiptStore(local.stage.directory).read()!;
-    // The record is canonical however the lanes interleaved: producer
-    // steps appear in exact contract order.
+    expect(local.checked.reusable, isTrue);
+    final receipt = local.receipt!;
+    // The record is canonical however the lanes interleaved: its keys are
+    // written sorted.
     expect(
-      receipt.steps
-          .map((step) => step.name)
+      receipt.producers.keys
           .where(
             (name) => name.startsWith('build:') || name.startsWith('archive:'),
           )
           .toList(),
       [
-        'build:tool:linux-arm64',
         'archive:tool:linux-arm64',
-        'build:tool:linux-x64',
         'archive:tool:linux-x64',
+        'build:tool:linux-arm64',
+        'build:tool:linux-x64',
       ],
     );
   });
@@ -498,9 +522,8 @@ void main() {
         x64Started.complete();
         await (() async {
           while (true) {
-            final receipt = StageReceiptStore(local.stage.directory).read();
-            if (receipt?.steps.any(
-                  (step) => step.name == 'build:tool:linux-arm64',
+            if (local.receipt?.producers.containsKey(
+                  'build:tool:linux-arm64',
                 ) ==
                 true) {
               return;
@@ -516,11 +539,8 @@ void main() {
       expect(ran.code, ExitCodes.ok, reason: ran.text);
       expect(workingDirectories, hasLength(2));
       expect(x64ScratchSurvived, isTrue);
-      expect(
-        Directory('${local.stage.directory.path}.lanes').existsSync(),
-        isFalse,
-      );
-      expect(local.stage.inspect().reusable, isTrue);
+      expect(Directory('${local.stage.path}.lanes').existsSync(), isFalse);
+      expect(local.checked.reusable, isTrue);
     },
   );
 
@@ -554,11 +574,7 @@ void main() {
     final ran = await local.run(stageOnly: true, confirm: null);
 
     expect(ran.code, isNot(ExitCodes.ok));
-    final recorded =
-        StageReceiptStore(
-          local.stage.directory,
-        ).read()?.steps.map((step) => step.name) ??
-        const <String>[];
+    final recorded = local.receipt?.producers.keys ?? const <String>[];
     // The in-flight arm64 build finished and was recorded; nothing new
     // started after the failure.
     expect(recorded, contains('build:tool:linux-arm64'));
@@ -588,10 +604,10 @@ void main() {
       final resumed = await local.run(stageOnly: true, confirm: null);
 
       expect(resumed.code, ExitCodes.ok, reason: resumed.text);
-      expect(local.stage.inspect().reusable, isTrue);
-      final receipt = StageReceiptStore(local.stage.directory).read()!;
+      expect(local.checked.reusable, isTrue);
+      final receipt = local.receipt!;
       expect(
-        receipt.steps.map((step) => step.name),
+        receipt.producers.keys,
         containsAll([
           'build:tool:linux-arm64',
           'archive:tool:linux-arm64',
@@ -614,13 +630,10 @@ void main() {
     );
 
     expect(run.code, ExitCodes.ok, reason: run.text);
-    final inspected = harness.stage.inspect();
-    expect(inspected.reusable, isTrue, reason: inspected.issues.join('\n'));
+    final inspected = harness.checked;
+    expect(inspected.reusable, isTrue, reason: inspected.lines.join('\n'));
     expect(inspected.receipt!.complete, isTrue);
-    expect(
-      inspected.receipt!.steps.map((step) => step.name),
-      contains('pub-archive:tool'),
-    );
+    expect(inspected.receipt!.producers.keys, contains('pub-archive:tool'));
     expect(run.keys, contains('dart pub publish --to-archive <archive>'));
     final packaged = run.invocations.singleWhere(
       (call) => call.arguments.contains('--to-archive'),
@@ -630,7 +643,7 @@ void main() {
     );
     final temporaryArchive = packaged.arguments[3];
     expect(temporaryArchive, endsWith('/$archivePath'));
-    expect(temporaryArchive, isNot(startsWith(harness.stage.directory.path)));
+    expect(temporaryArchive, isNot(startsWith(harness.stage.path)));
     expect(
       Directory(
         temporaryArchive.substring(
@@ -641,20 +654,15 @@ void main() {
       isFalse,
       reason: 'the native archive output is private scratch until accepted',
     );
-    final recordedArchive = inspected.receipt!.artifacts.singleWhere(
-      (artifact) => artifact.path == archivePath,
-    );
-    expect(recordedArchive.type, 'pub-archive');
+    expect(inspected.receipt!.files[archivePath]!.producer, 'pub-archive:tool');
     expect(
-      File(
-        harness.stage.directory.resolve(recordedArchive.path),
-      ).readAsBytesSync(),
+      File(harness.stage.pathOf(archivePath)).readAsBytesSync(),
       _publishedPackage(),
       reason: 'the exact validated native bytes are promoted into the receipt',
     );
     expect(
       packaged.workingDirectory,
-      isNot(startsWith(harness.stage.directory.repositoryRoot)),
+      isNot(startsWith(harness.root.path)),
       reason:
           'Pub must not inherit the repository ignore rule that excludes '
           'the .rk stage containing its package',
@@ -685,24 +693,19 @@ void main() {
 
     final run = await native.runStage();
 
-    expect(native.stage.inspect().reusable, isTrue);
+    expect(native.checked.reusable, isTrue);
     expect(run.problemCodes, isEmpty);
     final packaged = run.invocations.singleWhere(
       (call) => call.arguments.contains('--to-archive'),
     );
-    expect(
-      packaged.workingDirectory,
-      isNot(startsWith(native.stage.directory.repositoryRoot)),
-    );
+    expect(packaged.workingDirectory, isNot(startsWith(native.root.path)));
     expect(Directory(packaged.workingDirectory!).existsSync(), isFalse);
   });
 
   test('normal release reuses the exact stage without producers or preflight '
       'and publishes its staged archive', () async {
     await harness.runStage();
-    final receipt = File(
-      harness.stage.directory.resolve('stage.json'),
-    ).readAsStringSync();
+    final receipt = File(harness.stage.pathOf('stage.json')).readAsStringSync();
 
     final released = await harness.run(
       stageOnly: false,
@@ -727,14 +730,14 @@ void main() {
     expect(
       publish.arguments,
       contains(
-        harness.stage.directory.workspace.pathOf(
+        harness.stage.pathOf(
           ReleaseAssets.pubArchivePath(harness.unit.projects.single),
         ),
       ),
     );
     expect(
       publish.workingDirectory,
-      isNot(startsWith(harness.stage.directory.repositoryRoot)),
+      isNot(startsWith(harness.root.path)),
       reason:
           'Pub uploads the staged archive as it is, from a directory of its '
           'own, never the mutable worktree',
@@ -748,7 +751,7 @@ void main() {
           'targets keep one coherent progress surface',
     );
     expect(
-      File(harness.stage.directory.resolve('stage.json')).readAsStringSync(),
+      File(harness.stage.pathOf('stage.json')).readAsStringSync(),
       receipt,
       reason: 'publishing a reusable stage is read-only with respect to it',
     );
@@ -863,7 +866,7 @@ void main() {
       );
       expect(authorizationPrompts, 1);
       expect(
-        harness.stage.inspect().reusable,
+        harness.checked.reusable,
         isTrue,
         reason: 'credentials are acquired only after the exact stage exists',
       );
@@ -880,9 +883,7 @@ void main() {
       endsWith('Ready to publish: rk release tool'),
     );
     expect(first.report['next'], ['rk release tool']);
-    final receipt = File(
-      harness.stage.directory.resolve('stage.json'),
-    ).readAsBytesSync();
+    final receipt = File(harness.stage.pathOf('stage.json')).readAsBytesSync();
 
     final second = await harness.runStage();
 
@@ -904,12 +905,12 @@ void main() {
     expect(second.report['next'], ['rk release tool']);
     for (final run in [first, second]) {
       expect(run.text, isNot(contains('Written to')));
-      expect(run.text, isNot(contains(harness.stage.directory.identity.id)));
+      expect(run.text, isNot(contains(harness.stage.id.id)));
       final completed = ((run.report['units'] as List).single['steps'] as List)
           .singleWhere((step) => step['kind'] == 'completeStage');
       expect(completed['evidence'], {
-        'stage id': harness.stage.directory.identity.id,
-        'stage path': harness.stage.directory.repositoryRelativePath,
+        'stage id': harness.stage.id.id,
+        'stage path': harness.stage.relativePath,
       });
     }
     expect(
@@ -927,7 +928,7 @@ void main() {
       isNot(contains('dart pub publish --to-archive <archive>')),
     );
     expect(
-      File(harness.stage.directory.resolve('stage.json')).readAsBytesSync(),
+      File(harness.stage.pathOf('stage.json')).readAsBytesSync(),
       receipt,
       reason:
           'archive, checksum, notes, formula, and manifest producers are '
@@ -942,7 +943,7 @@ void main() {
       await harness.runStage();
 
       final formula = File(
-        harness.stage.directory.resolve(
+        harness.stage.pathOf(
           ReleaseAssets.formulaPath(harness.unit.binaryProject!),
         ),
       ).readAsStringSync();
@@ -1162,7 +1163,7 @@ void main() {
       'publishHomebrew': 'already_published',
     });
 
-    harness.stage.reset();
+    harness.resetStage();
     final stateless = await harness.run(
       stageOnly: false,
       confirm: (_) async => fail('published coordinates need no authorization'),
@@ -1171,7 +1172,7 @@ void main() {
     expect(stateless.publicMutations, isEmpty);
     expect(stateless.text, contains('already released'));
     expect(
-      harness.stage.inspect().reusable,
+      harness.checked.reusable,
       isFalse,
       reason:
           'recognizing completed public coordinates must not rebuild '
@@ -1198,7 +1199,7 @@ void main() {
         containsAllInOrder(['tag', 'pub.dev']),
       );
 
-      harness.stage.reset();
+      harness.resetStage();
       harness.git = harness.gitAt(
         tags: const ['v1.2.3'],
         tagObjects: const {'v1.2.3': _tagObject},
@@ -1246,7 +1247,7 @@ void main() {
         isNot(contains('homebrew')),
       );
 
-      harness.stage.reset();
+      harness.resetStage();
       harness.git = harness.gitAt(
         tags: const ['v1.2.3'],
         tagObjects: const {'v1.2.3': _tagObject},
@@ -1387,7 +1388,7 @@ void main() {
         first.publicMutations.map((call) => call.publicKind),
         containsAllInOrder(['tag', 'pub.dev']),
       );
-      expect(harness.stage.inspect().reusable, isTrue);
+      expect(harness.checked.reusable, isTrue);
 
       harness.tools.failGithubDraftCreate = false;
       harness.git = harness.gitAt(
@@ -1469,9 +1470,9 @@ void main() {
     expect(harness.tools.githubReleaseExists, isTrue);
     expect(harness.tools.publicFormula, isNull);
 
-    harness.stage.reset();
+    harness.resetStage();
     final staleFormula = utf8.encode('stale local formula');
-    harness.stage.directory.workspace.write(
+    harness.stage.write(
       ReleaseAssets.formulaPath(harness.unit.projects.single),
       staleFormula,
     );
@@ -1510,7 +1511,7 @@ void main() {
       resumed.keys,
       isNot(contains('dart pub publish --to-archive <archive>')),
     );
-    expect(harness.stage.inspect().reusable, isFalse);
+    expect(harness.checked.reusable, isFalse);
   });
 
   test('status agrees that a lost stage can finish Homebrew from the public '
@@ -1522,7 +1523,7 @@ void main() {
       confirm: (_) async => 'yes',
     );
     expect(partial.code, ExitCodes.refused, reason: partial.text);
-    harness.stage.reset();
+    harness.resetStage();
     harness.git = harness.gitAt(
       tags: const ['v1.2.3'],
       tagObjects: const {'v1.2.3': _tagObject},
@@ -1546,9 +1547,8 @@ void main() {
         git: harness.git,
         tools: harness.tools,
         repository: harness.git.originUrl,
-        stageFor: harness.stages.call,
       ),
-      stageFor: harness.stages.call,
+      stageFor: harness.stageFor,
       output: output,
       capabilities: HostCapabilities(
         hostPlatform: 'linux-x64',
@@ -1660,7 +1660,7 @@ void main() {
       'stage mode can rebuild it', () async {
     await harness.runStage();
 
-    final archive = harness.stage.directory.resolve(
+    final archive = harness.stage.pathOf(
       'producers/tool/archives/'
       '${ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64')}',
     );
@@ -1692,7 +1692,7 @@ void main() {
       rebuilt.keys.where((key) => key.startsWith('dart compile exe')),
       hasLength(1),
     );
-    expect(harness.stage.inspect().reusable, isTrue);
+    expect(harness.checked.reusable, isTrue);
     expect(File(archive).readAsBytesSync(), original);
     expect(rebuilt.publicMutations, isEmpty);
   });
@@ -1803,7 +1803,7 @@ void main() {
 
       expect(prompts, 0, reason: 'authorization follows complete staging');
       expect(failed.publicMutations, isEmpty);
-      expect(harness.stage.inspect().reusable, isFalse);
+      expect(harness.checked.reusable, isFalse);
       expect(failed.text, contains('Release targets'));
 
       expect(
@@ -1819,7 +1819,7 @@ void main() {
 
       harness.tools.runFailure = null;
       final recovered = await harness.runStage();
-      expect(harness.stage.inspect().reusable, isTrue);
+      expect(harness.checked.reusable, isTrue);
       expect(recovered.publicMutations, isEmpty);
     });
   }
@@ -1852,7 +1852,7 @@ void main() {
         contains('gh auth status --active --hostname github.com'),
       );
       expect(failed.keys, contains('dart pub publish --to-archive <archive>'));
-      expect(harness.stage.inspect().reusable, isTrue);
+      expect(harness.checked.reusable, isTrue);
       expect(authorizationPrompts, 1);
       expect(failed.publicMutations, isEmpty);
       expect(failed.text, isNot(contains('expired credential details')));
@@ -1934,7 +1934,7 @@ void main() {
           onInvocation: (call) {
             if (planted || !call.key.startsWith('dart pub ')) return;
             Directory(
-              harness.stage.directory.resolve(failure.path),
+              harness.stage.pathOf(failure.path),
             ).createSync(recursive: true);
             planted = true;
           },
@@ -1946,7 +1946,7 @@ void main() {
         expect(failed.problemCodes, isNot(contains('RK-INT-001')));
         expect(prompts, 0, reason: 'authorization follows complete staging');
         expect(failed.publicMutations, isEmpty);
-        expect(harness.stage.inspect().reusable, isFalse);
+        expect(harness.checked.reusable, isFalse);
         expect(failed.text, contains('Release targets'));
 
         expect(
@@ -1954,9 +1954,9 @@ void main() {
           greaterThanOrEqualTo(4),
         );
 
-        Directory(harness.stage.directory.resolve(failure.path)).deleteSync();
+        Directory(harness.stage.pathOf(failure.path)).deleteSync();
         final recovered = await harness.runStage();
-        expect(harness.stage.inspect().reusable, isTrue);
+        expect(harness.checked.reusable, isTrue);
         expect(recovered.publicMutations, isEmpty);
       },
     );
@@ -1974,18 +1974,16 @@ void main() {
       'an interrupted ${boundary.step} prefix resumes from exact bytes',
       () async {
         await harness.runStage();
-        _interruptAfter(harness.stage, boundary.step);
-        final before = harness.stage.inspect();
+        _interruptAfter(harness, boundary.step);
+        final before = harness.checked;
         expect(
-          before.validProgress || before.planRecorded,
-          isTrue,
-          reason: before.issues.join('\n'),
+          before.state,
+          StageState.resumable,
+          reason: before.lines.join('\n'),
         );
         final retained = {
-          for (final artifact in before.receipt!.artifacts)
-            artifact.path: File(
-              harness.stage.directory.resolve(artifact.path),
-            ).readAsBytesSync(),
+          for (final path in before.receipt!.files.keys)
+            path: File(harness.stage.pathOf(path)).readAsBytesSync(),
         };
 
         final resumed = await harness.runStage();
@@ -2005,12 +2003,12 @@ void main() {
         }
         for (final entry in retained.entries) {
           expect(
-            File(harness.stage.directory.resolve(entry.key)).readAsBytesSync(),
+            File(harness.stage.pathOf(entry.key)).readAsBytesSync(),
             entry.value,
             reason: '${boundary.step} retained ${entry.key}',
           );
         }
-        expect(harness.stage.inspect().reusable, isTrue);
+        expect(harness.checked.reusable, isTrue);
         expect(resumed.publicMutations, isEmpty);
       },
     );
@@ -2020,13 +2018,13 @@ void main() {
     'an unreceipted declared output is discarded and prior lanes resume',
     () async {
       await harness.runStage();
-      _interruptAfter(harness.stage, 'build:tool:linux-x64');
+      _interruptAfter(harness, 'build:tool:linux-x64');
       final retainedBinary = File(
-        harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
+        harness.stage.pathOf('producers/tool/linux-x64/tool'),
       ).readAsBytesSync();
       final interruptedArchive =
           File(
-              harness.stage.directory.resolve(
+              harness.stage.pathOf(
                 'producers/tool/archives/tool-1.2.3-linux-x64.tar.gz',
               ),
             )
@@ -2034,7 +2032,7 @@ void main() {
             ..writeAsStringSync('untrusted interrupted output');
       // The receipt never recorded it, so it is not part of the stage; the
       // archive producer runs again over it.
-      expect(harness.stage.inspect().validProgress, isTrue);
+      expect(harness.checked.state, StageState.resumable);
 
       final resumed = await harness.runStage();
 
@@ -2045,7 +2043,7 @@ void main() {
       );
       expect(
         File(
-          harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
+          harness.stage.pathOf('producers/tool/linux-x64/tool'),
         ).readAsBytesSync(),
         retainedBinary,
       );
@@ -2054,7 +2052,7 @@ void main() {
         isNot(orderedEquals(utf8.encode('untrusted interrupted output'))),
         reason: 'the missing archive producer must replace, not adopt, bytes',
       );
-      expect(harness.stage.inspect().reusable, isTrue);
+      expect(harness.checked.reusable, isTrue);
     },
   );
 
@@ -2062,11 +2060,11 @@ void main() {
     'a changed dependency in an interrupted prefix is rebuilt, not reused',
     () async {
       await harness.runStage();
-      _interruptAfter(harness.stage, 'build:tool:linux-x64');
+      _interruptAfter(harness, 'build:tool:linux-x64');
       File(
-        harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
+        harness.stage.pathOf('producers/tool/linux-x64/tool'),
       ).writeAsStringSync('planted binary');
-      expect(harness.stage.inspect().validProgress, isFalse);
+      expect(harness.checked.state, StageState.broken);
 
       final rebuilt = await harness.runStage();
 
@@ -2075,27 +2073,29 @@ void main() {
         hasLength(1),
       );
       expect(rebuilt.keys, contains('dart pub publish --to-archive <archive>'));
-      expect(harness.stage.inspect().reusable, isTrue);
+      expect(harness.checked.reusable, isTrue);
     },
   );
 
   test('a complete receipt missing its package archive refuses', () async {
     await harness.runStage();
-    final receipt = harness.stage.requireReceipt();
-    StageReceiptStore(harness.stage.directory).write(
-      StageReceipt(
-        identity: receipt.identity,
+    final receipt = harness.checked.receipt!;
+    final archive = ReleaseAssets.pubArchivePath(harness.unit.projects.single);
+    File(harness.stage.pathOf('stage.json')).writeAsStringSync(
+      Receipt(
+        stage: receipt.stage,
         plan: receipt.plan,
-        steps: receipt.steps.where((step) => step.name != 'pub-archive:tool'),
-      ),
+        producers: {...receipt.producers}..remove('pub-archive:tool'),
+        files: {...receipt.files}..remove(archive),
+      ).encode(),
     );
 
-    final inspected = harness.stage.inspect();
+    final inspected = harness.checked;
     expect(inspected.reusable, isFalse);
     expect(
-      inspected.issues.map((issue) => '$issue'),
+      inspected.lines,
       contains(
-        '${ReleaseAssets.pubArchivePath(harness.stage.unit.projects.single)}: '
+        '${ReleaseAssets.pubArchivePath(harness.unit.projects.single)}: '
         'missing from the completed stage',
       ),
     );
@@ -2121,11 +2121,8 @@ void main() {
     'stage tampering at the authorization prompt blocks the first act',
     () async {
       await harness.runStage();
-      final archive = harness.stage.directory.resolve(
-        ReleaseAssets.archivePath(
-          harness.stage.unit.binaryProject!,
-          'linux-x64',
-        ),
+      final archive = harness.stage.pathOf(
+        ReleaseAssets.archivePath(harness.unit.binaryProject!, 'linux-x64'),
       );
       var prompts = 0;
 
@@ -2164,8 +2161,8 @@ void main() {
 
   test('stage tampering after one target blocks the next public act', () async {
     await harness.runStage();
-    final archive = harness.stage.directory.resolve(
-      ReleaseAssets.archivePath(harness.stage.unit.binaryProject!, 'linux-x64'),
+    final archive = harness.stage.pathOf(
+      ReleaseAssets.archivePath(harness.unit.binaryProject!, 'linux-x64'),
     );
 
     final refused = await harness.run(
@@ -2194,28 +2191,28 @@ void main() {
   });
 }
 
-/// Cuts a completed stage back to the steps through [stepName]; `plan`
-/// keeps only the frozen plan header.
-void _interruptAfter(ReleaseStage stage, String stepName) {
-  final complete = stage.requireReceipt();
-  final through = stepName == 'plan'
-      ? -1
-      : complete.steps.indexWhere((step) => step.name == stepName);
+/// Cuts [harness]'s completed stage back to its work through [stepName],
+/// in work order; `plan` keeps only the plan.
+void _interruptAfter(_Harness harness, String stepName) {
+  final stage = harness.stage;
+  final complete = harness.checked.receipt!;
+  final names = [for (final work in harness.release.work) work.name];
+  final through = stepName == 'plan' ? -1 : names.indexOf(stepName);
   if (through < 0 && stepName != 'plan') {
     fail('fixture receipt has no $stepName');
   }
-  final kept = complete.steps.take(through + 1).toList();
-  final keptPaths = kept
-      .expand((step) => step.outputs)
-      .map((a) => a.path)
-      .toSet();
-  for (final artifact in complete.artifacts) {
-    if (keptPaths.contains(artifact.path)) continue;
-    final file = File(stage.directory.resolve(artifact.path));
+  final kept = names.take(through + 1).toSet();
+  final files = {
+    for (final MapEntry(key: path, value: file) in complete.files.entries)
+      if (kept.contains(file.producer)) path: file,
+  };
+  for (final path in complete.files.keys) {
+    if (files.containsKey(path)) continue;
+    final file = File(stage.pathOf(path));
     if (file.existsSync()) file.deleteSync();
   }
   final directories =
-      Directory(stage.directory.path)
+      Directory(stage.path)
           .listSync(recursive: true, followLinks: false)
           .whereType<Directory>()
           .toList()
@@ -2223,8 +2220,13 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
   for (final directory in directories) {
     if (directory.listSync(followLinks: false).isEmpty) directory.deleteSync();
   }
-  StageReceiptStore(stage.directory).write(
-    StageReceipt(identity: complete.identity, plan: complete.plan, steps: kept),
+  File(stage.pathOf('stage.json')).writeAsStringSync(
+    Receipt(
+      stage: complete.stage,
+      plan: complete.plan,
+      producers: {for (final name in kept) name: complete.producers[name]!},
+      files: files,
+    ).encode(),
   );
 }
 
@@ -2269,18 +2271,14 @@ class _Harness {
     resolution = resolved;
     unit = resolution.unit('tool')!;
     git = gitAt();
-    stages = ReleaseStages(
-      source: source,
-      git: git,
-      resolution: resolution,
-      repositoryRoot: root.path,
-    );
+    stagedAt = git;
+    stages = Stages(root.path);
     registry = _ReleaseRegistry({
       'tool': ['1.0.0'],
     });
     tools = _WorldTools(
       registry: registry,
-      stageFor: () => stage,
+      receipt: () => receipt!,
       nativePubArchive: nativePubArchive,
     );
   }
@@ -2295,11 +2293,39 @@ class _Harness {
   late final Resolution resolution;
   late final ResolvedUnit unit;
   late GitState git;
-  late final ReleaseStages stages;
+
+  /// The commit the stage is named by: the first [git], whatever a test
+  /// moves HEAD to later.
+  late final GitState stagedAt;
+  late final Stages stages;
   late final _ReleaseRegistry registry;
   late final _WorldTools tools;
 
-  ReleaseStage get stage => stages(unit);
+  Stage get stage => stages.of(unit, stagedAt, source);
+  Stage stageFor(ResolvedUnit unit) => stages.of(unit, stagedAt, source);
+
+  late final UnitRelease release = UnitRelease.derive(
+    unit,
+    resolution,
+    repository: stagedAt.originUrl,
+    problems: Diagnostics(),
+  );
+
+  /// What the stage is now, for [release].
+  StageCheck get checked => stage.check(release);
+
+  /// The receipt on disk, when there is one.
+  Receipt? get receipt {
+    final file = File(stage.pathOf('stage.json'));
+    return file.existsSync() ? Receipt.parse(file.readAsStringSync()) : null;
+  }
+
+  /// Removes the stage, as a lost or cleaned one is.
+  void resetStage() {
+    if (Directory(stage.path).existsSync()) {
+      Directory(stage.path).deleteSync(recursive: true);
+    }
+  }
 
   GitState gitAt({
     String head = _head,
@@ -2362,7 +2388,6 @@ class _Harness {
       git: git,
       tools: readTools ?? tools,
       repository: git.originUrl,
-      stageFor: stages.call,
     );
     tools.onInvocation = onInvocation;
     final command = ReleaseCommand(
@@ -2375,7 +2400,7 @@ class _Harness {
       output: output,
       confirm: confirm,
       stageOnly: stageOnly,
-      stageFor: stages.call,
+      stageFor: stageFor,
       wait: (_) => Future<void>.delayed(Duration.zero),
       // Without a HOME of its own, rk reads the pub session of whoever is
       // running the tests, and a case about a missing session stops being
@@ -2594,12 +2619,14 @@ class _ReleaseRegistry extends FakeRegistry {
 class _WorldTools implements Tools {
   _WorldTools({
     required this.registry,
-    required this.stageFor,
+    required this.receipt,
     this.nativePubArchive = false,
   });
 
   final FakeRegistry registry;
-  final ReleaseStage Function() stageFor;
+
+  /// The stage's receipt as it is on disk.
+  final Receipt Function() receipt;
   final bool nativePubArchive;
   final List<_Invocation> invocations = [];
   final Set<String> remoteTags = {};
@@ -2803,13 +2830,7 @@ class _WorldTools implements Tools {
       final digest = wrongTagBinding
           ? '0' * 64
           : tagManifestSha256 ??
-                stageFor()
-                    .requireReceipt()
-                    .artifacts
-                    .singleWhere(
-                      (artifact) => artifact.path == ReleaseAssets.manifest,
-                    )
-                    .sha256;
+                receipt().files[ReleaseAssets.manifest]!.sha256;
       return _ok(
         stdout:
             'object $remoteSourceCommit\n'

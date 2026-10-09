@@ -13,8 +13,8 @@ import '../engine/publish_target.dart';
 import '../engine/registry.dart';
 import '../engine/release_dependencies.dart';
 import '../engine/resolve.dart';
-import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
+import '../engine/stage.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
 import '../engine/unit_snapshot.dart';
@@ -49,20 +49,26 @@ class ReleaseCommand {
     required this.confirm,
     required this.allowInteractiveTools,
     this.stageOnly = false,
-    ReleaseStage Function(ResolvedUnit unit)? stageFor,
+    Stage Function(ResolvedUnit unit)? stageFor,
     Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
     required this.capabilities,
   }) : _wait = wait ?? _sleep,
-       _stageFor =
-           stageFor ??
-           ReleaseStages(source: tree, git: git, resolution: resolution).call,
+       _stageFor = stageFor ?? _stagesAt(git, tree),
        _refreshEnvironment =
            refreshEnvironment ??
            (() => Map<String, String>.of(Platform.environment));
 
   static Future<void> _sleep(Duration duration) =>
       Future<void>.delayed(duration);
+
+  static Stage Function(ResolvedUnit unit) _stagesAt(
+    GitState git,
+    SourceTree tree,
+  ) {
+    final stages = Stages(git.root);
+    return (unit) => stages.of(unit, git, tree);
+  }
 
   final Resolution resolution;
   final SourceTree tree;
@@ -109,7 +115,7 @@ class ReleaseCommand {
   /// authorization or any public mutation.
   final bool stageOnly;
 
-  final ReleaseStage Function(ResolvedUnit unit) _stageFor;
+  final Stage Function(ResolvedUnit unit) _stageFor;
 
   /// The packages this run releases, so a prerequisite on one of them is met
   /// by this run's own publication rather than by an earlier one.
@@ -152,7 +158,6 @@ class ReleaseCommand {
     output: output,
     tools: tools,
     capabilities: capabilities,
-    stageFor: _stageFor,
     targets: inspector.targets,
   );
 
@@ -507,7 +512,7 @@ class ReleaseCommand {
     final unit = read.unit;
     if (read.released) return true;
     final stage = read.stage!;
-    final stageInspection = read.stageInspection!;
+    final check = read.stageCheck!;
 
     bool refuse(Diagnostic problem, HaltKind halt) {
       output.halt(halt);
@@ -523,7 +528,7 @@ class ReleaseCommand {
       return refuse(read.lostStageProblem, HaltKind.unfixableByRerun);
     }
     if (planned.recovering) return true;
-    if (!stageInspection.reusable) {
+    if (!check.reusable) {
       if (_refuseIfUnfinishable(unit) case final refusal?) {
         return refuse(refusal, HaltKind.beforeActing);
       }
@@ -531,11 +536,7 @@ class ReleaseCommand {
     // Stage-only mode keeps its explicit ability to replace
     // reviewed-but-invalid bytes. A real release refuses that ambiguity
     // before any local preparation.
-    if (_stages.preparationProblem(
-          unit,
-          stageInspection,
-          mayReplaceReviewed: stageOnly,
-        )
+    if (_stages.preparationProblem(unit, check, mayReplaceReviewed: stageOnly)
         case final problem?) {
       return refuse(problem, HaltKind.beforeActing);
     }
@@ -543,7 +544,7 @@ class ReleaseCommand {
     final staging = await _stages.begin(
       release: read.release,
       stage: stage,
-      inspected: stageInspection,
+      check: check,
       claims: read.claims,
       fromSource: await _fromSource(unit),
     );
@@ -592,9 +593,7 @@ class ReleaseCommand {
     ]);
     if (prepared.every((result) => result != null)) {
       // A stage reused is not staged again: the title says which it was.
-      final reused = stagings
-          .where((staging) => staging.inspected.reusable)
-          .length;
+      final reused = stagings.where((staging) => staging.check.reusable).length;
       final count = stagings.length;
       live.settle(
         title: reused == 0
@@ -674,10 +673,7 @@ class ReleaseCommand {
         release.barrier,
         verdict: Verdict.exact,
         detail: 'staged and validated',
-        evidence: {
-          'stage id': stage.directory.identity.id,
-          'stage path': stage.directory.repositoryRelativePath,
-        },
+        evidence: {'stage id': stage.id.id, 'stage path': stage.relativePath},
         show: false,
       );
       final staged = (
@@ -686,7 +682,7 @@ class ReleaseCommand {
         claims: prepared.claims,
         signing: localOnly ? null : prepared.signing,
         archives: localOnly && unit.binaryProject != null
-            ? '${stage.directory.repositoryRelativePath}/'
+            ? '${stage.relativePath}/'
                   '${ReleaseAssets.producerRoot(unit.binaryProject!)}/archives'
             : null,
       );

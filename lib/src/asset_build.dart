@@ -5,9 +5,9 @@ import 'binary_chain.dart';
 import 'engine/assets.dart';
 import 'engine/diagnostic.dart';
 import 'engine/resolve.dart';
+import 'engine/stage.dart';
 import 'engine/tools.dart';
 import 'engine/unit_release.dart';
-import 'engine/workspace.dart';
 import 'output/output.dart';
 import 'output/progress.dart';
 
@@ -26,14 +26,16 @@ final class AssetBuild {
   AssetBuild({
     required this.tools,
     required this.output,
-    required this.workspace,
+    required this.stage,
     required this.sourceRoot,
     this.cacheDirectory,
   });
 
   final Tools tools;
   final Output output;
-  final Workspace workspace;
+
+  /// Where the declared assets are kept.
+  final Stage stage;
 
   /// The lane's copy of the staged source, where the build runs.
   final String sourceRoot;
@@ -240,16 +242,12 @@ final class AssetBuild {
       }
       for (final declared in project.assets) {
         final staged = File(
-          workspace.pathOf(ReleaseAssets.assetPath(project, declared)),
+          stage.pathOf(ReleaseAssets.assetPath(project, declared)),
         );
         staged.parent.createSync(recursive: true);
         File('${out.path}/$declared').copySync(staged.path);
       }
       return LocalProducerOutcome.succeeded(
-        outputs: [
-          for (final entry in ReleaseAssets.assetOutputs(project).entries)
-            LocalProducerOutput(entry.key, entry.value),
-        ],
         evidence: {'command': project.build, 'cache': ?cache},
       );
     } finally {

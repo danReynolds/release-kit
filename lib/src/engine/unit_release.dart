@@ -14,9 +14,11 @@ import 'resolve.dart';
 final class UnitRelease {
   UnitRelease._({
     required this.unit,
+    required this.repository,
     required this.requirements,
     required this.work,
     required this.targets,
+    required this.assets,
     required this.artifacts,
   });
 
@@ -75,7 +77,7 @@ final class UnitRelease {
           summary: 'package archive',
           project: project,
           target: PublishTarget.pubDev,
-          outputs: {ReleaseAssets.pubArchivePath(project): 'pub-archive'},
+          outputs: [ReleaseAssets.pubArchivePath(project)],
         ),
     };
     final notes = releases
@@ -84,7 +86,7 @@ final class UnitRelease {
             'release-notes',
             summary: 'release notes',
             target: PublishTarget.githubRelease,
-            outputs: const {'release-notes.md': 'notes'},
+            outputs: const ['release-notes.md'],
           )
         : null;
     final local = _localWork(unit);
@@ -98,7 +100,7 @@ final class UnitRelease {
           summary: 'Homebrew formula',
           project: project,
           target: PublishTarget.homebrew,
-          outputs: {ReleaseAssets.formulaPath(project): 'formula'},
+          outputs: [ReleaseAssets.formulaPath(project)],
           inputs: [
             for (final platform in project.binaryPlatforms)
               local.singleWhere(
@@ -117,7 +119,7 @@ final class UnitRelease {
       kind: StepKind.completeStage,
       name: 'complete-stage',
       summary: 'complete the local stage',
-      outputs: const {ReleaseAssets.manifest: 'manifest'},
+      outputs: const [ReleaseAssets.manifest],
       // Target work by its name, then local work in order: the plan shows
       // the barrier waiting on all of it.
       inputs: [
@@ -139,31 +141,21 @@ final class UnitRelease {
     final published = <Artifact>[
       for (final asset in ReleaseAssets.bundleFor(unit))
         for (final work in local)
-          if (work.outputs[asset.stagedPath] case final type?)
-            Artifact._(
-              asset.stagedPath,
-              name: asset.publicName,
-              type: type,
-              madeBy: work,
-            ),
+          if (work.outputs.contains(asset.stagedPath))
+            Artifact._(asset.stagedPath, name: asset.publicName, madeBy: work),
     ];
     final manifest = Artifact._(
       ReleaseAssets.manifest,
       name: ReleaseAssets.manifest,
-      type: 'manifest',
       madeBy: barrier,
     );
-    Artifact made(Work work) {
-      final MapEntry(key: path, value: type) = work.outputs.entries.single;
-      return Artifact._(
-        path,
-        name: work.target == PublishTarget.homebrew
-            ? ReleaseAssets.formulaName(work.project!.executable!)
-            : null,
-        type: type,
-        madeBy: work,
-      );
-    }
+    Artifact made(Work work) => Artifact._(
+      work.outputs.single,
+      name: work.target == PublishTarget.homebrew
+          ? ReleaseAssets.formulaName(work.project!.executable!)
+          : null,
+      madeBy: work,
+    );
 
     final targets = <Target>[];
     final tag = unit.publish.contains(PublishTarget.gitTag)
@@ -290,9 +282,11 @@ final class UnitRelease {
 
     return UnitRelease._(
       unit: unit,
+      repository: repository,
       requirements: List.unmodifiable(requirements.values),
       work: List.unmodifiable(work),
       targets: List.unmodifiable(targets),
+      assets: List.unmodifiable(published),
       artifacts: List.unmodifiable([
         ...published,
         manifest,
@@ -384,7 +378,7 @@ final class UnitRelease {
         project: project,
         platform: platform,
         summary: 'archive $platform',
-        outputs: {ReleaseAssets.archivePath(project, platform): 'archive'},
+        outputs: [ReleaseAssets.archivePath(project, platform)],
         inputs: [build, ?notarize],
         needs: [notarize ?? build],
       );
@@ -394,6 +388,10 @@ final class UnitRelease {
   }
 
   final ResolvedUnit unit;
+
+  /// The `owner/name` the targets are published under; null without an
+  /// origin.
+  final String? repository;
 
   /// The packages sibling units put on pub.dev, which must be live first.
   final List<Requirement> requirements;
@@ -405,7 +403,13 @@ final class UnitRelease {
   /// and the Homebrew formula.
   final List<Target> targets;
 
-  /// Every file that leaves the stage.
+  /// The files the release builds for its GitHub release, by public name:
+  /// each platform's archive, or the assets a project's own build declares.
+  /// A unit that publishes none still builds them, to keep locally.
+  final List<Artifact> assets;
+
+  /// Every file that leaves the stage: [assets], the manifest, and each
+  /// target's own input.
   final List<Artifact> artifacts;
 
   /// Completes the stage once every other piece of work is recorded.
@@ -783,7 +787,7 @@ final class Work extends Step {
     this.project,
     this.platform,
     this.target,
-    this.outputs = const {},
+    this.outputs = const [],
     this.inputs = const [],
     this.needs = const [],
   });
@@ -794,7 +798,7 @@ final class Work extends Step {
     required String summary,
     required PublishTarget target,
     ResolvedProject? project,
-    required Map<String, String> outputs,
+    required List<String> outputs,
     List<Work> inputs = const [],
   }) : this._(
          id: '$unit/stage/$name',
@@ -817,9 +821,8 @@ final class Work extends Step {
   @override
   final PublishTarget? target;
 
-  /// The stage paths this work writes, with the type the receipt records
-  /// for each. Notarization writes none.
-  final Map<String, String> outputs;
+  /// The stage paths this work writes; notarization writes none.
+  final List<String> outputs;
 
   /// The work this needs first, as the plan shows it.
   final List<Work> inputs;
@@ -899,20 +902,12 @@ final class Target extends Step {
 
 /// One file that leaves the stage.
 final class Artifact {
-  Artifact._(
-    this.path, {
-    required this.name,
-    required this.type,
-    required this.madeBy,
-  });
+  Artifact._(this.path, {required this.name, required this.madeBy});
 
   /// Where the stage holds it.
   final String path;
 
   /// Its public name, when it is published under one.
   final String? name;
-
-  /// What the receipt records it as.
-  final String type;
   final Work madeBy;
 }

@@ -7,11 +7,11 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/unit_release.dart';
-import 'package:rk/src/engine/workspace.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
 import 'support/memory_source_tree.dart';
+import 'support/scratch_stage.dart';
 
 void main() {
   late Directory scratch;
@@ -84,7 +84,7 @@ assets = ["assets/parser.so", "parser.dylib"]
           useColor: false,
           terminalWidth: terminal ? 80 : null,
         ),
-        workspace: Workspace('${scratch.path}/stage'),
+        stage: scratchStage(scratch.path),
         sourceRoot: '${scratch.path}/lane',
         cacheDirectory: '${scratch.path}/cache/parser/parser',
       ),
@@ -345,7 +345,7 @@ assets = ["assets/parser.so", "parser.dylib"]
         ),
       ),
       output: Output(sink: printed.write, isTerminal: false, useColor: false),
-      workspace: Workspace('${scratch.path}/stage'),
+      stage: scratchStage(scratch.path),
       sourceRoot: '${scratch.path}/lane',
     );
 
@@ -380,7 +380,7 @@ assets = ["assets/parser.so", "parser.dylib"]
     final build = AssetBuild(
       tools: tools,
       output: Output(sink: (_) {}, isTerminal: false, useColor: false),
-      workspace: Workspace('${scratch.path}/stage'),
+      stage: scratchStage(scratch.path),
       sourceRoot: '${scratch.path}/lane',
     );
 

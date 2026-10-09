@@ -1,8 +1,10 @@
 import 'dart:io';
 
+import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
+import '../../engine/stage.dart';
 import '../../engine/tools.dart';
 import '../../engine/unit_release.dart';
 import '../../engine/verdict.dart';
@@ -33,16 +35,16 @@ final class PubDevTargetModule extends TargetModule {
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    Target target,
-  ) => _inspect(context, unit, target, againstStage: false);
+    Target target, {
+    Stage? stage,
+  }) => _inspect(context, target);
 
   /// After rk's own upload, the archive pub.dev reports must be the one it
-  /// staged and uploaded.
+  /// staged and uploaded: [stage]'s.
   Future<Inspection> _inspect(
     TargetReadContext context,
-    ResolvedUnit unit,
     Target target, {
-    required bool againstStage,
+    Stage? stage,
   }) {
     final reader = context.registry;
     if (reader == null) {
@@ -58,25 +60,11 @@ final class PubDevTargetModule extends TargetModule {
         ),
       );
     }
-    final stage = againstStage ? context.reusableStage(unit) : null;
-    String? expectedArchiveSha256;
-    if (stage != null) {
-      try {
-        expectedArchiveSha256 = requirePubArchive(
-          stage,
-          target.project!,
-        ).sha256;
-      } on Object catch (error) {
-        return Future.value(
-          Inspection.unknown(
-            'the staged pub archive could not be read: $error',
-          ),
-        );
-      }
-    }
+    final project = target.project!;
     return exact.inspectProject(
-      target.project!,
-      expectedArchiveSha256: expectedArchiveSha256,
+      project,
+      expectedArchiveSha256:
+          stage?.receipt?.files[ReleaseAssets.pubArchivePath(project)]?.sha256,
     );
   }
 
@@ -239,7 +227,6 @@ final class PubDevTargetModule extends TargetModule {
     Inspection inspected,
   ) async {
     final project = target.project!;
-    final archive = requirePubArchive(context.stage, project);
     // Publication is non-interactive after the explicit session preflight.
     // Capture pub's output so it cannot write through RK's live multi-target
     // progress surface; the transcript is retained if the act fails. Pub
@@ -252,7 +239,7 @@ final class PubDevTargetModule extends TargetModule {
         'pub',
         'publish',
         '--from-archive',
-        context.workspace.pathOf(archive.path),
+        context.stage!.pathOf(ReleaseAssets.pubArchivePath(project)),
         '--force',
       ], workingDirectory: scratch.path);
     } finally {
@@ -319,12 +306,7 @@ final class PubDevTargetModule extends TargetModule {
     var waited = Duration.zero;
     while (true) {
       context.reads.registry?.forget(target.coordinate);
-      final state = await _inspect(
-        context.reads,
-        unit,
-        target,
-        againstStage: true,
-      );
+      final state = await _inspect(context.reads, target, stage: context.stage);
       // An answer settles it; a read that failed is asked again, as an
       // absence is, until the deadline.
       final settled =

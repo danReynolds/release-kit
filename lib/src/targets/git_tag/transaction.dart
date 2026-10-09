@@ -1,12 +1,9 @@
-import 'dart:io';
-
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
 import '../../engine/verdict.dart';
 import '../../output/progress.dart';
-import '../../transforms/digest.dart';
 import '../target_module.dart';
 import 'client.dart';
 
@@ -45,7 +42,10 @@ Future<TargetActOutcome> publishGitTag(
     );
   }
 
-  final manifestSha256 = _manifestDigest(context);
+  // The stage was checked just before this act: its manifest is the one
+  // the receipt records.
+  final manifestSha256 =
+      context.stage!.receipt!.files[ReleaseAssets.manifest]!.sha256;
   final String object;
   // An interrupted run may have created the exact local tag without pushing
   // it. Inspection validated that object, so it is pushed as it is.
@@ -179,14 +179,4 @@ Future<TargetActOutcome> publishGitTag(
     reconciledNote: 'push response was lost · origin confirmed exact',
     confirmed: state,
   );
-}
-
-String _manifestDigest(TargetReleaseContext context) {
-  final manifest = File(
-    context.stage.directory.resolve(ReleaseAssets.manifest),
-  );
-  if (!manifest.existsSync()) {
-    throw StateError('the completed stage has no release manifest');
-  }
-  return Sha256.hex(manifest.readAsBytesSync());
 }

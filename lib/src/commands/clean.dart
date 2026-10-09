@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import '../engine/diagnostic.dart';
-import '../engine/stage_receipt.dart';
-import '../engine/stage_store.dart';
+import '../engine/receipt.dart';
+import '../engine/stage.dart';
 import '../output/output.dart';
 
 /// Explicitly removes repository-local private release stages.
@@ -13,7 +13,7 @@ import '../output/output.dart';
 /// by hand, but rk makes the recovery consequence hard to miss.
 final class CleanCommand {
   const CleanCommand({
-    required this.store,
+    required this.stages,
     required this.output,
     required this.yes,
     this.confirm,
@@ -32,26 +32,26 @@ its exact stage to finish, so remove one only when it is no longer needed.
 Example: rk clean
 ''';
 
-  final StageStore store;
+  final Stages stages;
   final Output output;
   final bool yes;
   final Future<String?> Function(String prompt)? confirm;
 
   Future<int> run() async {
-    StageStoreLock? lock;
+    StagesLock? lock;
     try {
       // Preserve the empty no-op: merely inspecting a repository must not
       // create .rk/work just to hold a lock for work that does not exist.
-      final observed = store.inventory();
+      final observed = stages.list();
       if (observed.isNotEmpty) {
         // The inventory shown for authorization is read under the same lock
         // release holds while it can make a stage recovery-critical.
-        lock = store.acquireForMutation();
+        lock = stages.lock();
       }
-      final inventory = lock == null ? observed : store.inventory();
+      final inventory = lock == null ? observed : stages.list();
       final found = inventory.length;
       output.report.cleanup(
-        root: store.repositoryRoot,
+        root: stages.root,
         path: '.rk/work/stages',
         found: found,
         removed: 0,
@@ -137,10 +137,10 @@ Example: rk clean
       output.report.acted = true;
       var removed = 0;
       for (final entry in inventory) {
-        if (!store.deleteEntry(entry)) continue;
+        if (!stages.remove(entry)) continue;
         removed++;
         output.report.cleanup(
-          root: store.repositoryRoot,
+          root: stages.root,
           path: '.rk/work/stages',
           found: found,
           removed: removed,
@@ -210,30 +210,19 @@ Example: rk clean
       return 'not a stage directory';
     }
     try {
-      final directory = '${store.path}/${entry.name}';
-      if (FileSystemEntity.typeSync(directory, followLinks: false) !=
-          FileSystemEntityType.directory) {
-        return 'stage directory changed';
-      }
-      final file = File('$directory/stage.json');
-      final type = FileSystemEntity.typeSync(file.path, followLinks: false);
-      if (type == FileSystemEntityType.notFound) return 'no stage receipt';
-      if (type != FileSystemEntityType.file) {
-        return 'stage receipt is not a regular file · not read';
-      }
-      if (file.lengthSync() > 4 * 1024 * 1024) {
-        return 'stage receipt too large to inspect';
-      }
-      final receipt = StageReceipt.parse(file.readAsStringSync());
-      if (receipt.identity.id != entry.name) {
+      final file = File('${stages.path}/${entry.name}/stage.json');
+      if (!file.existsSync()) return 'no stage receipt';
+      final receipt = Receipt.parse(file.readAsStringSync());
+      if (receipt.stage.id != entry.name) {
         return 'stage receipt belongs to another stage';
       }
-      final unit = receipt.plan?['unit'];
-      final commit = receipt.identity.headCommit;
       return [
-        if (unit is Map && unit['name'] is String && unit['version'] is String)
-          '${unit['name']} ${unit['version']}',
-        'commit ${commit.substring(0, 7)}',
+        if (receipt.plan['unit'] case {
+          'name': final String name,
+          'version': final String version,
+        })
+          '$name $version',
+        'commit ${receipt.stage.commit.substring(0, 7)}',
         receipt.complete ? 'completion recorded' : 'incomplete stage',
       ].join(' · ');
     } on Object {
@@ -245,12 +234,9 @@ Example: rk clean
 
   void _heading() {
     final separator = Platform.pathSeparator;
-    final parts = store.repositoryRoot.split(separator);
+    final parts = stages.root.split(separator);
     output.heading(
-      parts.lastWhere(
-        (part) => part.isNotEmpty,
-        orElse: () => store.repositoryRoot,
-      ),
+      parts.lastWhere((part) => part.isNotEmpty, orElse: () => stages.root),
     );
   }
 }

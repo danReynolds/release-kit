@@ -3,16 +3,14 @@ import 'dart:io';
 import '../asset_build.dart';
 import '../binary_chain.dart';
 import '../builds/capability.dart';
-import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/identity.dart';
 import '../engine/producer_lane.dart';
 import '../engine/publish_target.dart';
-import '../engine/release_stage.dart';
+import '../engine/receipt.dart';
 import '../engine/resolve.dart';
-import '../engine/stage_inspection.dart';
-import '../engine/stage_receipt.dart';
+import '../engine/stage.dart';
 import '../engine/stage_source.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
@@ -33,7 +31,6 @@ final class ReleaseStageCoordinator {
     required this.output,
     required this.tools,
     required this.capabilities,
-    required this.stageFor,
     required this.targets,
   });
 
@@ -41,48 +38,35 @@ final class ReleaseStageCoordinator {
   final Output output;
   final Tools tools;
   final HostCapabilities capabilities;
-  final ReleaseStage Function(ResolvedUnit unit) stageFor;
 
   /// The modules that prepare each target's work.
   final TargetCatalog targets;
 
+  /// Why a release must not replace [check]'s stage: one that completed
+  /// and no longer validates, or whose receipt cannot be read, holds bytes
+  /// an operator may have reviewed. `rk stage` may rebuild it
+  /// ([mayReplaceReviewed]); a release refuses.
   Diagnostic? preparationProblem(
     ResolvedUnit unit,
-    StageInspection inspected, {
+    StageCheck check, {
     required bool mayReplaceReviewed,
   }) {
-    if (inspected.reusable) return null;
-
-    final unsafe = inspected.issues
-        .where((issue) => issue.kind == StageIssueKind.unsafePath)
-        .firstOrNull;
-    if (unsafe != null) {
-      return Diagnostic(
-        code: 'RK-STAGE-001',
-        message: 'the release stage path is unsafe',
-        remedy: unsafe.toString(),
-      );
+    if (mayReplaceReviewed ||
+        (check.state != StageState.changed &&
+            check.state != StageState.unreadable)) {
+      return null;
     }
-
-    final completedOrCorrupt =
-        inspected.claimsCompletion ||
-        inspected.issues.any(
-          (issue) => issue.kind == StageIssueKind.invalidReceipt,
-        );
-    if (completedOrCorrupt && !mayReplaceReviewed) {
-      final reviewed = inspected.claimsCompletion;
-      return Diagnostic(
-        code: 'RK-STAGE-002',
-        message: reviewed
-            ? 'the reviewed release stage no longer validates'
-            : 'the release stage receipt is invalid',
-        remedy:
-            '${inspected.issues.join('\n')}\n'
-            '${reviewed ? 'rk will not silently replace reviewed bytes. ' : ''}'
-            'Rebuild it explicitly: rk stage ${unit.name}',
-      );
-    }
-    return null;
+    final reviewed = check.state == StageState.changed;
+    return Diagnostic(
+      code: 'RK-STAGE-002',
+      message: reviewed
+          ? 'the reviewed release stage no longer validates'
+          : 'the release stage receipt is invalid',
+      remedy:
+          '${check.lines.join('\n')}\n'
+          '${reviewed ? 'rk will not silently replace reviewed bytes. ' : ''}'
+          'Rebuild it explicitly: rk stage ${unit.name}',
+    );
   }
 
   /// Settles what staging [unit] needs before its producers run: leftovers
@@ -92,8 +76,8 @@ final class ReleaseStageCoordinator {
   /// packages it takes from this source: see [TargetStageContext.fromSource].
   Future<UnitStaging?> begin({
     required UnitRelease release,
-    required ReleaseStage stage,
-    required StageInspection inspected,
+    required Stage stage,
+    required StageCheck check,
     required List<TargetClaim> claims,
     Map<String, Map<String, String>> fromSource = const {},
   }) async {
@@ -101,16 +85,16 @@ final class ReleaseStageCoordinator {
     final staging = UnitStaging._(
       release: release,
       stage: stage,
-      inspected: inspected,
+      check: check,
       claims: claims,
       fromSource: fromSource,
     );
-    _discardUnrecordedOutputs(
-      stage,
-      inspected,
-      staging.outputsByProducer.values.expand((outputs) => outputs).toSet(),
-    );
-    final signing = await _prepareStageInputs(unit, inspected);
+    if (check.state == StageState.resumable) {
+      _discardUnrecorded(stage, [
+        for (final work in release.work) ...work.outputs,
+      ]);
+    }
+    final signing = await _prepareStageInputs(unit, check);
     if (signing == null) return null;
     return staging.._signing = signing.value;
   }
@@ -126,12 +110,11 @@ final class ReleaseStageCoordinator {
       :release,
       :unit,
       :stage,
-      :inspected,
+      :check,
       :claims,
       :fromSource,
       :signing,
       :producerSteps,
-      :outputsByProducer,
     ) = staging;
     final stageProgress =
         shared ??
@@ -141,25 +124,19 @@ final class ReleaseStageCoordinator {
           board: staging.board,
         );
     final warnings = <_StageWarning>[];
-    if (inspected.reusable) {
+    if (check.reusable) {
+      final receipt = check.receipt!;
       stageProgress
-        ..restore(inspected.receipt!.steps)
+        ..restore(receipt.producers)
         ..settle(title: '${unit.name} ${unit.version} · already staged');
-      _showStageWarnings(
-        unit,
-        _recordedStageWarnings(inspected.receipt!.steps, release),
-      );
-      final macosBuilds = {
-        for (final work in producerSteps)
-          if (work.kind == StepKind.build &&
-              work.platform!.startsWith('macos-'))
-            work.name,
-      };
+      _showStageWarnings(unit, _recordedStageWarnings(receipt, release));
       ReleaseSigningContext? recoveredSigning;
-      for (final step in inspected.receipt!.steps.where(
-        (step) => macosBuilds.contains(step.name),
-      )) {
-        final signature = step.evidence['signature']! as Map;
+      for (final work in producerSteps) {
+        if (work.kind != StepKind.build ||
+            !work.platform!.startsWith('macos-')) {
+          continue;
+        }
+        final signature = receipt.producers[work.name]!['signature']! as Map;
         final recovered = ReleaseSigningContext(
           publishedRequirement: signature['published_requirement'] as String?,
           firstIdentity: signature['first_identity']! as bool,
@@ -189,22 +166,17 @@ final class ReleaseStageCoordinator {
       return PreparedRelease(claims: claims, signing: recoveredSigning);
     }
 
-    if (inspected.validProgress || inspected.planRecorded) {
+    if (check.state == StageState.resumable) {
       output.say('Resuming interrupted staging.', role: VisualRole.secondary);
-    } else if (inspected.claimsCompletion) {
-      output.say(
-        'Rebuilding: the recorded stage no longer verifies.',
-        role: VisualRole.secondary,
-      );
-    }
-
-    final progress = <StageStep>[];
-    if (inspected.validProgress) {
-      progress.addAll(inspected.receipt!.steps);
-    } else if (!inspected.planRecorded) {
+    } else {
+      if (check.state == StageState.changed) {
+        output.say(
+          'Rebuilding: the recorded stage no longer verifies.',
+          role: VisualRole.secondary,
+        );
+      }
       try {
-        stage.reset();
-        stage.writeProgress(const []);
+        stage.begin();
       } on Object catch (error) {
         stageProgress.discard();
         output.problem(
@@ -222,8 +194,9 @@ final class ReleaseStageCoordinator {
       }
     }
 
-    stageProgress.restore(progress);
-    final completed = {for (final step in progress) step.name};
+    final recorded = stage.receipt!.producers;
+    stageProgress.restore(recorded);
+    final completed = {...recorded.keys};
 
     // Producers build from the commit the stage names, read once into
     // memory when anything remains to produce; each exports it into a
@@ -254,15 +227,15 @@ final class ReleaseStageCoordinator {
     final laneChains = <String, BinaryChain>{};
     final failures = <HaltKind>[];
 
-    void record(StageStep recorded) {
-      progress.add(recorded);
-      try {
-        stage.writeProgress(progress);
-        stageProgress.record(recorded);
-      } on Object {
-        progress.remove(recorded);
-        rethrow;
-      }
+    /// Records [work], which wrote its files and learned [evidence], and
+    /// fills the rows it completes.
+    void record(
+      Work work, {
+      Map<String, Object?> evidence = const {},
+      Iterable<Diagnostic> warnings = const [],
+    }) {
+      stage.record(work, evidence: evidence, warnings: warnings);
+      stageProgress.restore({work.name: stage.receipt!.producers[work.name]!});
     }
 
     /// Runs [work], a target's input; null when it is recorded, and
@@ -275,12 +248,12 @@ final class ReleaseStageCoordinator {
             .moduleFor(target.target)
             .prepare(
               TargetStageContext(
+                unit: unit,
                 tools: tools,
                 git: initialGit,
                 attach: output.report.attach,
                 stage: stage,
                 source: source,
-                priorSteps: List<StageStep>.unmodifiable(progress),
                 progress: stageProgress.handleFor(receiptName),
                 fromSource: fromSource[work.project?.name] ?? const {},
               ),
@@ -291,13 +264,13 @@ final class ReleaseStageCoordinator {
             _StageWarning(warning, target: target.id),
         ]);
         if (result case TargetStageFailure(:final diagnostic, :final unit)) {
-          _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
+          _discardUnrecorded(stage, work.outputs);
           stageProgress.fail(receiptName);
           output.problem(diagnostic, unit: unit);
           return HaltKind.beforeActing;
         }
         try {
-          record((result as TargetStageSuccess).step);
+          record(work, warnings: result.warnings);
           return null;
         } on Object catch (error) {
           stageProgress.fail(receiptName);
@@ -305,7 +278,7 @@ final class ReleaseStageCoordinator {
           return HaltKind.beforeActing;
         }
       } on Object catch (error) {
-        _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
+        _discardUnrecorded(stage, work.outputs);
         stageProgress.fail(receiptName);
         return _stageOperationProblem(
           '${target.label} stage preparation',
@@ -329,7 +302,7 @@ final class ReleaseStageCoordinator {
         );
         final chain = laneChains.putIfAbsent(
           laneName,
-          () => _chain(unit, repositoryRoot: laneSource.path),
+          () => _chain(stage, repositoryRoot: laneSource.path),
         );
         output.report.acted = true;
         stageProgress.begin(receiptName, _producerActivity(step));
@@ -343,18 +316,18 @@ final class ReleaseStageCoordinator {
             progress: stageProgress.handleFor(receiptName),
           );
         } on Object catch (error) {
-          _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
+          _discardUnrecorded(stage, step.outputs);
           stageProgress.fail(receiptName);
           _stageOperationProblem(step.summary, error);
           return HaltKind.stoppedPartway;
         }
         if (!act.ok) {
-          _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
+          _discardUnrecorded(stage, step.outputs);
           stageProgress.fail(receiptName);
           return act.halt ?? HaltKind.stoppedPartway;
         }
         try {
-          record(_captureProducerStep(stage, step, act));
+          record(step, evidence: act.evidence);
           return null;
         } on Object catch (error) {
           stageProgress.fail(receiptName);
@@ -362,7 +335,7 @@ final class ReleaseStageCoordinator {
           return HaltKind.beforeActing;
         }
       } on Object catch (error) {
-        _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
+        _discardUnrecorded(stage, step.outputs);
         stageProgress.fail(receiptName);
         return _stageOperationProblem('the ${unit.name} stage', error);
       }
@@ -431,7 +404,7 @@ final class ReleaseStageCoordinator {
       ProgressActivity(running: 'assembling', failed: 'assembly failed'),
     );
     try {
-      stage.finalize(releaseAssets: ReleaseAssets.bundleFor(unit));
+      stage.complete(release);
     } on Object catch (error) {
       stageProgress.conclude();
       output.problem(
@@ -454,61 +427,34 @@ final class ReleaseStageCoordinator {
       detail: 'staged and validated',
       show: false,
     );
-    final completedReceipt = stage.inspect().receipt!.steps;
     stageProgress
-      ..restore(completedReceipt)
+      ..restore(stage.receipt!.producers)
       ..settle(title: '${unit.name} ${unit.version} · staged');
     _showStageWarnings(unit, warnings);
     return PreparedRelease(claims: claims, signing: signing);
   }
 
-  /// Removes what an interrupted run's producers wrote but never recorded,
-  /// so they run again from a clean slate. Recorded outputs are kept.
-  void _discardUnrecordedOutputs(
-    ReleaseStage stage,
-    StageInspection inspected,
-    Set<String> declaredOutputs,
-  ) {
-    if (!inspected.validProgress && !inspected.planRecorded) return;
+  /// Removes those of [files] the receipt does not record, so the work that
+  /// writes them runs again from a clean slate: what an interrupted run
+  /// wrote, or a producer that failed. Recorded files are kept.
+  void _discardUnrecorded(Stage stage, Iterable<String> files) {
     try {
-      stage.discardUnrecordedOutputs(declaredOutputs);
+      stage.discardUnrecorded(files);
     } on Object {
-      // The producer that needs the path reports what it finds there.
+      // The original failure remains the useful diagnosis, and the producer
+      // that needs the path reports what it finds there.
     }
   }
 
-  void _discardInterruptedOutputs(
-    ReleaseStage stage,
-    Set<String> declaredOutputs,
-  ) {
-    try {
-      final inspected = stage.inspect();
-      if (inspected.receipt?.complete == false) {
-        stage.discardUnrecordedOutputs(declaredOutputs);
-      }
-    } on Object {
-      // The original producer failure remains the useful diagnosis. A later
-      // run will inspect the leftover and either recover it or replace the
-      // incomplete stage; cleanup cannot make publication less safe.
-    }
-  }
-
+  /// The warnings [receipt] keeps, each with the target its work prepares.
   List<_StageWarning> _recordedStageWarnings(
-    Iterable<StageStep> steps,
+    Receipt receipt,
     UnitRelease release,
-  ) {
-    final preparing = {
-      for (final target in release.targets)
-        if (target.preparedBy case final work?) work.name: target.id,
-    };
-    final warnings = <_StageWarning>[];
-    for (final step in steps) {
-      for (final warning in recordedTargetStageWarnings(step)) {
-        warnings.add(_StageWarning(warning, target: preparing[step.name]));
-      }
-    }
-    return warnings;
-  }
+  ) => [
+    for (final work in release.work)
+      for (final warning in receipt.warnings(work.name))
+        _StageWarning(warning, target: release.preparing(work)?.id),
+  ];
 
   /// Says [found] with the run's other warnings, once every unit is staged.
   void _showStageWarnings(ResolvedUnit unit, Iterable<_StageWarning> found) {
@@ -562,29 +508,10 @@ final class ReleaseStageCoordinator {
     return HaltKind.stoppedPartway;
   }
 
-  StageStep _captureProducerStep(
-    ReleaseStage stage,
-    Work step,
-    LocalProducerOutcome outcome,
-  ) {
-    return StageStep(
-      name: step.name,
-      outputs: [
-        for (final artifact in outcome.outputs)
-          StageArtifact.capture(
-            stage: stage.directory,
-            path: artifact.path,
-            type: artifact.type,
-          ),
-      ],
-      evidence: outcome.evidence,
-    );
-  }
-
   /// Resolves unit-scoped claims and signing identity before producers run.
   Future<({ReleaseSigningContext? value})?> _prepareStageInputs(
     ResolvedUnit unit,
-    StageInspection inspected,
+    StageCheck check,
   ) async {
     final live = output.progressBoard(
       '${unit.name} ${unit.version} · preparing stage',
@@ -600,7 +527,7 @@ final class ReleaseStageCoordinator {
     );
     row.handle.begin(CommonProgressActivities.checking);
     ReleaseSigningContext? signing;
-    if (!inspected.reusable) {
+    if (!check.reusable) {
       final macosProject = _macosProject(unit);
       if (macosProject != null) {
         row.handle.begin(
@@ -903,11 +830,11 @@ final class ReleaseStageCoordinator {
       case StepKind.archive:
         return chain.archiveStep(step, project);
       case StepKind.buildAssets:
-        final stage = stageFor(unit).directory;
+        final stage = chain.stage;
         return AssetBuild(
           tools: tools,
           output: output,
-          workspace: stage.workspace,
+          stage: stage,
           sourceRoot: chain.repositoryRoot,
           // Beside the stages rather than in one, so it outlives them.
           cacheDirectory: [
@@ -922,7 +849,7 @@ final class ReleaseStageCoordinator {
           project,
           progress: progress,
           environment: {
-            'RK_SOURCE_COMMIT': stage.identity.headCommit,
+            'RK_SOURCE_COMMIT': stage.id.commit,
             if (initialGit.originUrl case final repository?)
               'RK_REPOSITORY': repository,
             'RK_VERSION': project.version.canonical,
@@ -936,18 +863,15 @@ final class ReleaseStageCoordinator {
     }
   }
 
-  BinaryChain _chain(ResolvedUnit unit, {required String repositoryRoot}) {
-    final stage = stageFor(unit);
-    return BinaryChain(
-      tools: tools,
-      output: output,
-      workspace: stage.directory.workspace,
-      repositoryRoot: repositoryRoot,
-      capabilities: capabilities,
-      compilerExecutable: stage.sdk.executable,
-      stage: stage,
-    );
-  }
+  BinaryChain _chain(Stage stage, {required String repositoryRoot}) =>
+      BinaryChain(
+        tools: tools,
+        output: output,
+        stage: stage,
+        repositoryRoot: repositoryRoot,
+        capabilities: capabilities,
+        compilerExecutable: stage.sdk.executable,
+      );
 
   ProgressActivity _producerActivity(Work step) => switch (step.kind) {
     StepKind.build => ProgressActivity(
@@ -983,15 +907,15 @@ final class UnitStaging {
   UnitStaging._({
     required this.release,
     required this.stage,
-    required this.inspected,
+    required this.check,
     required this.claims,
     required this.fromSource,
   });
 
   final UnitRelease release;
   ResolvedUnit get unit => release.unit;
-  final ReleaseStage stage;
-  final StageInspection inspected;
+  final Stage stage;
+  final StageCheck check;
   final List<TargetClaim> claims;
   final Map<String, Map<String, String>> fromSource;
 
@@ -1009,10 +933,4 @@ final class UnitStaging {
           work.kind != StepKind.completeStage)
         work,
   ];
-
-  late final Map<String, Set<String>> outputsByProducer = {
-    for (final work in release.work)
-      if (work.kind != StepKind.completeStage)
-        work.name: work.outputs.keys.toSet(),
-  };
 }

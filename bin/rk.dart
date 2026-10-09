@@ -33,9 +33,8 @@ import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/release_source.dart';
-import 'package:rk/src/engine/stage_store.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/targets/catalog.dart';
@@ -548,11 +547,10 @@ void _reportTimings(
   if (!File('$root/release.toml').existsSync()) return;
   final directory = '$root/.rk';
   final trace = '$directory/timings.json';
-  // As the stage store does, rk writes only into a .rk that is a real
-  // directory, and never through a link: either could point outside the
-  // repository.
+  // rk writes the trace only as a plain file of its own, never through a
+  // link that could point outside the repository.
   final unsafe = switch ((
-    FileSystemEntity.typeSync(directory, followLinks: false),
+    FileSystemEntity.typeSync(directory),
     FileSystemEntity.typeSync(trace, followLinks: false),
   )) {
     (FileSystemEntityType.notFound, _) => null,
@@ -683,7 +681,7 @@ Future<int> _clean(
       WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   return CleanCommand(
-    store: StageStore(root),
+    stages: Stages(root),
     output: output,
     yes: yes,
     confirm: interactive && stdin.hasTerminal && stdout.hasTerminal
@@ -752,10 +750,11 @@ Future<int> _release(
   );
   // A container runtime is asked for only when a smoke test needs one.
   final capabilities = HostCapabilities.detect();
-  StageStoreLock? stageLock;
+  final stages = Stages(source.root);
+  StagesLock? stageLock;
   try {
     try {
-      stageLock = StageStore(source.root).acquireForMutation();
+      stageLock = stages.lock();
     } on StageStoreBusy catch (error) {
       output.problem(_stageStoreProblem(error));
       return ExitCodes.refused;
@@ -766,11 +765,6 @@ Future<int> _release(
     final tree = source.tree;
     final git = source.git;
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
-    final stages = ReleaseStages(
-      source: tree,
-      git: git,
-      resolution: resolution,
-    );
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
       resolution: resolution,
@@ -782,7 +776,6 @@ Future<int> _release(
         git: git,
         tools: targetTools,
         repository: git.originUrl,
-        stageFor: stages.call,
         targets: targets,
       ),
       tools: const SystemTools(),
@@ -802,7 +795,7 @@ Future<int> _release(
       allowInteractiveTools:
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       stageOnly: stageOnly,
-      stageFor: stages.call,
+      stageFor: (unit) => stages.of(unit, git, tree),
     ).run(only: unit);
   } finally {
     stageLock?.close();
@@ -906,11 +899,7 @@ Future<int> _status(
   final git = source.git;
   try {
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
-    final stages = ReleaseStages(
-      source: tree,
-      git: git,
-      resolution: resolution,
-    );
+    final stages = Stages(source.root);
     final targetTools = SystemTools(
       timeout: const Duration(minutes: 2),
       cancellation: cancellation,
@@ -925,10 +914,10 @@ Future<int> _status(
         git: git,
         tools: targetTools,
         repository: git.originUrl,
-        stageFor: stages.call,
         targets: targets,
       ),
       output: output,
+      stageFor: (unit) => stages.of(unit, git, tree),
     );
     return await command.run(only: unit);
   } finally {

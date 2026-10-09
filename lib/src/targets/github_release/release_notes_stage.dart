@@ -4,7 +4,6 @@ import '../../engine/changelog.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/resolve.dart';
 import '../../engine/source_tree.dart';
-import '../../engine/stage_receipt.dart';
 import '../../engine/unit_release.dart';
 import '../target_module.dart';
 
@@ -18,15 +17,16 @@ Future<TargetStageOutcome> prepareReleaseNotes(
   TargetStageContext context,
   Work work,
 ) async {
-  final notes = _releaseNotes(context.stage.unit, context.source);
+  final unit = context.unit;
+  final notes = _releaseNotes(unit, context.source);
   if (notes == null) {
     return TargetStageFailure(
       Diagnostic(
         code: 'RK-CHG-003',
         message:
-            'the changelog entries for ${context.stage.unit.version} '
+            'the changelog entries for ${unit.version} '
             'could not be extracted',
-        source: context.stage.unit.location,
+        source: unit.location,
         remedy:
             'validation saw a heading for it; the file changed since, '
             'or this is a bug in rk',
@@ -38,29 +38,18 @@ Future<TargetStageOutcome> prepareReleaseNotes(
       Diagnostic(
         code: 'RK-CHG-004',
         message:
-            'the changelog entries for ${context.stage.unit.version} '
+            'the changelog entries for ${unit.version} '
             'are empty',
-        source: context.stage.unit.location,
+        source: unit.location,
         remedy:
             'the release body is this entry — write what changed '
-            'under each ${context.stage.unit.version} heading',
+            'under each ${unit.version} heading',
       ),
     );
   }
 
-  context.workspace.write('release-notes.md', utf8.encode(notes));
-  return TargetStageSuccess(
-    StageStep(
-      name: work.name,
-      outputs: [
-        StageArtifact.capture(
-          stage: context.stage.directory,
-          path: 'release-notes.md',
-          type: 'notes',
-        ),
-      ],
-    ),
-  );
+  context.stage.write(work.outputs.single, utf8.encode(notes));
+  return TargetStageSuccess();
 }
 
 String? _releaseNotes(ResolvedUnit unit, SourceTree source) {

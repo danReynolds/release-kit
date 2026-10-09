@@ -4,8 +4,8 @@ import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
 import '../engine/publish_target.dart';
-import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
+import '../engine/stage.dart';
 import '../engine/tools.dart';
 import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
@@ -46,7 +46,7 @@ final class PublicationPlan {
   final Map<String, Inspection> states;
   final Map<String, ReleaseAction> actions;
   final PreparedRelease prepared;
-  final ReleaseStage stage;
+  final Stage stage;
   final bool recoversWithoutStage;
 
   /// The targets this release still publishes: those the snapshot taken
@@ -193,7 +193,7 @@ final class ReleasePublicationCoordinator {
       _showAuthorization(
         plan.unit,
         plan.remaining,
-        stage: plan.stage,
+        unprovable: _unprovable(plan),
         signing: plan.prepared.signing,
         claims: plan.prepared.claims,
       );
@@ -212,7 +212,7 @@ final class ReleasePublicationCoordinator {
         for (final plan in asking)
           [
             '${plan.unit.name} ${plan.unit.version}',
-            'stage ${plan.stage.directory.identity.id}',
+            'stage ${plan.stage.id.id}',
             ...plan.remaining.map(
               (target) =>
                   '  ${target.kindLabel}: '
@@ -328,11 +328,8 @@ final class ReleasePublicationCoordinator {
           if (!activeTargets.add(target.target)) continue;
           active[target.id] = _publishPublicTarget(
             target: target,
-            unit: unit,
-            publicActions: publicActions,
+            plan: plan,
             releaseProgress: releaseProgress,
-            stage: plan.stage,
-            recoversWithoutStage: plan.recoversWithoutStage,
           );
         }
       }
@@ -467,17 +464,23 @@ final class ReleasePublicationCoordinator {
 
   Future<_PublicTargetCompletion> _publishPublicTarget({
     required Target target,
-    required ResolvedUnit unit,
-    required Map<String, ReleaseAction> publicActions,
+    required PublicationPlan plan,
     required TargetReleaseProgress releaseProgress,
-    required ReleaseStage stage,
-    required bool recoversWithoutStage,
   }) async {
+    final PublicationPlan(
+      :unit,
+      actions: publicActions,
+      :stage,
+      :recoversWithoutStage,
+    ) = plan;
+    // What the act publishes from: the complete stage, or nothing when
+    // what is left finishes from public inputs alone.
+    final staged = recoversWithoutStage ? null : stage;
     final module = inspector.targets.moduleFor(target.target);
     releaseProgress.begin(target, CommonProgressActivities.checking);
     // The target is read again right before its act: another run or person
     // may have published it since the snapshot.
-    var state = await inspector.inspect(target, unit);
+    var state = await inspector.inspect(target, unit, stage: staged);
     output.step(
       target,
       verdict: state.verdict,
@@ -514,7 +517,7 @@ final class ReleasePublicationCoordinator {
                   'stage',
               remedy:
                   'its public inputs changed. Re-run so rk can inspect the '
-                  'release again; restore ${stage.directory.path} if the '
+                  'release again; restore ${stage.path} if the '
                   'target still needs the original bytes.',
             ),
           ],
@@ -525,8 +528,8 @@ final class ReleasePublicationCoordinator {
     // What the act publishes is read from the stage, so its recorded bytes
     // are checked again first. Within a run this costs a stat per file.
     if (!recoversWithoutStage) {
-      final inspected = stage.inspect();
-      if (!inspected.reusable) {
+      final checked = stage.check(plan.release);
+      if (!checked.reusable) {
         releaseProgress.fail(
           target,
           activity: CommonProgressActivities.checking,
@@ -542,7 +545,7 @@ final class ReleasePublicationCoordinator {
                     'the reviewed release stage changed before '
                     '${target.summary}',
                 remedy:
-                    '${inspected.issues.join('\n')}\n'
+                    '${checked.lines.join('\n')}\n'
                     'rebuild it explicitly: rk stage ${unit.name}',
               ),
             ],
@@ -559,7 +562,7 @@ final class ReleasePublicationCoordinator {
     final releaseContext = TargetReleaseContext(
       reads: inspector.targetReads,
       tools: tools,
-      stage: stage,
+      stage: staged,
       progress: releaseProgress.handle(target),
       runInteractive: allowInteractiveTools
           ? releaseProgress.interactive(tools)
@@ -719,21 +722,20 @@ final class ReleasePublicationCoordinator {
   HaltKind _strongerHalt(HaltKind left, HaltKind right) =>
       left.index >= right.index ? left : right;
 
-  List<({String platform, String reason})> _unprovable(ReleaseStage stage) {
-    final unprovable = <({String platform, String reason})>[];
-    final inspected = stage.inspect();
-    final receipt = inspected.reusable ? inspected.receipt : null;
-    if (receipt == null) return unprovable;
-    for (final step in receipt.steps) {
-      final parts = step.name.split(':');
-      if (parts.length != 3 || parts.first != 'build') continue;
-      final smoke = step.evidence['smoke'];
-      if (smoke is! Map || smoke['status'] != 'not-executed') continue;
-      final reason = smoke['reason'];
-      if (reason is! String || reason.isEmpty) continue;
-      unprovable.add((platform: parts.last, reason: reason));
-    }
-    return unprovable;
+  /// The platforms [plan]'s stage built and could not run, from what its
+  /// receipt records: a reused stage may have been smoke-tested elsewhere.
+  List<({String platform, String reason})> _unprovable(PublicationPlan plan) {
+    final checked = plan.stage.check(plan.release);
+    if (!checked.reusable) return const [];
+    return [
+      for (final work in plan.release.work)
+        if (work.kind == StepKind.build)
+          if (checked.receipt!.producers[work.name]?['smoke'] case {
+            'status': 'not-executed',
+            'reason': final String reason,
+          } when reason.isNotEmpty)
+            (platform: work.platform!, reason: reason),
+    ];
   }
 
   /// A row for each of [remaining], saying which are permanent and which
@@ -809,7 +811,7 @@ final class ReleasePublicationCoordinator {
   void _showAuthorization(
     ResolvedUnit unit,
     List<Target> remaining, {
-    required ReleaseStage stage,
+    required List<({String platform, String reason})> unprovable,
     required ReleaseSigningContext? signing,
     required List<TargetClaim> claims,
   }) {
@@ -850,9 +852,7 @@ final class ReleasePublicationCoordinator {
     );
 
     // A weaker build proof belongs on the authorization surface as well as in
-    // its durable record. Read the completed receipt rather than this host's
-    // capability: a reused stage may have been smoke-tested elsewhere.
-    final unprovable = _unprovable(stage);
+    // its durable record.
     if (unprovable.isNotEmpty) {
       output.blank();
       output.heading('Warnings');

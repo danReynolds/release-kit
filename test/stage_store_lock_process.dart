@@ -1,19 +1,19 @@
 import 'dart:io';
 
-import 'package:rk/src/engine/stage_store.dart';
+import 'package:rk/src/engine/stage.dart';
 
 void main(List<String> args) {
-  final store = StageStore(args.first);
+  final stages = Stages(args.first);
   if (args.length == 2 && args.last == 'try') {
     try {
-      store.acquireForMutation().close();
+      stages.lock().close();
       stdout.writeln('acquired');
     } on StageStoreBusy {
       stdout.writeln('busy');
     }
     return;
   }
-  final lock = store.acquireForMutation();
+  final lock = stages.lock();
   stdout.writeln('locked');
   stdin.readLineSync();
   lock.close();

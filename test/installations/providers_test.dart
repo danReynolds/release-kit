@@ -132,7 +132,7 @@ void main() {
         tag: 'v1.1.0',
         commit: 'a' * 40,
         artifacts: [
-          ReleaseManifestArtifact(
+          (
             name: name,
             type: 'archive',
             size: archive.length,

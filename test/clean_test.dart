@@ -2,9 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/commands/clean.dart';
+import 'package:rk/src/engine/receipt.dart';
 import 'package:rk/src/engine/stage.dart';
-import 'package:rk/src/engine/stage_receipt.dart';
-import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/report.dart';
 import 'package:test/test.dart';
@@ -66,7 +65,7 @@ void main() {
 
   test('the prompt discloses recovery risk before accepting yes', () async {
     final repository = Directory('${scratch.path}/clean-prompt')..createSync();
-    final store = StageStore(repository.path);
+    final store = Stages(repository.path);
     Directory('${store.path}/only').createSync(recursive: true);
     final text = StringBuffer();
     String? prompt;
@@ -77,7 +76,7 @@ void main() {
     );
 
     final code = await CleanCommand(
-      store: store,
+      stages: store,
       output: output,
       yes: false,
       confirm: (value) async {
@@ -97,7 +96,7 @@ void main() {
     () async {
       final repository = Directory('${scratch.path}/clean-inventory')
         ..createSync();
-      final store = StageStore(repository.path);
+      final store = Stages(repository.path);
       final completed = _writeReceipt(store, complete: true);
       final incomplete = _writeReceipt(store, complete: false);
       final orphan = Directory('${store.path}/orphan')..createSync();
@@ -111,7 +110,7 @@ void main() {
       );
 
       final code = await CleanCommand(
-        store: store,
+        stages: store,
         output: output,
         yes: false,
         confirm: (_) async {
@@ -134,16 +133,16 @@ void main() {
       ).run();
 
       expect(code, ExitCodes.refused);
-      expect(store.inventory(), hasLength(4));
+      expect(store.list(), hasLength(4));
       expect(orphan.existsSync(), isTrue);
       expect(broken.existsSync(), isTrue);
       expect(output.report.acted, isFalse);
     },
   );
 
-  test('inventory does not follow stage or receipt symlinks', () async {
+  test('inventory does not follow a stage that is a link', () async {
     final repository = Directory('${scratch.path}/clean-links')..createSync();
-    final store = StageStore(repository.path);
+    final store = Stages(repository.path);
     Directory(store.path).createSync(recursive: true);
     final outside = Directory('${scratch.path}/outside')..createSync();
     final outsideReceipt = File('${outside.path}/stage.json')
@@ -154,7 +153,7 @@ void main() {
     final text = StringBuffer();
 
     final code = await CleanCommand(
-      store: store,
+      stages: store,
       output: Output(sink: text.write, isTerminal: false),
       yes: false,
       confirm: (_) async => 'no',
@@ -162,13 +161,11 @@ void main() {
 
     expect(code, ExitCodes.refused);
     expect(text.toString(), contains('symbolic link · not followed'));
-    expect(
-      text.toString(),
-      contains('stage receipt is not a regular file · not read'),
-    );
+    // rk trusts its own stage directory: a receipt there is read as one.
+    expect(text.toString(), contains('unreadable stage receipt'));
     expect(text.toString(), isNot(contains('do not read or remove')));
     expect(outsideReceipt.readAsStringSync(), 'do not read or remove');
-    expect(store.inventory(), hasLength(2));
+    expect(store.list(), hasLength(2));
   });
 
   test(
@@ -176,7 +173,7 @@ void main() {
     () async {
       final repository = Directory('${scratch.path}/clean-locked-preview')
         ..createSync();
-      final store = StageStore(repository.path);
+      final store = Stages(repository.path);
       Directory('${store.path}/only').createSync(recursive: true);
       final output = Output(
         sink: (_) {},
@@ -185,7 +182,7 @@ void main() {
       );
 
       final code = await CleanCommand(
-        store: store,
+        stages: store,
         output: output,
         yes: false,
         confirm: (_) async {
@@ -208,7 +205,7 @@ void main() {
 
   test('an entry changed during review is left alone', () async {
     final repository = Directory('${scratch.path}/clean-partial')..createSync();
-    final store = StageStore(repository.path);
+    final store = Stages(repository.path);
     Directory('${store.path}/a-first').createSync(recursive: true);
     final changed = File('${store.path}/b-changed')
       ..createSync()
@@ -220,7 +217,7 @@ void main() {
     );
 
     final code = await CleanCommand(
-      store: store,
+      stages: store,
       output: output,
       yes: false,
       confirm: (_) async {
@@ -234,7 +231,7 @@ void main() {
     // What was shown is removed; what changed is not what was shown.
     expect(code, 1);
     expect(json['cleanup'], {
-      'root': store.repositoryRoot,
+      'root': store.root,
       'path': '.rk/work/stages',
       'found': 2,
       'removed': 1,
@@ -264,24 +261,23 @@ void main() {
   });
 }
 
-StageEntry _writeReceipt(StageStore store, {required bool complete}) {
+StageEntry _writeReceipt(Stages store, {required bool complete}) {
   final plan = <String, Object?>{
     'unit': {'name': 'tool', 'version': '1.2.3'},
   };
-  final identity = StageIdentity.forPlan(
-    headCommit: complete
+  final id = StageId.of(
+    commit: complete
         ? '1111111111111111111111111111111111111111'
         : '2222222222222222222222222222222222222222',
-    headTree: '3333333333333333333333333333333333333333',
-    resolvedPlan: plan,
-  );
-  final directory = Directory('${store.path}/${identity.id}')
-    ..createSync(recursive: true);
-  final receipt = StageReceipt(
-    identity: identity,
+    tree: '3333333333333333333333333333333333333333',
     plan: plan,
-    steps: [if (complete) StageStep(name: 'complete-stage', outputs: const [])],
   );
+  final directory = Directory('${store.path}/${id.id}')
+    ..createSync(recursive: true);
+  final started = Receipt(stage: id, plan: plan);
+  final receipt = complete
+      ? started.recording(Receipt.barrier, const {}, const {})
+      : started;
   File('${directory.path}/stage.json').writeAsStringSync(receipt.encode());
-  return StageEntry(name: identity.id, type: FileSystemEntityType.directory);
+  return StageEntry(name: id.id, type: FileSystemEntityType.directory);
 }

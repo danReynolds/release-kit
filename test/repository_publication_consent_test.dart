@@ -8,10 +8,8 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/publish_target.dart';
-import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/unit_release.dart';
@@ -139,18 +137,13 @@ final class _Fixture {
   String? answer = 'yes';
   late final output = Output(sink: text.write, isTerminal: false);
   late final tools = _Tools(this);
-  late final stages = ReleaseStages(
-    source: source,
-    git: git,
-    resolution: resolution,
-  );
+  late final stages = Stages(git.root);
   late final inspector = Inspector(
     registry: registry,
     pubDev: registry,
     git: git,
     tools: tools,
     repository: git.originUrl,
-    stageFor: stages.call,
   );
   late final coordinator = ReleasePublicationCoordinator(
     inspector: inspector,
@@ -171,46 +164,31 @@ final class _Fixture {
       calls.where((call) => call == 'session').toList();
 
   Future<void> prepare(ResolvedUnit unit) async {
-    final stage = stages(unit);
-    final steps = <StageStep>[];
-    stage.writeProgress(steps);
-    for (final project in unit.projects.where(
-      (project) => project.publish.contains(PublishTarget.pubDev),
-    )) {
-      final path = ReleaseAssets.pubArchivePath(project);
-      final bytes = ArchiveBuilder.gzip(
-        ArchiveBuilder.tar([
-          ArchiveEntry(
-            name: 'pubspec.yaml',
-            bytes: utf8.encode(source.read('${project.name}/pubspec.yaml')!),
-          ),
-        ]),
-      );
-      stage.directory.writeBytesAtomically(path, bytes);
-      final name = 'pub-archive:${project.name}';
-      steps.add(
-        StageStep(
-          name: name,
-          outputs: [
-            StageArtifact.capture(
-              stage: stage.directory,
-              path: path,
-              type: 'pub-archive',
-            ),
-          ],
-          evidence: const {'package_archive': 'staged'},
-        ),
-      );
-      stage.writeProgress(steps);
-    }
-    stage.finalize(releaseAssets: const []);
-    expect(stage.inspect().issues, isEmpty);
+    final stage = stages.of(unit, git, source)..begin();
     final release = UnitRelease.derive(
       unit,
       resolution,
       repository: git.originUrl,
       problems: Diagnostics(),
     );
+    for (final work in release.work) {
+      if (work == release.barrier) continue;
+      final project = work.project!;
+      stage.write(
+        ReleaseAssets.pubArchivePath(project),
+        ArchiveBuilder.gzip(
+          ArchiveBuilder.tar([
+            ArchiveEntry(
+              name: 'pubspec.yaml',
+              bytes: utf8.encode(source.read('${project.name}/pubspec.yaml')!),
+            ),
+          ]),
+        ),
+      );
+      stage.record(work, evidence: const {'package_archive': 'staged'});
+    }
+    stage.complete(release);
+    expect(stage.check(release).problems, isEmpty);
     plans.add(
       PublicationPlan(
         release: release,
@@ -248,9 +226,9 @@ final class _Fixture {
     final plan = plans.singleWhere((plan) => plan.unit.name == name);
     final project = plan.unit.projects.single;
     registry.published[name] = ['0.1.0'];
-    registry.archives['$name@0.1.0'] = File(
-      plan.stage.directory.resolve(ReleaseAssets.pubArchivePath(project)),
-    ).readAsBytesSync();
+    registry.archives['$name@0.1.0'] = plan.stage.readBytes(
+      ReleaseAssets.pubArchivePath(project),
+    )!;
     registry.forget(name);
   }
 }
