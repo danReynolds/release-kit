@@ -230,11 +230,12 @@ final class StageSourceSnapshot implements SourceTree {
   /// file includes by a relative path. Exporting into a directory that
   /// already holds part of this source adds the rest.
   ///
-  /// An export that would hold a submodule refuses before writing anything,
-  /// with a [StageSourceRefusal] naming the submodule and [reader], the
-  /// project built from the export: the commit records the submodule's
-  /// commit and none of its files, so leaving them out would stage, and
-  /// publish, an incomplete package.
+  /// An export that would hold what this commit does not refuses before
+  /// writing anything, with a [StageSourceRefusal] naming it and [reader],
+  /// the project built from the export: a submodule, whose commit this
+  /// commit records and none of its files, or a link that leads out of this
+  /// commit, to a file on this machine. Either would stage, and publish,
+  /// something other than the commit.
   void export(String root, {bool Function(String path)? only, String? reader}) {
     final selected = _closure(only ?? (_) => true, reader);
     final modes = <String, String>{};
@@ -263,7 +264,8 @@ final class StageSourceSnapshot implements SourceTree {
   /// everything they lead to: what a link points to (a file, another link,
   /// a submodule, or everything in a directory), and what an analysis
   /// options file includes by a relative path, as the analyzer reads it.
-  /// One that holds a submodule refuses (see [export]).
+  /// One that holds a submodule or a link out of this commit refuses (see
+  /// [export]).
   Set<String> _closure(bool Function(String path) only, String? reader) {
     final selected = <String>{};
     final options = <String>{};
@@ -317,6 +319,11 @@ final class StageSourceSnapshot implements SourceTree {
         throw _withoutSubmodule(submodule, reader);
       }
     }
+    for (final MapEntry(key: link, value: target) in _links.entries) {
+      if (selected.contains(link) && _linkTarget(link) == null) {
+        throw _outOfCommit(link, target, reader);
+      }
+    }
     return selected;
   }
 
@@ -352,6 +359,23 @@ StageSourceRefusal _withoutSubmodule(String submodule, String? reader) =>
             'the build needs into this repository instead, or move the '
             'submodule out of the Dart packages; a project\'s own build reads '
             'the whole repository.',
+      ),
+    );
+
+StageSourceRefusal _outOfCommit(String link, String target, String? reader) =>
+    StageSourceRefusal(
+      Diagnostic(
+        code: 'RK-STAGE-003',
+        message: reader == null
+            ? '$link leads out of the commit, to $target'
+            : '$reader would be staged with $link, which leads out of the '
+                  'commit to $target',
+        remedy:
+            'a stage is made from this repository\'s commit, which holds the '
+            'link and not what it leads to: the build would read this '
+            'machine\'s file instead. Commit the file in place of the link, '
+            'or link to a file in the repository by a relative path; a '
+            'project\'s own build reads the whole repository.',
       ),
     );
 

@@ -81,9 +81,11 @@ published finishes with 0.1.14.
   of Fleury peaks at about 140 MB, down from 225 MB.
 - A repository that tracks a symbolic link, such as `CLAUDE.md -> AGENTS.md`,
   or a submodule stages. A link is exported as a link, with what it leads to.
-  A submodule no build reads is left out, as `git archive` does; one a Dart
-  package holds or links to, or any in a repository whose project runs its
-  own build, refuses with `RK-STAGE-003`, naming it.
+  A submodule, whose files the commit does not hold, or a link that leads out
+  of the commit, such as to an absolute path, refuses with `RK-STAGE-003`,
+  naming it, when a Dart package holds or links to it, or anywhere in a
+  repository whose project runs its own build; one no build reads is left
+  out, as `git archive` leaves out a submodule.
 - Staging offline reports that Pub could not reach the registry
   (`RK-PUB-019`), not validation errors to fix.
 - A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)

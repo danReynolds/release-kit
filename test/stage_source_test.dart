@@ -283,6 +283,65 @@ void main() {
     });
   });
 
+  group('a link out of the commit', () {
+    Matcher refusal(String link) => isA<StageSourceRefusal>().having(
+      (refusal) => refusal.diagnostic,
+      'diagnostic',
+      isA<Diagnostic>()
+          .having((diagnostic) => diagnostic.code, 'code', 'RK-STAGE-003')
+          .having(
+            (diagnostic) => diagnostic.message,
+            'message',
+            allOf(contains(link), contains('app')),
+          ),
+    );
+
+    test('inside what an export holds refuses it, naming the link', () async {
+      // Pub would follow either one to this machine's own file.
+      for (final target in ['/Users/me/shared/notes.md', '../../../notes.md']) {
+        final snapshot = await _committed(
+          {'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n'},
+          links: {'packages/app/EXTRA.md': target},
+        );
+        final root = Directory.systemTemp.createTempSync('rk-source-out-');
+        addTearDown(() => root.deleteSync(recursive: true));
+
+        expect(
+          () => snapshot.export(
+            root.path,
+            only: snapshot.dartBuildInputs('packages/app'),
+            reader: 'app',
+          ),
+          throwsA(refusal('packages/app/EXTRA.md')),
+          reason: target,
+        );
+        expect(_filesUnder(root), isEmpty, reason: 'refused before writing');
+      }
+    });
+
+    test('that no lane reads is left out', () async {
+      final snapshot = await _committed(
+        {'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n'},
+        links: {'docs/latest': '/var/www/docs'},
+      );
+      final root = Directory.systemTemp.createTempSync('rk-source-out-');
+      addTearDown(() => root.deleteSync(recursive: true));
+
+      snapshot.export(
+        root.path,
+        only: snapshot.dartBuildInputs('packages/app'),
+        reader: 'app',
+      );
+
+      expect(_filesUnder(root), ['packages/app/pubspec.yaml']);
+      expect(
+        () => snapshot.export(root.path, reader: 'app'),
+        throwsA(refusal('docs/latest')),
+        reason: 'a project\'s own build reads the whole repository',
+      );
+    });
+  });
+
   test('committed source keeps Git modes and ignores worktree edits', () async {
     final root = Directory.systemTemp.createTempSync('rk-source-authority-');
     addTearDown(() => root.deleteSync(recursive: true));
