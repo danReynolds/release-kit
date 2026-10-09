@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/engine/config.dart';
@@ -52,7 +53,7 @@ publish = ["pub.dev"]
     expect(source.inRepository, isTrue);
     final unit = read.resolution.unit('tool')!;
     expect(unit.version.canonical, '1.0.0');
-    expect(unit.projects.single.changelog, '## 1.0.0\n');
+    expect(unit.projects.single.changelog?.text, '## 1.0.0\n');
     expect(source.git.stagingProblem(), isNull);
   });
 
@@ -120,22 +121,63 @@ publish = ["pub.dev"]
           await (await ReleaseSource.open(root.path)).readConfig()
               as ConfigResolved;
       expect(
-        read.resolution.unit('a')!.projects.single.changelog,
+        read.resolution.unit('a')!.projects.single.changelog?.text,
         '## 1.0.0\n',
       );
 
-      // One that leads out of the commit is refused, as a stage refuses it.
+      // One that leads out of the commit cannot be read, as a stage cannot
+      // read it, which its own unit is told.
       Link('${root.path}/packages/a/CHANGELOG.md')
         ..deleteSync()
         ..createSync('/etc/hosts');
       git(['commit', '-qam', 'out']);
-      final refused =
+      final out =
           await (await ReleaseSource.open(root.path)).readConfig()
-              as ConfigProblems;
-      expect(refused.problems.single.code, 'RK-SRC-003');
-      expect(refused.problems.single.remedy, contains('symbolic link'));
+              as ConfigResolved;
+      final changelog = out.resolution.unit('a')!.projects.single.changelog!;
+      expect(changelog.text, isNull);
+      expect(changelog.error!.reason, contains('symbolic link'));
     },
   );
+
+  test('a changelog that cannot be read is its own unit\'s problem', () async {
+    _write(root, 'packages/a/pubspec.yaml', 'name: a\nversion: 1.0.0\n');
+    File(
+      '${root.path}/packages/a/CHANGELOG.md',
+    ).writeAsBytesSync(latin1.encode('## 1.0.0\n- caf\u00e9\n'));
+    _write(root, 'release.toml', '''
+schema = 2
+
+[release.tool]
+publish = ["pub.dev"]
+
+[release.a]
+path = "packages/a"
+publish = ["pub.dev"]
+''');
+    Future<void> expectRead(String where) async {
+      final read =
+          await (await ReleaseSource.open(root.path)).readConfig()
+              as ConfigResolved;
+      final changelogs = {
+        for (final unit in read.resolution.units)
+          unit.name: unit.projects.single.changelog!,
+      };
+      expect(changelogs['tool']!.text, '## 1.0.0\n', reason: where);
+      expect(changelogs['a']!.text, isNull, reason: where);
+      expect(
+        changelogs['a']!.error!.reason,
+        'it is not UTF-8 text',
+        reason: where,
+      );
+    }
+
+    await expectRead('outside Git');
+    commitAll();
+    await expectRead('at the commit');
+    _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.0.0\n# edited\n');
+    await expectRead('in the working tree');
+  });
 
   test('installing reads no changelog: a link to one is never refused', () {
     if (Platform.isWindows) return;
@@ -148,6 +190,10 @@ publish = ["pub.dev"]
       Diagnostics(),
     )!;
 
+    expect(
+      Manifests.pathsFor(config, releasing: false),
+      isNot(contains('CHANGELOG.md')),
+    );
     final installing = Resolution.resolve(
       config,
       tree,
@@ -155,9 +201,11 @@ publish = ["pub.dev"]
       releasing: false,
     );
     expect(installing!.unit('tool')!.projects.single.changelog, isNull);
+    // A release reads it, and its unit is told it cannot.
+    final releasing = Resolution.resolve(config, tree, Diagnostics())!;
     expect(
-      () => Resolution.resolve(config, tree, Diagnostics()),
-      throwsA(isA<SourceUnreadable>()),
+      releasing.unit('tool')!.projects.single.changelog!.error!.reason,
+      contains('symbolic link'),
     );
   });
 

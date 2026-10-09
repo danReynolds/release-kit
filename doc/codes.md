@@ -44,7 +44,7 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-CHG-001` | the changelog has no entry for this version, or there is no changelog | `lib/src/engine/changelog.dart` |
+| `RK-CHG-001` | there is no changelog, rk cannot read it, or it has no entry for this version | `lib/src/engine/changelog.dart` |
 | `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release/release_notes_stage.dart` |
 | `RK-CHG-004` | the changelog entry for ${project.version} is empty | `lib/src/targets/github_release/release_notes_stage.dart` |
 

@@ -106,7 +106,7 @@ final class ReleaseSource {
       if (parsed != null) {
         final resolution = Resolution.fromManifests(
           parsed,
-          await read(Manifests.pathsFor(parsed)),
+          await read(Manifests.pathsFor(parsed, releasing: releasing)),
           diagnostics,
           releasing: releasing,
         );
@@ -144,50 +144,62 @@ final class ReleaseSource {
 /// release.toml and every declared project's pubspec.yaml, Cargo.toml and
 /// CHANGELOG.md, read together from one source.
 ///
-/// A file that is there and could not be read is refused only when it is
-/// asked for: a project with a pubspec never reads the Cargo.toml beside it.
+/// A file that is there and could not be read is refused only when its
+/// text is asked for: a project with a pubspec never reads the Cargo.toml
+/// beside it, and a changelog is checked on its own unit.
 final class Manifests {
-  Manifests._(this._texts, this._present);
+  Manifests._(this._read, this._present);
 
-  final Map<String, String? Function()> _texts;
+  final Map<String, SourceText> _read;
   final Set<String> _present;
+
+  /// The file at [path] as it was read.
+  SourceText read(String path) =>
+      _read[path] ?? (throw ArgumentError('$path was not read'));
 
   /// The text of the file at [path], or null when there is none.
   ///
   /// Throws [SourceUnreadable] for a file that is there and could not be
   /// read.
-  String? text(String path) =>
-      (_texts[path] ?? (throw ArgumentError('$path was not read')))();
+  String? text(String path) {
+    final (:text, :error) = read(path);
+    return error == null ? text : throw error;
+  }
 
   /// Whether anything is at [path], a file or a directory.
   bool exists(String path) => _present.contains(path);
 
   /// What resolving [config] reads: each project's directory and the
-  /// manifests and changelog in it.
-  static List<String> pathsFor(ReleaseConfig config) => [
-    for (final unit in config.units)
-      for (final project in unit.projects) ...[
-        project.path,
-        for (final name in const ['pubspec.yaml', 'Cargo.toml', 'CHANGELOG.md'])
-          project.path == '.' ? name : '${project.path}/$name',
-      ],
-  ];
+  /// manifests in it, with its changelog when [releasing].
+  static List<String> pathsFor(ReleaseConfig config, {bool releasing = true}) =>
+      [
+        for (final unit in config.units)
+          for (final project in unit.projects) ...[
+            project.path,
+            for (final name in [
+              'pubspec.yaml',
+              'Cargo.toml',
+              if (releasing) 'CHANGELOG.md',
+            ])
+              project.path == '.' ? name : '${project.path}/$name',
+          ],
+      ];
 
   /// [paths] as [tree] has them.
   static Manifests readFrom(SourceTree tree, Iterable<String> paths) {
-    final texts = <String, String? Function()>{};
+    final read = <String, SourceText>{};
     final present = <String>{};
     for (final path in paths) {
       try {
         final text = tree.read(path);
-        texts[path] = () => text;
+        read[path] = (text: text, error: null);
         if (text != null || tree.exists(path)) present.add(path);
       } on SourceUnreadable catch (error) {
-        texts[path] = () => throw error;
+        read[path] = (text: null, error: error);
         present.add(path);
       }
     }
-    return Manifests._(texts, present);
+    return Manifests._(read, present);
   }
 
   /// [paths] as [commit] has them, read in one batch with the directories
@@ -229,36 +241,41 @@ final class Manifests {
     };
     if (links.values.nonNulls.isNotEmpty) await fetch(links.values.nonNulls);
 
-    final texts = <String, String? Function()>{};
+    final read = <String, SourceText>{};
     final present = <String>{};
     for (final MapEntry(key: path, value: at) in wanted.entries) {
       if (modeOf(at) != null) present.add(path);
       // A link out of the commit stays a link, which is refused.
-      final read = links.containsKey(path) ? links[path] ?? at : at;
-      final object = objects[read];
-      final mode = modeOf(read);
-      final refusal = switch (mode) {
+      final through = links.containsKey(path) ? links[path] ?? at : at;
+      final object = objects[through];
+      final refusal = switch (modeOf(through)) {
         '120000' => 'symbolic link',
         '160000' => 'gitlink/submodule',
         _ => null,
       };
-      texts[path] = refusal != null
-          ? () => throw SourceUnreadable(
-              path,
-              'the committed entry is a $refusal, not a regular file',
+      read[path] = refusal != null
+          ? (
+              text: null,
+              error: SourceUnreadable(
+                path,
+                'the committed entry is a $refusal, not a regular file',
+              ),
             )
           : object == null || object.type != 'blob'
-          ? () => null
-          : () => _decode(path, object.bytes);
+          ? (text: null, error: null)
+          : _decode(path, object.bytes);
     }
-    return Manifests._(texts, present);
+    return Manifests._(read, present);
   }
 
-  static String _decode(String path, List<int> bytes) {
+  static SourceText _decode(String path, List<int> bytes) {
     try {
-      return utf8.decode(bytes);
+      return (text: utf8.decode(bytes), error: null);
     } on FormatException {
-      throw SourceUnreadable(path, 'it is not UTF-8 text');
+      return (
+        text: null,
+        error: SourceUnreadable(path, 'it is not UTF-8 text'),
+      );
     }
   }
 }

@@ -128,15 +128,18 @@ void main() {
       late Run run;
 
       setUpAll(() {
-        // A release definition that is not UTF-8. This is a real, currently
-        // unhandled decoding failure rather than an injected one — which is
-        // the point:
-        // the crash path has to be proved against something that actually
-        // crashes. When rk learns to report this one, this test must be
-        // pointed at another genuine crash, and if none can be found that is
-        // a decision worth making deliberately rather than by deletion.
+        // A project path with a NUL byte in it, which no file system can
+        // hold. This is a real, currently unhandled failure rather than an
+        // injected one — which is the point: the crash path has to be proved
+        // against something that actually crashes. When rk learns to report
+        // this one, this test must be pointed at another genuine crash, and
+        // if none can be found that is a decision worth making deliberately
+        // rather than by deletion.
         final directory = Directory('${scratch.path}/broken')..createSync();
-        File('${directory.path}/release.toml').writeAsBytesSync([0xff]);
+        File('${directory.path}/release.toml').writeAsStringSync(
+          'schema = 2\n\n[release.tool]\npath = "a\u0000b"\n'
+          'publish = ["git-tag"]\n',
+        );
         broken = Rk(directory.path);
         run = broken(['status', '--json']);
       });

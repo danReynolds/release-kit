@@ -40,16 +40,16 @@ class Resolution {
     bool releasing = true,
   }) => fromManifests(
     config,
-    Manifests.readFrom(tree, Manifests.pathsFor(config)),
+    Manifests.readFrom(tree, Manifests.pathsFor(config, releasing: releasing)),
     diagnostics,
     releasing: releasing,
   );
 
   /// Resolves [config] against [manifests], everything it declares read
   /// from one source. [releasing] applies the release source policy and
-  /// reads each changelog; a local checkout being installed may depend on
-  /// unpublished path or Git packages, and its changelogs are not asked
-  /// about.
+  /// carries each changelog as it was read, for its own unit to check; a
+  /// local checkout being installed may depend on unpublished path or Git
+  /// packages, and its changelogs are not read.
   static Resolution? fromManifests(
     ReleaseConfig config,
     Manifests manifests,
@@ -176,7 +176,7 @@ class Resolution {
                 unitName: project.unitName,
                 config: declared,
                 pubspec: project.pubspec,
-                changelog: manifests.text(_changelog(declared)),
+                changelog: manifests.read(_changelog(declared)),
               );
       }
       diagnostics.add(
@@ -288,7 +288,7 @@ class Resolution {
       unitName: unit.name,
       config: declared,
       pubspec: pubspec,
-      changelog: releasing ? manifests.text(_changelog(declared)) : null,
+      changelog: releasing ? manifests.read(_changelog(declared)) : null,
     );
   }
 
@@ -526,9 +526,9 @@ class ResolvedProject {
   final Pubspec pubspec;
   final Map<String, String> dartDefines;
 
-  /// This project's CHANGELOG.md, read from the same source as its manifest:
-  /// null when it has none, or when it was resolved to be installed.
-  final String? changelog;
+  /// This project's CHANGELOG.md, as read from the same source as its
+  /// manifest: null when it was resolved to be installed.
+  final SourceText? changelog;
 
   String get name => pubspec.name;
   Version get version => pubspec.version!;

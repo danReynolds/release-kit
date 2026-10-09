@@ -107,9 +107,6 @@ final class WorkingTree implements SourceTree {
   String? read(String path) {
     final bytes = readBytes(path);
     if (bytes == null) return null;
-    // Outside Git a file that is not UTF-8 still throws: it is the genuine
-    // crash test/end_to_end_test.dart proves the crash path against.
-    if (!git) return utf8.decode(bytes);
     try {
       return utf8.decode(bytes);
     } on FormatException {
@@ -368,6 +365,10 @@ class SourceUnreadable implements Exception {
   @override
   String toString() => '$path could not be read: $reason';
 }
+
+/// A file as a source holds it: its text, null when there is none, or why
+/// one that is there could not be read.
+typedef SourceText = ({String? text, SourceUnreadable? error});
 
 /// The segments of [path] when it names a place inside a directory: relative,
 /// with no empty, `.` or `..` segment, backslash, NUL or drive letter.
