@@ -1176,7 +1176,7 @@ publish = ["pub.dev"]
         greaterThan(validation),
         reason: 'all private packages finish before publication',
       );
-      for (final unit in ['keybay', 'other']) {
+      for (final unit in ['core', 'other']) {
         expect(
           ran.text,
           contains('$unit 0.2.0 · released'),
@@ -3096,7 +3096,7 @@ publish = ["pub.dev"]
       ran.text.indexOf(warning),
       allOf(
         greaterThanOrEqualTo(0),
-        lessThan(ran.text.indexOf('Release keybay 0.2.0')),
+        lessThan(ran.text.indexOf('Release core 0.2.0')),
       ),
       reason: 'the operator sees it before the one question',
     );
