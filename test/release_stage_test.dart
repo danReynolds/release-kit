@@ -16,6 +16,7 @@ import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 const _commit = '1111111111111111111111111111111111111111';
 const _tree = '2222222222222222222222222222222222222222';

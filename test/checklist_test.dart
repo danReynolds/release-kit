@@ -5,8 +5,8 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/producers.dart';
 import 'package:rk/src/engine/release_dependencies.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 Resolution resolve(String config, MemorySourceTree tree) {
   final diagnostics = Diagnostics();

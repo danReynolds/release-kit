@@ -8,7 +8,6 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/ref_name.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
@@ -19,6 +18,7 @@ import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
+import 'support/memory_source_tree.dart';
 
 const _assets = {
   'macos-arm64': PlatformAsset(

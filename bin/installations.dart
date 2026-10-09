@@ -195,7 +195,7 @@ Future<int> _run(
       'Run inside your project, or start with rk init.',
     );
   }
-  final tree = FileSystemSourceTree(root);
+  final tree = WorkingTree(root, git: false);
   final diagnostics = Diagnostics();
   final config = ReleaseConfig.parse(
     tree.read('release.toml')!,

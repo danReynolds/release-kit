@@ -12,7 +12,6 @@ import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
@@ -22,6 +21,7 @@ import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
+import 'support/memory_source_tree.dart';
 
 void main() {
   late _Fixture f;

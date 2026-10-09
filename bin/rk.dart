@@ -543,7 +543,7 @@ void _reportTimings(
   if (!requested) return;
   stderr.write('\n${output.timeline.breakdown()}');
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
   final directory = '$root/.rk';
@@ -595,7 +595,7 @@ void _recordDiagnosis(Output output, int code, {String? crash}) {
     return;
   }
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
 
@@ -618,11 +618,9 @@ Future<int> _init(
   required bool interactive,
   required bool write,
 }) async {
-  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
+  final gitRoot = WorkingTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
-  final tree = gitRoot == null
-      ? FileSystemSourceTree(root)
-      : GitSourceTree(gitRoot) as SourceTree;
+  final tree = WorkingTree(root, git: gitRoot != null);
   final git = gitRoot == null ? null : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
@@ -682,7 +680,7 @@ Future<int> _clean(
   required bool interactive,
 }) {
   final root =
-      GitSourceTree.findRoot(Directory.current.path) ??
+      WorkingTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   return CleanCommand(
     store: StageStore(root),

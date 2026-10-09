@@ -160,14 +160,5 @@ bool _isExampleOrFixture(String directory) {
 
 String? _safeMember(String raw) {
   final member = raw.trim().replaceFirst(RegExp(r'/+$'), '');
-  final parts = member.split('/');
-  if (member.isEmpty ||
-      member.startsWith('/') ||
-      member.startsWith('\\') ||
-      member.contains('\\') ||
-      RegExp(r'^[A-Za-z]:').hasMatch(member) ||
-      parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
-    return null;
-  }
-  return member;
+  return relativeSegments(member) == null ? null : member;
 }

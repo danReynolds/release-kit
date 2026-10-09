@@ -1,8 +1,8 @@
 import 'package:rk/src/engine/changelog.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 Version v(String text) => Version.tryParse(text)!;
 

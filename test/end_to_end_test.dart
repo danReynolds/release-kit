@@ -15,7 +15,6 @@ import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/release_stage.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
@@ -28,6 +27,7 @@ import 'pub_resolution_double.dart';
 import 'rk_process.dart';
 import 'status_test.dart' show FakeRegistry;
 import 'support/compiled_rk.dart';
+import 'support/memory_source_tree.dart';
 
 /// rk run end to end: against the example repositories, through its
 /// machine surface, and through whole releases with scripted tools.

@@ -366,7 +366,8 @@ extension on InitCommand {
   /// Candidate manifest paths under `packages/`, from the filesystem — which
   /// is the point: these are exactly the files git cannot list.
   Iterable<String>? _packageDirs() {
-    final root = tree is GitSourceTree ? (tree as GitSourceTree).root : null;
+    final tree = this.tree;
+    final root = tree is WorkingTree && tree.git ? tree.root : null;
     if (root == null) return null;
     final packages = Directory('$root/packages');
     if (!packages.existsSync()) return null;

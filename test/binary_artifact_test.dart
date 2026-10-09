@@ -7,11 +7,11 @@ import 'package:rk/src/builds/dart_cli.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_archive.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 List<int> archive(
   BinaryArtifact artifact, {

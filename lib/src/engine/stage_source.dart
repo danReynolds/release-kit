@@ -38,7 +38,7 @@ final class StageSourceSnapshot implements SourceTree {
       return source;
     }
     final CommitFiles? git;
-    if (source is GitSourceTree) {
+    if (source is WorkingTree && source.git) {
       if (commit == null) {
         throw StateError('committed source capture requires a commit');
       }

@@ -13,6 +13,7 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
 import 'rk_process.dart';
+import 'support/memory_source_tree.dart';
 
 void main() {
   test('proposes one unit per releasable package', () async {
@@ -187,7 +188,7 @@ void main() {
         useColor: false,
       );
       final code = await InitCommand(
-        tree: GitSourceTree(root),
+        tree: WorkingTree(root, git: true),
         output: output,
         write: (_, __) {},
       ).run();

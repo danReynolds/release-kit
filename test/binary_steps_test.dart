@@ -10,13 +10,13 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/workspace.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
+import 'support/memory_source_tree.dart';
 
 final _certificateSha1 = 'a' * 40;
 

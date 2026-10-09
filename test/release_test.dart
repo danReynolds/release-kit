@@ -24,6 +24,7 @@ import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
+import 'support/memory_source_tree.dart';
 
 const _config = '''
 schema = 2

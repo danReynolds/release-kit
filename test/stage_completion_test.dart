@@ -2,10 +2,10 @@ import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_completion.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 void main() {
   for (final homebrew in [false, true]) {

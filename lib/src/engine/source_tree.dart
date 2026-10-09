@@ -63,46 +63,78 @@ class GitTreeEntry {
   };
 }
 
-/// A repository on disk, listing files through git so untracked material is
-/// invisible.
-class GitSourceTree implements SourceTree {
-  GitSourceTree(this.root);
+/// The repository's files as they are on disk.
+///
+/// In Git ([git]) its files are those `git ls-files` lists, so untracked
+/// material is invisible, and a read follows a symbolic link as the checkout
+/// does. Outside Git, as for status, plan and init in a directory and for
+/// the projects `rk use` installs from, the directory is walked, and a path
+/// through a symbolic link is refused.
+final class WorkingTree implements SourceTree {
+  WorkingTree(this.root, {required this.git});
 
   final String root;
+  final bool git;
 
   @override
   String get description => root;
 
   String _resolve(String path) {
-    final parts = path.split('/').where((p) => p.isNotEmpty && p != '.');
-    if (parts.contains('..')) {
+    final parts = path
+        .split('/')
+        .where((part) => part.isNotEmpty && part != '.')
+        .join('/');
+    if (path.startsWith('/') ||
+        parts.isNotEmpty && relativeSegments(parts) == null) {
       throw ArgumentError('path escapes the repository: $path');
     }
-    return [root, ...parts].join('/');
+    var resolved = root;
+    for (final part in parts.isEmpty ? const <String>[] : parts.split('/')) {
+      resolved = '$resolved/$part';
+      if (!git &&
+          FileSystemEntity.typeSync(resolved, followLinks: false) ==
+              FileSystemEntityType.link) {
+        throw SourceUnreadable(
+          path,
+          'the path component "$part" is a symbolic link',
+        );
+      }
+    }
+    return resolved;
   }
 
   @override
   String? read(String path) {
-    final file = File(_resolve(path));
-    if (!file.existsSync()) return null;
+    final bytes = readBytes(path);
+    if (bytes == null) return null;
+    // Outside Git a file that is not UTF-8 still throws: it is the genuine
+    // crash test/end_to_end_test.dart proves the crash path against.
+    if (!git) return utf8.decode(bytes);
     try {
-      return file.readAsStringSync();
-    } on FileSystemException catch (error) {
-      // Not null: null means "there is nothing here", and a file rk is not
-      // allowed to open is not a file that does not exist. Collapsing the two
-      // would answer "no release.toml — run rk init" for a release.toml that
-      // is sitting right there.
-      throw SourceUnreadable(path, error.osError?.message ?? '$error');
+      return utf8.decode(bytes);
+    } on FormatException {
+      throw SourceUnreadable(path, 'it is not UTF-8 text');
     }
   }
 
   @override
   List<int>? readBytes(String path) {
     final file = File(_resolve(path));
-    if (!file.existsSync()) return null;
+    final type = FileSystemEntity.typeSync(file.path, followLinks: git);
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      // In Git a directory holds no file here, as the index would say.
+      // Outside Git nothing says what it is, so it is refused.
+      if (git) return null;
+      throw SourceUnreadable(path, 'the path is not a regular file');
+    }
     try {
       return file.readAsBytesSync();
     } on FileSystemException catch (error) {
+      // Not null: null means "there is nothing here", and a file rk is not
+      // allowed to open is not a file that does not exist. Collapsing the two
+      // would answer "no release.toml — run rk init" for a release.toml that
+      // is sitting right there.
       throw SourceUnreadable(path, error.osError?.message ?? '$error');
     }
   }
@@ -116,8 +148,9 @@ class GitSourceTree implements SourceTree {
   List<String>? _tracked;
 
   @override
-  List<String> trackedFiles() {
-    if (_tracked != null) return _tracked!;
+  List<String> trackedFiles() => _tracked ??= git ? _listed() : _walked();
+
+  List<String> _listed() {
     final result = timedRunSync('git', const [
       'ls-files',
       '-z',
@@ -132,8 +165,31 @@ class GitSourceTree implements SourceTree {
         (result.stderr as String).trim(),
       );
     }
-    final out = result.stdout as String;
-    return _tracked = out.split('\u0000').where((p) => p.isNotEmpty).toList();
+    return (result.stdout as String)
+        .split('\u0000')
+        .where((p) => p.isNotEmpty)
+        .toList();
+  }
+
+  List<String> _walked() {
+    final files = <String>[];
+    for (final entity in Directory(
+      root,
+    ).listSync(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      final relative = entity.path
+          .substring(
+            root.endsWith(Platform.pathSeparator)
+                ? root.length
+                : root.length + 1,
+          )
+          .split(Platform.pathSeparator)
+          .join('/');
+      if (relative == '.rk' || relative.startsWith('.rk/')) continue;
+      if (relative == '.git' || relative.startsWith('.git/')) continue;
+      files.add(relative);
+    }
+    return files..sort();
   }
 
   /// The repository root containing [start], or null when there is none.
@@ -298,127 +354,6 @@ final class CommitFiles {
   }
 }
 
-/// A directory with no Git identity, read as it is: status, plan and init
-/// work outside Git, and `rk use` reads the projects it installs from.
-class FileSystemSourceTree implements SourceTree {
-  FileSystemSourceTree(this.root);
-
-  final String root;
-
-  @override
-  String get description => root;
-
-  String _resolve(String path) {
-    final parts = path
-        .split('/')
-        .where((part) => part.isNotEmpty && part != '.')
-        .toList();
-    if (path.startsWith('/') ||
-        path.startsWith('\\') ||
-        path.contains('\\') ||
-        path.contains('\u0000') ||
-        RegExp(r'^[A-Za-z]:').hasMatch(path) ||
-        parts.contains('..')) {
-      throw ArgumentError('path escapes the source directory: $path');
-    }
-    var resolved = root;
-    for (final part in parts) {
-      resolved = '$resolved/$part';
-      if (FileSystemEntity.typeSync(resolved, followLinks: false) ==
-          FileSystemEntityType.link) {
-        throw SourceUnreadable(
-          path,
-          'the path component "$part" is a symbolic link',
-        );
-      }
-    }
-    return resolved;
-  }
-
-  @override
-  String? read(String path) {
-    final bytes = readBytes(path);
-    return bytes == null ? null : utf8.decode(bytes);
-  }
-
-  @override
-  List<int>? readBytes(String path) {
-    final file = File(_resolve(path));
-    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
-    if (type == FileSystemEntityType.notFound) return null;
-    if (type != FileSystemEntityType.file) {
-      throw SourceUnreadable(path, 'the path is not a regular file');
-    }
-    try {
-      return file.readAsBytesSync();
-    } on FileSystemException catch (error) {
-      throw SourceUnreadable(path, error.osError?.message ?? '$error');
-    }
-  }
-
-  @override
-  bool exists(String path) {
-    final full = _resolve(path);
-    return File(full).existsSync() || Directory(full).existsSync();
-  }
-
-  @override
-  List<String> trackedFiles() {
-    final files = <String>[];
-    for (final entity in Directory(
-      root,
-    ).listSync(recursive: true, followLinks: false)) {
-      if (entity is! File) continue;
-      final relative = entity.path
-          .substring(
-            root.endsWith(Platform.pathSeparator)
-                ? root.length
-                : root.length + 1,
-          )
-          .split(Platform.pathSeparator)
-          .join('/');
-      if (relative == '.rk' || relative.startsWith('.rk/')) continue;
-      if (relative == '.git' || relative.startsWith('.git/')) continue;
-      files.add(relative);
-    }
-    return files..sort();
-  }
-}
-
-String _normalizeSourcePath(String path) =>
-    path.split('/').where((part) => part.isNotEmpty && part != '.').join('/');
-
-/// An in-memory tree, for tests and for rendering a repository rk has read
-/// from somewhere other than a working copy.
-class MemorySourceTree implements SourceTree {
-  MemorySourceTree(this.files, {this.description = 'memory'});
-
-  final Map<String, String> files;
-
-  @override
-  final String description;
-
-  @override
-  String? read(String path) => files[_normalizeSourcePath(path)];
-
-  @override
-  List<int>? readBytes(String path) {
-    final text = read(path);
-    return text == null ? null : utf8.encode(text);
-  }
-
-  @override
-  bool exists(String path) {
-    final target = _normalizeSourcePath(path);
-    if (files.containsKey(target)) return true;
-    final prefix = '$target/';
-    return files.keys.any((p) => p.startsWith(prefix));
-  }
-
-  @override
-  List<String> trackedFiles() => files.keys.toList();
-}
-
 /// A file that is there and that rk could not read.
 ///
 /// Distinct from absence on purpose: the two call for opposite responses, and
@@ -432,4 +367,17 @@ class SourceUnreadable implements Exception {
 
   @override
   String toString() => '$path could not be read: $reason';
+}
+
+/// The segments of [path] when it names a place inside a directory: relative,
+/// with no empty, `.` or `..` segment, backslash, NUL or drive letter.
+List<String>? relativeSegments(String path) {
+  final parts = path.split('/');
+  if (path.contains('\\') ||
+      path.contains('\u0000') ||
+      RegExp(r'^[A-Za-z]:').hasMatch(path) ||
+      parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
+    return null;
+  }
+  return parts;
 }

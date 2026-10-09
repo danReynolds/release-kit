@@ -3,9 +3,9 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
+import 'support/memory_source_tree.dart';
 
 /// The unit [name] that [config] declares over [files], and its checklist.
 (ResolvedUnit, Checklist) _unit(

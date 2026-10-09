@@ -1,11 +1,11 @@
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/pubspec.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:test/test.dart';
 
 import 'release_test.dart' show release;
 import 'status_test.dart' show FakeRegistry;
+import 'support/memory_source_tree.dart';
 
 Pubspec _parse(String source) {
   final diagnostics = Diagnostics();

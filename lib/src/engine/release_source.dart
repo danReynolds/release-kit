@@ -31,13 +31,13 @@ final class ReleaseSource {
     String directory, {
     Tools tools = const SystemTools(),
   }) async {
-    final gitRoot = GitSourceTree.findRoot(directory);
+    final gitRoot = WorkingTree.findRoot(directory);
     if (gitRoot == null) {
       return ReleaseSource._(
         root: directory,
         git: GitState.none(directory),
         inRepository: false,
-        tree: FileSystemSourceTree(directory),
+        tree: WorkingTree(directory, git: false),
         tools: tools,
       );
     }
@@ -46,7 +46,7 @@ final class ReleaseSource {
       root: gitRoot,
       git: git,
       inRepository: true,
-      tree: GitSourceTree(gitRoot),
+      tree: WorkingTree(gitRoot, git: true),
       tools: tools,
     );
   }

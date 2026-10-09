@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:rk/src/engine/release_source.dart';
+import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
@@ -127,6 +128,27 @@ publish = ["git-tag", "github-release"]
       expect(read.resolution.units.map((unit) => unit.name), ['tool']);
       expect(source.git.stagingProblem()?.code, 'RK-SRC-004');
       expect(source.git.unpushedProblem(), isNull);
+    },
+  );
+
+  test(
+    'the working tree follows a link in Git, and refuses one outside it',
+    () {
+      if (Platform.isWindows) return;
+      Link('${root.path}/linked.md').createSync('CHANGELOG.md');
+      Directory('${root.path}/docs').createSync();
+      final inGit = WorkingTree(root.path, git: true);
+      final outside = WorkingTree(root.path, git: false);
+
+      expect(inGit.read('linked.md'), '## 1.0.0\n');
+      expect(inGit.read('docs'), isNull);
+      for (final path in ['linked.md', 'docs']) {
+        expect(() => outside.read(path), throwsA(isA<SourceUnreadable>()));
+      }
+      for (final tree in [inGit, outside]) {
+        expect(() => tree.read('../escape'), throwsArgumentError);
+        expect(tree.read('CHANGELOG.md'), '## 1.0.0\n');
+      }
     },
   );
 
