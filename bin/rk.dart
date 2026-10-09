@@ -232,10 +232,11 @@ Future<void> main(List<String> args) {
   // finishes what it was doing, writes nothing more, and exits as it would
   // have, rather than dying with a stack trace mid-run.
   stdout.done.catchError((_) {}, test: _closedPipe);
+  stderr.done.catchError((_) {}, test: _closedPipe);
   return runRk(args);
 }
 
-/// EPIPE: the reading end of stdout is gone.
+/// EPIPE: the reading end of stdout or stderr is gone.
 bool _closedPipe(Object error) => switch (error) {
   FileSystemException(:final osError?) => osError.errorCode == 32,
   SocketException(:final osError?) => osError.errorCode == 32,
@@ -407,7 +408,9 @@ Future<void> runRk(
     // reached the write — which teaches a reader to discount the sentence
     // everywhere it is true.
     output.halt(
-      output.report.acted ? HaltKind.lostTrack : HaltKind.beforeActing,
+      output.report.changedWhatHaltsSpeakOf
+          ? HaltKind.lostTrack
+          : HaltKind.beforeActing,
     );
     final recordsDiagnosis = Diagnosis.shouldWrite(
       command: command,

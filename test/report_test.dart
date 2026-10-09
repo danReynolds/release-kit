@@ -10,6 +10,18 @@ Map<String, Object?> decode(Report report, {int exit = 0}) =>
     jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
 
 void main() {
+  test('a crash after a release staged privately says nothing public '
+      'changed', () {
+    // Staging writes a stage, which sets acted; a halt in a release speaks
+    // of public targets, and none changed until one is published.
+    final release = Report('release')..acted = true;
+    expect(release.changedWhatHaltsSpeakOf, isFalse);
+    release.actedPublicly = true;
+    expect(release.changedWhatHaltsSpeakOf, isTrue);
+    // init, clean and use write files, and those are what a halt speaks of.
+    expect((Report('init')..acted = true).changedWhatHaltsSpeakOf, isTrue);
+  });
+
   group('the document a caller keys on', () {
     test('names its schema, its command, and how the process ended', () {
       final report = Report('status');

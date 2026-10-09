@@ -60,6 +60,14 @@ class Report {
   /// public changed, and the stage a release builds first is private.
   var actedPublicly = false;
 
+  /// Whether this run changed what its halt speaks of: for stage and
+  /// release, a public target; for init, clean and use, the files they
+  /// write.
+  bool get changedWhatHaltsSpeakOf => switch (command) {
+    'stage' || 'release' => actedPublicly,
+    _ => acted,
+  };
+
   /// [uncommitted] is null when the run stopped before reading git, which is
   /// reported as absence rather than as zero — a clean tree and an unread one
   /// are different facts.
