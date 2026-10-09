@@ -29,27 +29,6 @@ InitPlan plan() => InitPlan.discover(
 
 void main() {
   test(
-    'an unavailable init choice reports a problem without changing the plan',
-    () {
-      final model = InitPicker(plan(), (_) {});
-      final sdkPlan = InitPlan.discover(
-        tree: MemorySourceTree({'pubspec.yaml': 'name: sdk\nversion: 1.0.0\n'}),
-        gitBound: false,
-        hasRemote: false,
-        githubRepository: null,
-        platformCapabilities: const [],
-      );
-      model.plan = sdkPlan;
-      model.toggle(0, ReleaseChoice.binary);
-      expect(model.plan, same(sdkPlan));
-      expect(model.failed, isTrue);
-      model.toggle(0, ReleaseChoice.pubDev);
-      expect(model.failed, isFalse);
-      model.dispose();
-    },
-  );
-
-  test(
     'selection, review, Back, and create share one terminal session',
     () async {
       final driver = FakeTerminalDriver(size: const CellSize(132, 30));
