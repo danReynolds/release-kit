@@ -4,7 +4,7 @@
 
 rk now stages and releases a commit, reads each destination once, and asks
 one question for the whole run. A fresh stage of Fleury's four packages takes
-about 9s (2m 9s with 0.1.14), reusing it about half a second (about 30s), and
+about 10s (2m 9s with 0.1.14), reusing it under a second (about 30s), and
 releasing them and their two tags takes three trips to origin.
 
 Stages saved by 0.1.14 are not reused: a release 0.1.14 left partly
@@ -35,8 +35,10 @@ published finishes with 0.1.14.
 - A version on pub.dev counts as published: rk no longer compares a fresh
   stage's archive with one already there. After its own upload it still
   reads the archive back. After an upload pub.dev refused, it reads back for
-  ten seconds, not ten minutes, and it no longer downloads each published
-  package into a fresh Pub cache (`RK-PUB-013`, `RK-REL-004`).
+  ten seconds, not ten minutes; after one it accepted, a read that fails is
+  asked again until the version shows or ten minutes pass. It no longer
+  downloads each published package into a fresh Pub cache (`RK-PUB-013`,
+  `RK-REL-004`).
 - A stage is needed only while public bytes must match it: assets on a
   GitHub release, or a Homebrew formula that names their hashes
   (`RK-STAGE-005`). A published package no longer requires its original
@@ -51,7 +53,11 @@ published finishes with 0.1.14.
   before anything is pushed, and says what to do when the repository moved
   (`RK-PUB-010`).
 - A tag on origin that matches the release pattern without naming a version,
-  such as `v1.0` under `v{version}`, no longer refuses every release.
+  such as `v1.0` under `v{version}`, no longer refuses every release. A
+  release tag only this clone has, made by hand, is refused with
+  `git tag -d <tag>` as the fix, rather than as a public tag to leave alone.
+- `rk stage` says to push first when origin lacks the commit a release's tag
+  would name, rather than offering a release that would refuse.
 - With no pub session stored, `dart pub login` runs at once, not after
   twenty silent seconds.
 
@@ -106,9 +112,10 @@ published finishes with 0.1.14.
 - `rk status` and `rk release` read a unit through one shared snapshot, so
   they agree on it. `rk status` lists units in release order, shows another
   unit's package that releases first as "Releases after", lists the warnings
-  a stage recorded, and suggests the repository's `rk stage` or `rk release`
-  when that is the command that works. With one edited file it reads the
-  working tree once: about 0.2s and 32 MB on Fleury.
+  a stage recorded, and suggests the command that works: a unit stages
+  alone, and releases with the sibling it releases after. With one edited
+  file it reads the working tree once, in under half a second and 33 MB on
+  Fleury.
 - `rk stage` and `rk release` of several units say what they stage once: one
   heading, one Warnings section, one summary and one next step, with
   warnings in release order whichever unit finishes first. Piped output
@@ -117,7 +124,8 @@ published finishes with 0.1.14.
   public changed.
 - `rk help [command]` prints a command's help. A flag a command does not take
   is refused in two lines, and `rk target` without a name lists the targets.
-  A closed pipe, as in `rk --help | head -1`, ends rk quietly.
+  `rk --version --json` prints `{"version": ...}`. A closed stdout or
+  stderr, as in `rk --help | head -1`, ends rk quietly.
 - `rk init` with a release.toml already there points to `rk status` instead
   of reporting a problem (`RK-INIT-002` is gone).
 - `--json` drops keys that never carried anything: `took_ms`, the plan's
