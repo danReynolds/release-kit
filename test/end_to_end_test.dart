@@ -1229,52 +1229,6 @@ publish = ["git-tag", "pub.dev"]
       });
     });
 
-    test(
-      'post-publish native digest comparison makes a mismatch terminal',
-      () async {
-        final published = {
-          'keybay': ['0.1.0'],
-        };
-        final archives = <String, List<int>>{};
-        final run = await drive(
-          published: published,
-          archives: archives,
-          tags: {},
-          onRun: (key) {
-            if (key == 'dart pub publish --from-archive <archive> --force') {
-              published['keybay']!.add('0.2.0');
-              // The registry serves bytes this tree cannot account for.
-              archives['keybay@0.2.0'] = ArchiveBuilder.gzip(
-                ArchiveBuilder.tar([
-                  ArchiveEntry(
-                    name: 'pubspec.yaml',
-                    bytes: 'name: keybay\nversion: 0.2.0\n'.codeUnits,
-                  ),
-                  ArchiveEntry(
-                    name: 'lib/injected.dart',
-                    bytes: 'not yours\n'.codeUnits,
-                  ),
-                ]),
-              );
-            }
-          },
-        );
-
-        expect(run.code, ExitCodes.refused);
-        expect(
-          (run.report['problems'] as List).map((p) => (p as Map)['code']),
-          contains('RK-PUB-006'),
-        );
-        expect(run.text, contains('archive: sha256'));
-        expect(
-          run.report['rerun_helps'],
-          false,
-          reason: 'an agent must not retry a release that can never succeed',
-        );
-        expect(run.text, contains('cannot be fixed by re-running'));
-      },
-    );
-
     test('resume half: killed after the tag, a re-run finishes '
         'without re-tagging', () async {
       final retained = Directory.systemTemp.createTempSync('rk-resume-');

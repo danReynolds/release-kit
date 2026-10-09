@@ -1291,6 +1291,11 @@ void main() {
 
     expect(rerun.code, ExitCodes.ok, reason: rerun.text);
     expect(rerun.publicMutations, isEmpty);
+    expect(
+      rerun.keys,
+      isNot(contains('dart pub login')),
+      reason: 'no pub.dev act remains, so no session is needed',
+    );
     expect(rerun.text, contains('already released'));
     final unit = (rerun.report['units'] as List).single as Map;
     final actions = {

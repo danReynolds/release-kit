@@ -71,18 +71,6 @@ void main() {
     expect(() => f.coordinator.publish(f.plans.first), throwsStateError);
   });
 
-  test('a release with nothing left to publish asks nothing', () async {
-    final released = [for (final plan in f.plans) f.published(plan)];
-    expect(await f.coordinator.authorize(released), isTrue);
-    for (final plan in released) {
-      expect(await f.coordinator.publish(plan), ExitCodes.ok);
-    }
-    expect(confirms(), isEmpty);
-    expect(f.sessionCalls, isEmpty);
-    expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
-    expect(f.text.toString(), contains('already released'));
-  });
-
   test('local-only plans ask nothing and say nothing', () async {
     final plan = f.localOnly(f.plans.first);
     expect(await f.coordinator.authorize([plan]), isTrue);

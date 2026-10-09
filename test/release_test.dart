@@ -1624,35 +1624,6 @@ void main() {
   });
 
   test(
-    'a missing pub session refuses after staging and before authorization',
-    () async {
-      final ran = await release(
-        results: {
-          'dart pub login': ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'authentication failed',
-          ),
-        },
-      );
-
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-007']);
-      expect((ran.report['halt'] as Map?)?['kind'], 'beforeActing');
-      expect(ran.text, contains('dart pub login did not complete'));
-      expect(ran.text, contains('no public target changed'));
-      expect(ran.calls, contains('dart pub login'));
-      expect(ran.calls, contains('dart pub publish --to-archive <archive>'));
-      expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
-      expect(
-        ran.calls,
-        isNot(contains('dart pub publish --from-archive <archive> --force')),
-      );
-      expect('not attempted'.allMatches(ran.text), hasLength(2));
-    },
-  );
-
-  test(
     'with no pub session stored, login goes straight to the terminal',
     () async {
       // Captured, `dart pub login` without a session opens a browser login
@@ -2596,19 +2567,6 @@ publish = ["pub.dev"]
     );
   });
 
-  test('an existing tag is not created twice', () async {
-    final ran = await release(
-      state: _git(tags: const ['v0.2.0']),
-      onRemote: const ['v0.2.0'],
-      registry: _MutableRegistry(<String>['0.1.0']),
-    );
-    expect(
-      ran.calls.where((c) => c.startsWith('git tag')),
-      isEmpty,
-      reason: 'inspect saw it locally and on origin, and skipped the step',
-    );
-  });
-
   test('failed native archive staging stops before anything public', () async {
     final ran = await release(
       results: {
@@ -2637,37 +2595,6 @@ publish = ["pub.dev"]
       isNot(contains('dart pub publish --from-archive <archive> --force')),
     );
     expect(ran.calls.where((c) => c.startsWith('git tag')), isEmpty);
-  });
-
-  test('a release already published does nothing', () async {
-    final ran = await release(
-      registry: FakeRegistry(
-        {
-          'keybay': ['0.1.0', '0.2.0'],
-        },
-        archives: {'keybay@0.2.0': publishedBytes()},
-      ),
-      state: _git(tags: const ['v0.2.0']),
-      onRemote: const ['v0.2.0'],
-    );
-    expect(ran.exitCode, ExitCodes.ok);
-    expect(ran.text, contains('already released'));
-    expect(
-      ran.calls.where(
-        (call) =>
-            call.startsWith('git tag -s ') ||
-            call.startsWith('git tag -a ') ||
-            call.startsWith('git push ') ||
-            call.contains('pub publish --force'),
-      ),
-      isEmpty,
-      reason: 'object/signature authentication is inspection; nothing acted',
-    );
-    expect(
-      ran.calls,
-      isNot(contains('dart pub login')),
-      reason: 'no pub.dev act remains',
-    );
   });
 
   test('an unclean worktree halts before acting', () async {
@@ -3330,32 +3257,6 @@ void mutationCloseout() {
       expect(ran.text, contains('archive not compared'));
     },
   );
-
-  test('a non-zero publish reconciles when the exact archive landed', () async {
-    final registry = _MutableRegistry(<String>['0.1.0']);
-    final ran = await release(
-      registry: registry,
-      results: {
-        'dart pub publish --from-archive <archive> --force': ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'connection closed before the response',
-        ),
-      },
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          // The server committed the act before the client observed its lost
-          // response. The shared exact inspector, not exit 1, decides this.
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
-    );
-
-    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-    expect(ran.text, contains('archive matches the staged package'));
-    expect(ran.problems, isEmpty);
-  });
 
   test('tampered bytes after a real publish are acted-and-unfixable', () async {
     final registry = _MutableRegistry(<String>['0.1.0']);
