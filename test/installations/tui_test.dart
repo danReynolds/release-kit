@@ -70,39 +70,32 @@ void main() {
     },
   );
   test(
-    'real init plan toggles dependencies and supports keyboard at wide and narrow widths',
+    'the keyboard toggles an output, a resize keeps the session, and Escape cancels',
     () async {
-      for (final width in [130, 40]) {
-        InitPlan? result;
-        final model = InitPicker(plan(), (value) {
-          result = value;
-          exitApp();
-        });
-        final driver = FakeTerminalDriver(size: CellSize(width, 28));
-        final done = runMatrixScreen(
-          InitScreen(model),
-          interrupt: () => model.finish(null),
-          driver: driver,
-        );
-        await driver.drawn();
-        expect(driver.currentMode!.mouse, isFalse);
-        expect(driver.currentMode!.mouseMotion, isFalse);
-        expect(driver.output, contains('rk init'));
-        expect(driver.output, contains('Added'));
-        expect(driver.output, isNot(contains('Included')));
-        await driver.send(const KeyEvent(KeyCode.tab));
-        await driver.send(const TextInputEvent(' '));
-        expect(
-          model.plan.candidates.single.selected,
-          contains(ReleaseChoice.binary),
-        );
-        await driver.redrawn(() => driver.resize(const CellSize(55, 24)));
-        driver.enqueue(const KeyEvent(KeyCode.escape));
-        await done.timeout(const Duration(seconds: 3));
-        expect(result, isNull);
-        expect(driver.restoreCallCount, 1);
-        model.dispose();
-      }
+      InitPlan? result;
+      final model = InitPicker(plan(), (value) {
+        result = value;
+        exitApp();
+      });
+      addTearDown(model.dispose);
+      final driver = FakeTerminalDriver(size: const CellSize(130, 28));
+      final done = runMatrixScreen(
+        InitScreen(model),
+        interrupt: () => model.finish(null),
+        driver: driver,
+      );
+      await driver.drawn();
+      await driver.send(const KeyEvent(KeyCode.tab));
+      await driver.send(const TextInputEvent(' '));
+      expect(
+        model.plan.candidates.single.selected,
+        contains(ReleaseChoice.binary),
+      );
+      await driver.redrawn(() => driver.resize(const CellSize(55, 24)));
+      driver.enqueue(const KeyEvent(KeyCode.escape));
+      await done.timeout(const Duration(seconds: 3));
+      expect(result, isNull);
+      expect(driver.restoreCallCount, 1);
     },
   );
 

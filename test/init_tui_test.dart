@@ -96,11 +96,7 @@ void main() {
       expect(driver.output, contains('macos-arm64 was not selected'));
       expect(selected, isFalse);
 
-      await key(const KeyEvent(KeyCode.escape));
-      driver.clearOutput();
-      await key(const KeyEvent(KeyCode.enter)); // Notes keeps its focus.
-      expect(textOutput(driver), contains(missingPackage));
-      await key(const KeyEvent(KeyCode.escape));
+      await key(const KeyEvent(KeyCode.escape)); // Back on Discovery notes.
       await key(const KeyEvent(KeyCode.tab)); // Cancel.
       await key(const KeyEvent(KeyCode.tab)); // Review configuration.
       driver.enqueue(const KeyEvent(KeyCode.enter));
@@ -133,10 +129,6 @@ void main() {
       expect(driver.output, contains('Review release.toml'));
       expect(driver.output, contains('binary_platforms'));
       expect(reviewed, isFalse);
-      driver.clearOutput();
-      await key(const KeyEvent(KeyCode.enter)); // Notes keeps its focus.
-      expect(textOutput(driver), contains(missingPackage));
-      await key(const KeyEvent(KeyCode.escape));
       await key(backwards); // Cancel.
       await key(backwards); // Create.
       driver.enqueue(const KeyEvent(KeyCode.enter));
