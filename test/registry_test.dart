@@ -27,9 +27,11 @@ void main() {
   late int versionStatus;
   late String versionBody;
   late Duration versionDelay;
+  late bool holdBody;
 
   late List<HttpHeaders> requestHeaders;
   late List<Uri> requestUris;
+  late Set<int> connections;
 
   setUp(() async {
     status = 200;
@@ -38,13 +40,16 @@ void main() {
     versionStatus = 404;
     versionBody = '';
     versionDelay = Duration.zero;
+    holdBody = false;
     requestHeaders = [];
     requestUris = [];
+    connections = {};
 
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       requestHeaders.add(request.headers);
       requestUris.add(request.uri);
+      connections.add(request.connectionInfo!.remotePort);
       final exact = request.uri.path.contains('/versions/');
       final responseDelay = exact ? versionDelay : delay;
       if (responseDelay > Duration.zero) {
@@ -52,6 +57,10 @@ void main() {
       }
       request.response.statusCode = exact ? versionStatus : status;
       request.response.write(exact ? versionBody : body);
+      if (holdBody) {
+        await request.response.flush();
+        return;
+      }
       await request.response.close();
     });
 
@@ -89,6 +98,59 @@ publish = ["pub.dev"]
 
   Future<Inspection> inspect() =>
       PubDevTarget(registry: registry).inspectProject(project);
+
+  test(
+    'missing coordinates reuse the connection after discarding their bodies',
+    () async {
+      registry.close();
+      registry = Registry(
+        client: HttpClient()..maxConnectionsPerHost = 1,
+        host: '${server.address.host}:${server.port}',
+        secure: false,
+        connectTimeout: const Duration(seconds: 1),
+      );
+      versionBody = 'not found' * 1000;
+      for (var i = 0; i < 10; i++) {
+        expect(
+          await registry.lookupVersion('package_$i', project.version),
+          isNull,
+        );
+      }
+      expect(connections, hasLength(1));
+    },
+  );
+
+  for (final code in [200, 404, 500]) {
+    test(
+      'a stalled $code body releases its connection and preserves its status',
+      () async {
+        registry.close();
+        registry = Registry(
+          client: HttpClient()..maxConnectionsPerHost = 1,
+          host: '${server.address.host}:${server.port}',
+          secure: false,
+          connectTimeout: const Duration(seconds: 1),
+          responseTimeout: const Duration(milliseconds: 30),
+        );
+        versionStatus = code;
+        versionBody = 'unused error body';
+        holdBody = true;
+        final read = registry.lookupVersion(project.name, project.version);
+        if (code == 404) {
+          expect(await read, isNull);
+        } else {
+          await expectLater(read, throwsA(isA<RegistryUnavailable>()));
+        }
+        holdBody = false;
+        versionStatus = 404;
+        expect(
+          await registry.lookupVersion(project.name, project.version),
+          isNull,
+        );
+        expect(connections, hasLength(2));
+      },
+    );
+  }
 
   group('only an authenticated negative means absent', () {
     test('a 404 does, and says the package has never existed', () async {

@@ -35,6 +35,22 @@ List<int> archive(
 );
 
 void main() {
+  for (final ordinaryList in [false, true]) {
+    test(
+      'decoded files own immutable bytes (${ordinaryList ? 'list' : 'buffer'} input)',
+      () {
+        final encoded = ArchiveBuilder.tar([
+          ArchiveEntry(name: 'tool', bytes: [1, 2, 3], executable: true),
+        ]);
+        final List<int> input = ordinaryList ? encoded.toList() : encoded;
+        final decoded = ArchiveReader.decodeTar(input);
+        input[512] = 9;
+        expect(decoded.files['tool'], [1, 2, 3]);
+        expect(() => decoded.files['tool']![0] = 9, throwsUnsupportedError);
+      },
+    );
+  }
+
   for (final artifact in [
     BinaryArtifact.single('tool'),
     BinaryArtifact.dartBundle('tool'),
