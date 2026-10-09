@@ -127,7 +127,7 @@ final class StageSourceSnapshot implements SourceTree {
   /// that stays inside this commit, as reading a checkout would.
   @override
   List<int>? readBytes(String path) {
-    final resolved = _resolve(_path(path));
+    final resolved = followLinks(_path(path), _links);
     return resolved == null ? null : _files[resolved];
   }
 
@@ -139,40 +139,17 @@ final class StageSourceSnapshot implements SourceTree {
 
   @override
   bool exists(String path) {
-    final resolved = _resolve(_path(path));
+    final resolved = followLinks(_path(path), _links);
     return resolved != null &&
         (resolved.isEmpty ||
             _files.containsKey(resolved) ||
             _files.keys.any((file) => file.startsWith('$resolved/')));
   }
 
-  /// [path] with every symbolic link on it followed, or null when a link
-  /// leads out of this commit or round in a circle.
-  String? _resolve(String path) {
-    var current = path;
-    for (var hops = 0; hops < 40; hops++) {
-      final parts = current.isEmpty ? const <String>[] : current.split('/');
-      String? through;
-      var rest = '';
-      for (var end = 1; end <= parts.length; end++) {
-        final prefix = parts.take(end).join('/');
-        if (_links.containsKey(prefix)) {
-          through = prefix;
-          rest = parts.skip(end).join('/');
-          break;
-        }
-      }
-      if (through == null) return current;
-      final target = _linkTarget(through);
-      if (target == null) return null;
-      current = [target, rest].where((part) => part.isNotEmpty).join('/');
-    }
-    return null;
-  }
-
   /// Where the link at [link] points, as a path in this commit, or null for
   /// a target outside it.
-  String? _linkTarget(String link) => _within(_parent(link), _links[link]!);
+  String? _linkTarget(String link) =>
+      withinCommit(parentOf(link), _links[link]!);
 
   /// The directories that hold a `pubspec.yaml`: this source's Dart
   /// packages.
@@ -212,7 +189,7 @@ final class StageSourceSnapshot implements SourceTree {
         trees.any(
           (tree) => tree.isEmpty || path == tree || path.startsWith('$tree/'),
         ) ||
-        above.contains(_parent(path));
+        above.contains(parentOf(path));
   }
 
   /// Writes the files [only] selects, every file when it is null, with
@@ -329,7 +306,7 @@ final class StageSourceSnapshot implements SourceTree {
     return [
       for (final value in include is List ? include : [include])
         if (value is String && !value.startsWith('package:'))
-          if (_within(_parent(path), value) case final target?) target,
+          if (withinCommit(parentOf(path), value) case final target?) target,
     ];
   }
 }
@@ -375,29 +352,6 @@ final class StageSourceRefusal implements Exception {
 
   @override
   String toString() => '${diagnostic.message}: ${diagnostic.remedy}';
-}
-
-/// The directory holding [path], or '' at the root.
-String _parent(String path) {
-  final cut = path.lastIndexOf('/');
-  return cut < 0 ? '' : path.substring(0, cut);
-}
-
-/// [relative], written from [directory], as a path in the commit; null when
-/// it is absolute or climbs out of the commit.
-String? _within(String directory, String relative) {
-  if (relative.startsWith('/')) return null;
-  final parts = [if (directory.isNotEmpty) ...directory.split('/')];
-  for (final part in relative.split('/')) {
-    if (part.isEmpty || part == '.') continue;
-    if (part == '..') {
-      if (parts.isEmpty) return null;
-      parts.removeLast();
-    } else {
-      parts.add(part);
-    }
-  }
-  return parts.join('/');
 }
 
 String _path(String path) {

@@ -205,67 +205,87 @@ final class Manifests {
   /// [paths] as [commit] has them, read in one batch with the directories
   /// that hold them, whose entries say which of them are regular files.
   ///
-  /// A changelog may be a link to another file in the commit, which a stage
-  /// reads through: it is read through too, in one more batch.
+  /// A changelog may be a symbolic link, which a stage reads through link by
+  /// link ([followLinks]): so does this, from the commit's links.
   static Future<Manifests> readAt(
     CommitFiles commit,
     Iterable<String> paths,
   ) async {
-    final objects = <String, GitObject?>{};
-    Future<void> fetch(Iterable<String> names) async => objects.addAll(
-      await commit.read(
-        {
-          for (final name in names) ...[name, _parent(name)],
-        }.where((name) => !objects.containsKey(name)),
-      ),
-    );
+    final wanted = {for (final path in paths) path: path == '.' ? '' : path};
+    final objects = await commit.read({
+      for (final name in wanted.values) ...[name, parentOf(name)],
+    });
     final listings = <String, Map<String, String>>{};
     String? modeOf(String path) {
       if (path.isEmpty) return '040000';
-      final directory = _parent(path);
+      final directory = parentOf(path);
       return (listings[directory] ??= switch (objects[directory]) {
         final tree? when tree.type == 'tree' => commit.modesIn(tree),
         _ => const {},
       })[path.substring(directory.isEmpty ? 0 : directory.length + 1)];
     }
 
-    final wanted = {for (final path in paths) path: path == '.' ? '' : path};
-    await fetch(wanted.values);
-    final links = {
-      for (final MapEntry(key: path, value: name) in wanted.entries)
-        if (path.split('/').last == 'CHANGELOG.md' && modeOf(name) == '120000')
-          path: _within(
-            _parent(name),
-            utf8.decode(objects[name]!.bytes, allowMalformed: true),
-          ),
-    };
-    if (links.values.nonNulls.isNotEmpty) await fetch(links.values.nonNulls);
-
+    final linked = await _readThrough(commit, [
+      for (final MapEntry(key: path, value: at) in wanted.entries)
+        if (path.split('/').last == 'CHANGELOG.md' && modeOf(at) == '120000')
+          at,
+    ]);
     final read = <String, SourceText>{};
     final present = <String>{};
     for (final MapEntry(key: path, value: at) in wanted.entries) {
-      if (modeOf(at) != null) present.add(path);
-      // A link out of the commit stays a link, which is refused.
-      final through = links.containsKey(path) ? links[path] ?? at : at;
-      final object = objects[through];
-      final refusal = switch (modeOf(through)) {
-        '120000' => 'symbolic link',
-        '160000' => 'gitlink/submodule',
+      final mode = modeOf(at);
+      if (mode != null) present.add(path);
+      final object = linked.containsKey(at) ? linked[at] : objects[at];
+      final refusal = switch (mode) {
+        _ when linked.containsKey(at) =>
+          object == null
+              ? 'it is a symbolic link to no file in the commit'
+              : null,
+        '120000' =>
+          'the committed entry is a symbolic link, not a regular file',
+        '160000' =>
+          'the committed entry is a gitlink/submodule, not a regular file',
         _ => null,
       };
-      read[path] = refusal != null
-          ? (
-              text: null,
-              error: SourceUnreadable(
-                path,
-                'the committed entry is a $refusal, not a regular file',
-              ),
-            )
-          : object == null || object.type != 'blob'
-          ? (text: null, error: null)
-          : _decode(path, object.bytes);
+      read[path] = switch ((refusal, object)) {
+        (final reason?, _) => (
+          text: null,
+          error: SourceUnreadable(path, reason),
+        ),
+        (_, final file?) when file.type == 'blob' => _decode(path, file.bytes),
+        _ => (text: null, error: null),
+      };
     }
     return Manifests._(read, present);
+  }
+
+  /// What each of [links], symbolic links in [commit], leads to through
+  /// every link on the way: the regular file it reads as, or null.
+  static Future<Map<String, GitObject?>> _readThrough(
+    CommitFiles commit,
+    List<String> links,
+  ) async {
+    if (links.isEmpty) return const {};
+    final entries = {
+      for (final entry in await commit.entries) entry.path: entry,
+    };
+    final all = [
+      for (final entry in entries.values)
+        if (entry.mode == '120000') entry.path,
+    ];
+    final held = await commit.read(all);
+    final targets = {
+      for (final link in all)
+        link: utf8.decode(held[link]!.bytes, allowMalformed: true),
+    };
+    final files = {
+      for (final link in links)
+        if (followLinks(link, targets) case final file?
+            when entries[file]?.isRegularFile ?? false)
+          link: file,
+    };
+    final read = await commit.read(files.values);
+    return {for (final link in links) link: read[files[link]]};
   }
 
   static SourceText _decode(String path, List<int> bytes) {
@@ -278,30 +298,6 @@ final class Manifests {
       );
     }
   }
-}
-
-/// The directory holding [path], or '' at the root.
-String _parent(String path) {
-  final cut = path.lastIndexOf('/');
-  return cut < 0 ? '' : path.substring(0, cut);
-}
-
-/// [relative], a link's target as written in [directory], as a path in the
-/// commit; null when it is absolute or climbs out of the commit.
-String? _within(String directory, String relative) {
-  if (relative.startsWith('/')) return null;
-  final parts = [if (directory.isNotEmpty) ...directory.split('/')];
-  for (final part in relative.split('/')) {
-    if (part.isEmpty || part == '.') continue;
-    if (part != '..') {
-      parts.add(part);
-    } else if (parts.isEmpty) {
-      return null;
-    } else {
-      parts.removeLast();
-    }
-  }
-  return parts.join('/');
 }
 
 /// What reading release.toml found.

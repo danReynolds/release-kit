@@ -6,6 +6,7 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/release_source.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/stage_source.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
@@ -101,42 +102,70 @@ publish = ["git-tag", "github-release"]
   );
 
   test(
-    'a committed changelog that links into the commit is read through',
+    'a committed changelog reads as a stage reads it, link by link',
     () async {
       if (Platform.isWindows) return;
-      _write(root, 'packages/a/pubspec.yaml', 'name: a\nversion: 1.0.0\n');
-      Link(
-        '${root.path}/packages/a/CHANGELOG.md',
-      ).createSync('../../CHANGELOG.md');
-      _write(root, 'release.toml', '''
-schema = 2
-
-[release.a]
-path = "packages/a"
-publish = ["pub.dev"]
-''');
+      final links = {
+        'one': '../../CHANGELOG.md',
+        'chain': '../../docs/CHANGELOG.md',
+        'directory': '../../notes/CHANGELOG.md',
+        'out': '../../../outside.md',
+        'absolute': '/etc/hosts',
+        'circle': 'CHANGELOG.md',
+        'dangling': 'gone.md',
+      };
+      _write(
+        root,
+        'release.toml',
+        [
+          'schema = 2',
+          for (final name in links.keys)
+            '[release.$name]\npath = "packages/$name"\npublish = ["pub.dev"]',
+        ].join('\n\n'),
+      );
+      _write(root, 'docs/real.md', '## 1.0.0\n');
+      _write(root, 'docs/notes/CHANGELOG.md', '## 1.0.0\n');
+      Link('${root.path}/docs/CHANGELOG.md').createSync('real.md');
+      Link('${root.path}/notes').createSync('docs/notes');
+      links.forEach((name, target) {
+        _write(
+          root,
+          'packages/$name/pubspec.yaml',
+          'name: $name\nversion: 1.0.0\n',
+        );
+        Link('${root.path}/packages/$name/CHANGELOG.md').createSync(target);
+      });
       commitAll();
+      final source = await ReleaseSource.open(root.path);
 
-      final read =
-          await (await ReleaseSource.open(root.path)).readConfig()
-              as ConfigResolved;
-      expect(
-        read.resolution.unit('a')!.projects.single.changelog?.text,
-        '## 1.0.0\n',
+      final read = await source.readConfig() as ConfigResolved;
+      final stage = await StageSourceSnapshot.capture(
+        source.tree,
+        commit: source.git.head,
       );
 
-      // One that leads out of the commit cannot be read, as a stage cannot
-      // read it, which its own unit is told.
-      Link('${root.path}/packages/a/CHANGELOG.md')
-        ..deleteSync()
-        ..createSync('/etc/hosts');
-      git(['commit', '-qam', 'out']);
-      final out =
-          await (await ReleaseSource.open(root.path)).readConfig()
-              as ConfigResolved;
-      final changelog = out.resolution.unit('a')!.projects.single.changelog!;
-      expect(changelog.text, isNull);
-      expect(changelog.error!.reason, contains('symbolic link'));
+      for (final name in links.keys) {
+        final changelog = read.resolution
+            .unit(name)!
+            .projects
+            .single
+            .changelog!;
+        final staged = stage.read('packages/$name/CHANGELOG.md');
+        expect(changelog.text, staged, reason: name);
+        expect(
+          changelog.error?.reason,
+          staged == null
+              ? 'it is a symbolic link to no file in the commit'
+              : null,
+          reason: name,
+        );
+      }
+      expect(
+        stage.read('packages/chain/CHANGELOG.md'),
+        '## 1.0.0\n',
+        reason: 'the stage reads through a chain of links',
+      );
+      expect(stage.read('packages/directory/CHANGELOG.md'), '## 1.0.0\n');
     },
   );
 

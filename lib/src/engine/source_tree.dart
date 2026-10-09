@@ -370,6 +370,55 @@ class SourceUnreadable implements Exception {
 /// one that is there could not be read.
 typedef SourceText = ({String? text, SourceUnreadable? error});
 
+/// [path], in a commit whose symbolic links hold [links], with every link on
+/// the way to it followed, as a checkout reads it: a stage reads its source
+/// this way, and status and release its changelogs. Null when a link leads
+/// out of the commit, or round in a circle.
+String? followLinks(String path, Map<String, String> links) {
+  var current = path;
+  for (var hops = 0; hops < 40; hops++) {
+    final parts = current.isEmpty ? const <String>[] : current.split('/');
+    var end = 1;
+    while (end <= parts.length &&
+        !links.containsKey(parts.take(end).join('/'))) {
+      end++;
+    }
+    if (end > parts.length) return current;
+    final link = parts.take(end).join('/');
+    final target = withinCommit(parentOf(link), links[link]!);
+    if (target == null) return null;
+    current = [
+      target,
+      ...parts.skip(end),
+    ].where((part) => part.isNotEmpty).join('/');
+  }
+  return null;
+}
+
+/// [relative], written from [directory], as a path in the commit; null when
+/// it is absolute or climbs out of the commit.
+String? withinCommit(String directory, String relative) {
+  if (relative.startsWith('/')) return null;
+  final parts = [if (directory.isNotEmpty) ...directory.split('/')];
+  for (final part in relative.split('/')) {
+    if (part.isEmpty || part == '.') continue;
+    if (part != '..') {
+      parts.add(part);
+    } else if (parts.isEmpty) {
+      return null;
+    } else {
+      parts.removeLast();
+    }
+  }
+  return parts.join('/');
+}
+
+/// The directory holding [path], or '' at the root.
+String parentOf(String path) {
+  final cut = path.lastIndexOf('/');
+  return cut < 0 ? '' : path.substring(0, cut);
+}
+
 /// The segments of [path] when it names a place inside a directory: relative,
 /// with no empty, `.` or `..` segment, backslash, NUL or drive letter.
 List<String>? relativeSegments(String path) {
