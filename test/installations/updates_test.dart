@@ -17,14 +17,6 @@ import 'package:rk/src/tui/use_picker.dart';
 import 'package:test/test.dart';
 import 'fixtures.dart';
 
-class Release extends AvailableInstallation {
-  Release(
-    super.project, [
-    super.source = InstallationSource.pub,
-    super.version = '1.3.0',
-  ]);
-}
-
 class UpdatingProvider extends StubProvider implements InstallationUpdates {
   UpdatingProvider() : super(InstallationSource.pub);
   @override

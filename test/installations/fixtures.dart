@@ -131,6 +131,15 @@ class TestTools implements Tools {
 ToolResult ok([String output = '']) =>
     ToolResult(exitCode: 0, stdout: output, stderr: '');
 
+/// A newer release a check found: Pub's 1.3.0 unless said otherwise.
+class Release extends AvailableInstallation {
+  Release(
+    super.project, [
+    super.source = InstallationSource.pub,
+    super.version = '1.3.0',
+  ]);
+}
+
 /// A Homebrew prefix on disk, answering the brew commands rk runs. Kegs live
 /// in `Cellar/<name>/<version>`, each with a receipt naming its tap, and
 /// `opt/<name>` points at the installed one, as Homebrew lays them out.
