@@ -10,16 +10,14 @@ import '../engine/git.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
 import '../engine/inspect.dart';
-import '../engine/stage_recovery.dart';
 import '../engine/publish_target.dart';
 import '../engine/registry.dart';
 import '../engine/release_dependencies.dart';
 import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
-import '../engine/stage_inspection.dart';
-import '../engine/targets.dart';
 import '../engine/tools.dart';
+import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../targets/target_module.dart';
 import 'release_progress.dart';
@@ -45,8 +43,6 @@ class ReleaseCommand {
     required this.resolution,
     required this.tree,
     required this.git,
-    GitState? repositoryGit,
-    this.sourceWarning,
     required this.inspector,
     required this.tools,
     required this.output,
@@ -57,8 +53,7 @@ class ReleaseCommand {
     Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
     required this.capabilities,
-  }) : repositoryGit = repositoryGit ?? git,
-       _wait = wait ?? _sleep,
+  }) : _wait = wait ?? _sleep,
        _stageFor =
            stageFor ??
            ReleaseStages(
@@ -78,12 +73,9 @@ class ReleaseCommand {
   final Resolution resolution;
   final SourceTree tree;
 
-  /// The source identity used for staging and public comparison.
+  /// The repository: the commit a stage is built from, and what it says
+  /// about the worktree around it.
   final GitState git;
-
-  /// The surrounding repository, retained when dirty bytes are unbound.
-  final GitState repositoryGit;
-  final Diagnostic? sourceWarning;
 
   /// Reads reality for a step. The same one `status` uses, so the two verbs
   /// cannot answer the same question differently — release grew its own copy
@@ -159,15 +151,7 @@ class ReleaseCommand {
     }
   }
 
-  /// The package a prerequisite step waits for: its coordinate is
-  /// `pub.dev/<package>/<version>`.
-  static String? _prerequisitePackage(Step step) {
-    final parts = step.coordinate?.split('/');
-    return parts == null || parts.length < 3 ? null : parts[1];
-  }
-
   final Map<String, String> Function() _refreshEnvironment;
-  var _sourceWarningShown = false;
 
   late final ReleaseStageCoordinator _stages = ReleaseStageCoordinator(
     initialGit: git,
@@ -205,12 +189,12 @@ class ReleaseCommand {
     // scope refusals that happen before the first unit pipeline starts.
     output.report.repository(
       name: tree.description.split('/').last,
-      branch: repositoryGit.branch,
-      uncommitted: repositoryGit.uncommitted.length,
+      branch: git.branch,
+      uncommitted: git.uncommitted.length,
       head: git.hasCommit ? git.head : null,
-      remote: repositoryGit.originUrl,
-      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
-      sourceComparison: git.isBound ? 'exact' : 'unavailable',
+      remote: git.originUrl,
+      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
+      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
     );
     if (only != null) {
       final named = resolution.units
@@ -242,6 +226,7 @@ class ReleaseCommand {
 
   Future<int> _runRepository(List<ResolvedUnit> selected) async {
     final prepared = await _prepareRepository(selected);
+    output.flushWarnings();
     if (prepared.code != ExitCodes.ok || stageOnly) return prepared.code;
     final publications = prepared.publications;
     if (publications.isEmpty) return ExitCodes.ok;
@@ -252,7 +237,7 @@ class ReleaseCommand {
     if (publicUnits.isNotEmpty) {
       output.heading(
         'Release order: '
-        '${publicUnits.map((plan) => '${plan.unit.name} ${plan.unit.version}').join(' -> ')}',
+        '${publicUnits.map((plan) => '${plan.unit.name} ${plan.unit.version}').join(' › ')}',
       );
       output.blank();
     }
@@ -262,7 +247,7 @@ class ReleaseCommand {
     for (final publication in publications) {
       final code = await _publication.publish(publication);
       if (code != ExitCodes.ok) return code;
-      output.previousUnitActed = output.report.acted;
+      output.previousUnitActed = output.report.actedPublicly;
     }
     return ExitCodes.ok;
   }
@@ -288,110 +273,64 @@ class ReleaseCommand {
       );
     }
     if (!_validateRepositoryScope(selected)) return result(ExitCodes.refused);
+    _sayRun(selected);
     output.timeline.phase('preparing');
     // Every unit's destinations are read at once; each unit is then shown,
     // in release order, as its answers arrive.
-    final reads = {for (final unit in selected) unit.name: _startReads(unit)};
-    final inspected = <String, _InspectedUnit>{};
-    for (final unit in selected) {
-      final observation = await Timings.span(
-        'inspect ${unit.name}',
-        () => _inspectRelease(unit, reads[unit.name]!),
+    final units = [for (final unit in selected) _startReads(unit)];
+    for (final unit in units) {
+      final read = await Timings.span(
+        'inspect ${unit.read.unit.name}',
+        () => _inspectRelease(unit),
       );
-      if (observation == null) return result(ExitCodes.refused);
-      inspected[unit.name] = observation;
+      if (!read) return result(ExitCodes.refused);
     }
-    bool isNoop(_InspectedUnit unit) =>
-        unit.targets.isNotEmpty &&
-        unit.targets.every((target) => unit.states[target.step.id]!.isExact);
     // Every unit's destinations are checked before any unit spends private
     // work: a conflict or an unready target in the last unit refuses before
     // the first one builds.
-    for (final observation in inspected.values) {
-      final unit = observation.unit;
-      final publicSteps = observation.checklist.steps
-          .where((s) => s.isPublic)
-          .toList();
-      final partialStageLoss =
-          !observation.stageReusable &&
-          !_releasedElsewhere(publicSteps, observation.states) &&
-          hasRecoveryCriticalPublicProgress(unit, [
-            for (final step in publicSteps)
-              (step, observation.states[step.id]!),
-          ]);
-      final blocked = publicSteps.where((step) {
-        final state = observation.states[step.id]!;
-        return !(partialStageLoss && state.verdict == Verdict.unknown) &&
-            Inspector.blocks(step, state);
-      }).firstOrNull;
-      if (blocked != null) {
-        _publication.haltForState(
-          unit,
-          blocked,
-          observation.states[blocked.id]!,
-          target: observation.targets
-              .where((t) => t.step.id == blocked.id)
-              .singleOrNull,
-        );
-        return result(ExitCodes.refused);
-      }
+    for (final unit in units) {
+      if (!_admit(unit.read)) return result(ExitCodes.refused);
       final ready = await Timings.span(
-        'check readiness ${unit.name}',
+        'check readiness ${unit.read.unit.name}',
         () => _publication.checkReadiness(
-          unit: unit,
-          targets: observation.targets,
-          states: observation.states,
-          actions: {
-            for (final target in observation.targets)
-              target.step.id: observation.states[target.step.id]!.isExact
-                  ? ReleaseAction.alreadyPublished
-                  : ReleaseAction.notAttempted,
-          },
-          stageOnly: true,
+          unit: unit.read.unit,
+          targets: unit.read.targets,
+          states: unit.read.states,
         ),
       );
       if (!ready) return result(ExitCodes.refused);
     }
-    final work = [
-      for (final unit in selected)
-        if (!isNoop(inspected[unit.name]!)) unit,
-    ];
-    Future<({int code, List<PublicationPlan> publications})>
-    finishNoops() async {
-      for (final unit in selected.where((u) => isNoop(inspected[u.name]!))) {
-        final prepared = await _prepareRelease(inspected[unit.name]!);
-        if (prepared.code != ExitCodes.ok) return result(prepared.code);
-        if (prepared.publication case final publication?) {
-          publications.add(publication);
-        }
-      }
-      return result(ExitCodes.ok);
+    if (!units.every((unit) => unit.read.released)) {
+      output.timeline.phase('staging');
     }
-
-    if (work.isEmpty) return finishNoops();
-    output.timeline.phase('staging');
     // Each unit is checked, and its signing settled, one at a time in
     // release order. Then every unit that needs a stage builds at once, and
     // each is finished in release order again.
-    final planned = <_ReleasePlan>[];
-    for (final unit in work) {
-      final plan = await Timings.span(
-        'plan ${unit.name}',
-        () => _planRelease(inspected[unit.name]!),
+    for (final unit in units) {
+      final planned = await Timings.span(
+        'plan ${unit.read.unit.name}',
+        () => _planRelease(unit),
       );
-      if (plan == null) return result(ExitCodes.refused);
-      planned.add(plan);
+      if (!planned) return result(ExitCodes.refused);
     }
     final stagings = [
-      for (final plan in planned)
-        if (plan.staging case final staging?) staging,
+      for (final unit in units)
+        if (unit.staging case final staging?) staging,
     ];
     Future<({int code, List<PublicationPlan> publications})> finish() async {
       final prepared = await _stage(stagings);
-      // Every unit says how its staging went, even past one that failed.
+      // The warnings every unit found while staging, said once, in release
+      // order whichever unit finished first.
+      output.flushWarnings(
+        order: [for (final unit in units) unit.read.unit.name],
+      );
+      // Every unit's staging is said, even past one that failed: once, for
+      // all of them.
       var code = ExitCodes.ok;
-      for (final plan in planned) {
-        final finished = _finishRelease(plan, prepared[plan.unit.name]);
+      final ready = <UnitSnapshot>[];
+      final staged = <_Staged>[];
+      for (final unit in units) {
+        final finished = _finishRelease(unit, prepared[unit.read.unit.name]);
         if (finished.code != ExitCodes.ok) {
           if (code == ExitCodes.ok) code = finished.code;
           continue;
@@ -399,9 +338,12 @@ class ReleaseCommand {
         if (finished.publication case final publication?) {
           publications.add(publication);
         }
+        if (finished.staged case final said?) staged.add(said);
+        if (finished.readyToPublish) ready.add(unit.read);
       }
-      if (code != ExitCodes.ok) return result(code);
-      return finishNoops();
+      if (staged.isNotEmpty) _sayStaged(staged);
+      if (code == ExitCodes.ok && ready.isNotEmpty) _sayReadyToPublish(ready);
+      return result(code);
     }
 
     // Units staged side by side say how they stopped once, after all of
@@ -409,14 +351,81 @@ class ReleaseCommand {
     return stagings.length > 1 ? output.holdingHalts(finish) : finish();
   }
 
-  /// Says once per run, before anything asks for a yes, that the release
-  /// is of uncommitted work.
-  void _showSourceWarning() {
-    if (sourceWarning == null || _sourceWarningShown) return;
-    _sourceWarningShown = true;
-    output.heading('Warnings');
-    output.warning(sourceWarning!, depth: 1);
+  /// Says once what this run stages or releases, and from which commit.
+  void _sayRun(List<ResolvedUnit> selected) {
+    final publishes = selected.any(
+      (unit) =>
+          unit.publish.isNotEmpty ||
+          unit.projects.any((project) => project.publish.isNotEmpty),
+    );
+    output.heading(
+      '${!stageOnly && publishes ? 'Releasing' : 'Staging'} '
+      '${_series([for (final unit in selected) '${unit.name} ${unit.version}'])}',
+    );
+    output.line(
+      [
+        tree.description.split('/').last,
+        '${git.branch ?? 'detached'}@${git.shortHead}',
+      ].join(' · '),
+      role: VisualRole.secondary,
+    );
     output.blank();
+  }
+
+  /// Whether nothing the snapshot read stops [read]'s unit before private
+  /// work.
+  bool _admit(UnitSnapshot read) {
+    if (read.stageReadProblem case final problem?) {
+      output.problem(problem, unit: read.unit.name);
+      output.halt(HaltKind.beforeActing);
+      return false;
+    }
+    final partialStageLoss = read.partialStageLoss;
+    final blocked = read.checklist.steps.where((step) {
+      if (step.kind == StepKind.completeStage) return false;
+      // A sibling the stage can take from this source waits for nothing
+      // while staging, which is private. A sibling released in this run
+      // publishes first, in dependency order, and is public before this
+      // unit uploads. Only a release that needs a package some other run
+      // must publish waits for it here.
+      if (step.kind == StepKind.prerequisite &&
+          (read.released ||
+              stageOnly ||
+              _releasing.contains(step.requires?.package))) {
+        return false;
+      }
+      final state = read.states[step.id]!;
+      return !(partialStageLoss && state.verdict == Verdict.unknown) &&
+          Inspector.blocks(step, state);
+    }).firstOrNull;
+    if (blocked == null) return true;
+    if (read.releasedFirstBy(blocked) case final sibling?) {
+      // Released by itself, this unit would wait for a package its sibling
+      // has yet to put on pub.dev. A repository release publishes it first.
+      output.problem(
+        Diagnostic(
+          code: 'RK-REL-001',
+          message:
+              '${blocked.summary}: '
+              '${read.states[blocked.id]!.detail ?? 'not published yet'}; '
+              '${sibling.unitName} releases it',
+          remedy:
+              'release them together, in order: rk release — or release '
+              '${sibling.unitName} first: rk release ${sibling.unitName}',
+        ),
+        unit: read.unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
+      output.next('rk release');
+      return false;
+    }
+    _publication.haltForState(
+      read.unit,
+      blocked,
+      read.states[blocked.id]!,
+      target: read.targetOf(blocked),
+    );
+    return false;
   }
 
   /// Cheap, source-owned refusals for every selected unit before preparation.
@@ -442,369 +451,121 @@ class ReleaseCommand {
   }
 
   /// Starts reading [unit]'s destinations and version history, showing
-  /// nothing, so every unit's reads run at once. A unit whose reads cannot
-  /// start reads them itself, and its inspection says what is wrong.
-  _UnitReads _startReads(ResolvedUnit unit) {
-    try {
-      final checklist = Checklist.derive(unit, resolution, Diagnostics());
-      final stage = _stageFor(unit).inspect();
-      final problems = Diagnostics();
-      return _UnitReads(
-        states: {
-          for (final step in checklist.steps)
-            step.id: _observeForRelease(step, unit, stage)..ignore(),
-        },
-        history: inspector.releaseMonotonicity(
-          unit,
-          inspector.targets.derive(
-            unit,
-            checklist,
-            repository: inspector.repository,
-          ),
-          problems,
-        )..ignore(),
-        problems: problems,
-      );
-    } on Object {
-      return _UnitReads(states: const {}, problems: Diagnostics());
-    }
-  }
-
-  Future<_InspectedUnit?> _inspectRelease(
-    ResolvedUnit unit,
-    _UnitReads reads,
-  ) async {
-    // The machine surface carries the same identity facts on every verb, as
-    // doc/json.md promises: repository, and the unit's version and tag.
-    output.report.unit(
-      name: unit.name,
-      version: unit.version.canonical,
-      tag: unit.tag,
-    );
-
-    final willPublish =
-        !stageOnly &&
-        (unit.publish.isNotEmpty ||
-            unit.projects.any((project) => project.publish.isNotEmpty));
-    output.heading(
-      '${willPublish ? 'Releasing' : 'Staging'} ${unit.name} ${unit.version}',
-    );
-    output.line(
-      [
-        tree.description.split('/').last,
-        if (git.hasCommit)
-          '${git.branch ?? 'detached'}@${git.shortHead}'
-        else
-          'working tree',
-        if (repositoryGit.uncommitted.isNotEmpty)
-          '${repositoryGit.uncommitted.length} uncommitted',
-      ].join(' · '),
-      role: VisualRole.secondary,
-    );
-    output.blank();
-
-    _showSourceWarning();
-
-    final problems = Diagnostics();
-    _validate(unit, problems);
-    if (problems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(problems.found);
-      return null;
-    }
-
-    final checklist = Checklist.derive(unit, resolution, problems);
-    if (problems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(problems.found);
-      return null;
-    }
-    final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
-    final localOnly = publicSteps.isEmpty;
-    if (stageOnly && !git.isBound && !localOnly) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-SRC-002',
-          message: 'an unbound stage cannot be authorized by a later run',
-          remedy:
-              'without Git, build, authorize, and begin publication in '
-              'one invocation: rk release ${unit.name}',
-        ),
-        unit: unit.name,
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-    final targets = inspector.targets.derive(
+  /// nothing, so every unit's reads run at once.
+  _Unit _startReads(ResolvedUnit unit) => _Unit(
+    UnitSnapshot.start(
       unit,
-      checklist,
+      resolution: resolution,
+      inspector: inspector,
       repository: inspector.repository,
-    );
-    final targetByStep = {for (final target in targets) target.step.id: target};
-    final initialProgress = TargetReleaseProgress(
+      hasCommit: git.hasCommit,
+      stageFor: _stageFor,
+    ),
+  );
+
+  /// Shows [unit] as its answers arrive, and records them. False when what
+  /// was read refuses the release.
+  Future<bool> _inspectRelease(_Unit unit) async {
+    final read = unit.read;
+    final ResolvedUnit(:name, :version) = read.unit;
+    final progress = TargetReleaseProgress(
       output,
-      title: '${unit.name} ${unit.version} · preparing release',
-      targets: targets,
+      title: '$name $version · preparing release',
+      targets: read.targets,
     );
-
-    final ReleaseStage stage;
-    try {
-      stage = _stageFor(unit);
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-001',
-          message: 'the release stage identity could not be resolved',
-          remedy: '$error',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-
-    final stageInspection = stage.inspect();
 
     // Destinations are independent, so they are read together: every row
     // says what it is doing at once, and the wait is the slowest read
     // rather than their sum. The report is written afterwards in checklist
     // order, so the document never depends on which answer arrived first.
-    for (final step in checklist.steps) {
-      final target = targetByStep[step.id];
-      if (target == null) continue;
-      initialProgress.begin(target, CommonProgressActivities.checking);
+    for (final target in read.targets) {
+      progress.begin(target, CommonProgressActivities.checking);
     }
-    final observed = await Future.wait([
-      for (final step in checklist.steps)
-        (reads.states[step.id] ??
-                _observeForRelease(step, unit, stageInspection))
-            .then((state) {
-              final target = targetByStep[step.id];
-              if (target != null) initialProgress.observe(target, state);
-              return state;
-            }),
+    await Future.wait([
+      for (final target in read.targets)
+        read.reads[target.step.id]!.then(
+          (state) => progress.observe(target, state),
+        ),
     ]);
-    final states = <String, Inspection>{
-      for (final (index, step) in checklist.steps.indexed)
-        step.id: observed[index],
-    };
-    for (final step in checklist.steps) {
-      final state = states[step.id]!;
+    await read.settle();
+    for (final step in read.checklist.steps) {
+      final state = read.states[step.id]!;
       output.step(
         step,
         verdict: state.verdict,
         detail: state.detail,
         evidence: state.evidence,
-        action: step.isPublic
-            ? (state.isExact
-                  ? ReleaseAction.alreadyPublished.wire
-                  : ReleaseAction.notAttempted.wire)
-            : null,
+        action: unit.actions[step.id]?.wire,
         show: false,
       );
     }
 
-    final releaseHistory =
-        await (reads.history ??
-            inspector.releaseMonotonicity(unit, targets, reads.problems));
-    reads.problems.found.forEach(problems.report);
-    inspector.tagGuards(unit, checklist, states).forEach(problems.report);
-    initialProgress.discard();
-    if (problems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(problems.found);
-      return null;
-    }
-
-    return _InspectedUnit(
-      unit: unit,
-      checklist: checklist,
-      targets: targets,
-      states: states,
-      history: releaseHistory,
-      stageReusable: stageInspection.reusable,
-    );
+    final problems = Diagnostics();
+    read.historyProblems.forEach(problems.report);
+    read.tagProblems.forEach(problems.report);
+    progress.discard();
+    if (problems.isEmpty) return true;
+    output.halt(HaltKind.beforeActing);
+    output.problems(problems.found);
+    return false;
   }
 
-  Future<({int code, PublicationPlan? publication})> _prepareRelease(
-    _InspectedUnit inspected,
-  ) async {
-    final plan = await _planRelease(inspected);
-    if (plan == null) return (code: ExitCodes.refused, publication: null);
-    final prepared = await _stage([?plan.staging]);
-    return _finishRelease(plan, prepared[plan.unit.name]);
-  }
+  /// Checks [planned]'s unit against everything that refuses it before
+  /// staging, and settles what its staging needs first. False when refused.
+  Future<bool> _planRelease(_Unit planned) async {
+    final read = planned.read;
+    final unit = read.unit;
+    if (read.released) return true;
+    final stage = read.stage!;
+    final stageInspection = read.stageInspection!;
 
-  /// Checks [inspected]'s unit against everything that refuses it before
-  /// staging, and settles what its staging needs first. Null when refused.
-  Future<_ReleasePlan?> _planRelease(_InspectedUnit inspected) async {
-    final unit = inspected.unit;
-    output.report.unit(
-      name: unit.name,
-      version: unit.version.canonical,
-      tag: unit.tag,
-    );
-    final checklist = inspected.checklist;
-    final targets = inspected.targets;
-    final states = inspected.states;
-    final releaseHistory = inspected.history;
-    final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
-    final targetByStep = {for (final target in targets) target.step.id: target};
-    final ReleaseStage stage;
-    try {
-      stage = _stageFor(unit);
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-001',
-          message: 'the release stage identity could not be resolved',
-          remedy: '$error',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-    final stageInspection = stage.inspect();
-
-    final alreadyReleased =
-        publicSteps.isNotEmpty &&
-        publicSteps.every((step) => states[step.id]!.isExact);
-
-    // Unknown destination state never grants permission to produce locally.
-    // Native preparation can defer public dependency availability, and a lost
-    // recovery-critical partial stage retains its specific refusal below.
-    final partialStageLoss =
-        !_releasedElsewhere(publicSteps, states) &&
-        !stageInspection.reusable &&
-        hasRecoveryCriticalPublicProgress(unit, [
-          for (final step in publicSteps) (step, states[step.id]!),
-        ]);
-    final initialBlock = checklist.steps.where((step) {
-      if (step.kind == StepKind.completeStage) return false;
-      if (step.kind == StepKind.prerequisite) {
-        // A sibling the stage can take from this source waits for nothing
-        // while staging, which is private. A sibling released in this run
-        // publishes first, in dependency order, and is public before this
-        // unit uploads. Only a release that needs a package some other run
-        // must publish waits for it here.
-        if (alreadyReleased ||
-            stageOnly ||
-            _releasing.contains(_prerequisitePackage(step))) {
-          return false;
-        }
-      }
-      final state = states[step.id]!;
-      if (partialStageLoss && state.verdict == Verdict.unknown) {
-        return false;
-      }
-      return Inspector.blocks(step, state);
-    }).firstOrNull;
-    if (initialBlock != null) {
-      _publication.haltForState(
-        unit,
-        initialBlock,
-        states[initialBlock.id]!,
-        target: targetByStep[initialBlock.id],
-      );
-      return null;
+    bool refuse(Diagnostic problem, HaltKind halt) {
+      output.halt(halt);
+      output.problem(problem, unit: unit.name);
+      if (!stageOnly) _publication.showActions(read.targets, planned.actions);
+      return false;
     }
 
-    final publicActions = {
-      for (final step in publicSteps)
-        step.id: states[step.id]!.isExact
-            ? ReleaseAction.alreadyPublished
-            : ReleaseAction.notAttempted,
-    };
-    final plan = _ReleasePlan(
-      inspected: inspected,
-      stage: stage,
-      stageInspection: stageInspection,
-      publicSteps: publicSteps,
-      publicActions: publicActions,
-      alreadyReleased: alreadyReleased,
-    );
-    if (alreadyReleased) return plan;
-
-    // A moving channel may be able to finish from authenticated public
-    // inputs even after the local stage is lost. This is intentionally an
-    // all-remaining-targets check: one versioned publication that still needs
-    // bytes keeps the original stage recovery-critical for the whole run.
-    final unfinishedTargets = [
-      for (final step in publicSteps)
-        if (!states[step.id]!.isExact) targetByStep[step.id]!,
-    ];
-    plan.recoversWithoutStage = _recoversWithoutStage(
-      stageInspection,
-      unfinishedTargets,
-      states,
-    );
-    if (_needsLostStage(
-      unit,
-      stageInspection,
-      publicSteps,
-      states,
-      recoversWithoutStage: plan.recoversWithoutStage,
-    )) {
-      output.halt(HaltKind.unfixableByRerun);
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-005',
-          message: unit.shipsBinaries
-              ? 'the partial binary release needs its exact stage'
-              : 'the partial release needs its exact stage',
-          remedy:
-              'restore ${stage.directory.path} from the machine that '
-              'staged this release. Its recorded archive bytes cannot be '
-              'recreated byte-for-byte after a public target has bound them.',
-        ),
-      );
-      if (!stageOnly) _publication.showActions(targets, publicActions);
-      return null;
+    // A moving channel may finish from authenticated public inputs once the
+    // stage is gone. Staging alone never does: it builds the stage.
+    planned.recovering = !stageOnly && read.recoversWithoutStage;
+    if (read.needsLostStage(recovering: !stageOnly)) {
+      return refuse(read.lostStageProblem, HaltKind.unfixableByRerun);
     }
-    if (!stageInspection.reusable && !plan.recoversWithoutStage) {
-      final refusal = _refuseIfUnfinishable(unit);
-      if (refusal != null) {
-        output.halt(HaltKind.beforeActing);
-        output.problem(refusal);
-        if (!stageOnly) _publication.showActions(targets, publicActions);
-        return null;
+    if (planned.recovering) return true;
+    if (!stageInspection.reusable) {
+      if (_refuseIfUnfinishable(unit) case final refusal?) {
+        return refuse(refusal, HaltKind.beforeActing);
       }
     }
-
-    if (!stageOnly) {
-      // Stage-only mode keeps its explicit ability to replace
-      // reviewed-but-invalid bytes. A real release refuses that ambiguity
-      // before any local preparation.
-      final stageProblem = plan.recoversWithoutStage
-          ? null
-          : _stages.preparationProblem(
-              unit,
-              stageInspection,
-              mayReplaceReviewed: false,
-            );
-      if (stageProblem != null) {
-        output.problem(stageProblem, unit: unit.name);
-        output.halt(HaltKind.beforeActing);
-        _publication.showActions(targets, publicActions);
-        return null;
-      }
+    // Stage-only mode keeps its explicit ability to replace
+    // reviewed-but-invalid bytes. A real release refuses that ambiguity
+    // before any local preparation.
+    if (_stages.preparationProblem(
+          unit,
+          stageInspection,
+          mayReplaceReviewed: stageOnly,
+        )
+        case final problem?) {
+      return refuse(problem, HaltKind.beforeActing);
     }
 
-    if (plan.recoversWithoutStage) return plan;
     final staging = await _stages.begin(
       unit: unit,
-      checklist: checklist,
-      targets: targets,
-      targetStages: inspector.targets.stages(unit: unit, targets: targets),
+      checklist: read.checklist,
+      targets: read.targets,
+      targetStages: inspector.targets.stages(unit: unit, targets: read.targets),
       stage: stage,
       inspected: stageInspection,
-      claims: releaseHistory.claims,
+      claims: read.claims,
       fromSource: await _fromSource(unit),
     );
     if (staging == null) {
-      if (!stageOnly) _publication.showActions(targets, publicActions);
-      return null;
+      if (!stageOnly) _publication.showActions(read.targets, planned.actions);
+      return false;
     }
-    return plan..staging = staging;
+    planned.staging = staging;
+    return true;
   }
 
   /// Builds or reuses every stage in [stagings], all at once, by unit name;
@@ -843,7 +604,18 @@ class ReleaseCommand {
         ),
     ]);
     if (prepared.every((result) => result != null)) {
-      live.settle(title: '${stagings.length} units staged');
+      // A stage reused is not staged again: the title says which it was.
+      final reused = stagings
+          .where((staging) => staging.inspected.reusable)
+          .length;
+      final count = stagings.length;
+      live.settle(
+        title: reused == 0
+            ? '$count units staged'
+            : reused == count
+            ? '$count units · already staged'
+            : '$count units · ${count - reused} staged, $reused already staged',
+      );
     } else {
       live.conclude();
     }
@@ -853,69 +625,66 @@ class ReleaseCommand {
     };
   }
 
-  /// Finishes [plan]'s unit once its stage is built ([prepared]; null when
-  /// staging refused): says what was staged, and hands publication the
+  /// Finishes [finished]'s unit once its stage is built ([prepared]; null
+  /// when staging refused): says what was staged, and hands publication the
   /// plan it acts on.
-  ({int code, PublicationPlan? publication}) _finishRelease(
-    _ReleasePlan plan,
-    PreparedRelease? prepared,
-  ) {
-    final _ReleasePlan(:unit, :stage, :publicSteps, :publicActions) = plan;
-    final checklist = plan.inspected.checklist;
-    final targets = plan.inspected.targets;
-    final states = plan.inspected.states;
-    final localOnly = publicSteps.isEmpty;
-    if (plan.alreadyReleased) {
-      if (stageOnly) {
-        output.line(
-          '${unit.name} ${unit.version}',
-          mark: Mark.satisfied,
-          note: 'already released',
+  ({
+    int code,
+    PublicationPlan? publication,
+    bool readyToPublish,
+    _Staged? staged,
+  })
+  _finishRelease(_Unit finished, PreparedRelease? prepared) {
+    final read = finished.read;
+    final UnitSnapshot(:unit, :checklist, :targets) = read;
+    final stage = read.stage!;
+    PublicationPlan publication(PreparedRelease prepared) => PublicationPlan(
+      unit: unit,
+      steps: checklist.steps,
+      publicSteps: read.publicSteps,
+      targets: targets,
+      states: read.states,
+      actions: finished.actions,
+      prepared: prepared,
+      stage: stage,
+      recoversWithoutStage: finished.recovering || read.released,
+    );
+    if (read.released) {
+      if (!stageOnly) {
+        return (
+          code: ExitCodes.ok,
+          publication: publication(
+            PreparedRelease(claims: read.claims, signing: null),
+          ),
+          readyToPublish: false,
+          staged: null,
         );
-        return (code: ExitCodes.ok, publication: null);
       }
+      output.line(
+        '${unit.name} ${unit.version}',
+        mark: Mark.satisfied,
+        note: 'already released',
+      );
       return (
         code: ExitCodes.ok,
-        publication: PublicationPlan(
-          unit: unit,
-          steps: checklist.steps,
-          publicSteps: publicSteps,
-          targets: targets,
-          states: states,
-          actions: publicActions,
-          prepared: PreparedRelease(
-            claims: plan.inspected.history.claims,
-            signing: null,
-          ),
-          stage: stage,
-          recoversWithoutStage: true,
-        ),
+        publication: null,
+        readyToPublish: false,
+        staged: null,
+      );
+    }
+    if (finished.recovering) {
+      prepared = PreparedRelease(claims: const [], signing: null);
+    } else if (prepared == null) {
+      if (!stageOnly) _publication.showActions(targets, finished.actions);
+      return (
+        code: ExitCodes.refused,
+        publication: null,
+        readyToPublish: false,
+        staged: null,
       );
     }
 
-    final reusedStage = plan.stageInspection.reusable;
-    if (plan.recoversWithoutStage) {
-      prepared = PreparedRelease(claims: const [], signing: null);
-    } else {
-      if (prepared == null) {
-        if (!stageOnly) _publication.showActions(targets, publicActions);
-        return (code: ExitCodes.refused, publication: null);
-      }
-      final stageInspection = stage.inspect();
-      if (!stageInspection.reusable) {
-        output.problem(
-          Diagnostic(
-            code: 'RK-STAGE-003',
-            message: 'the release stage did not remain valid',
-            remedy: stageInspection.issues.join('\n'),
-          ),
-        );
-        output.halt(HaltKind.beforeActing);
-        if (!stageOnly) _publication.showActions(targets, publicActions);
-        return (code: ExitCodes.refused, publication: null);
-      }
-    }
-
+    final localOnly = read.publicSteps.isEmpty;
     if (stageOnly || localOnly) {
       output.step(
         checklist.steps.singleWhere(
@@ -929,123 +698,110 @@ class ReleaseCommand {
         },
         show: false,
       );
-      _sayStageClaims(prepared.claims, localOnly ? null : prepared.signing);
-      if (unit.binaryProject case final project? when localOnly) {
+      final staged = (
+        unit: unit,
+        reused: read.stageReusable,
+        claims: prepared.claims,
+        signing: localOnly ? null : prepared.signing,
+        archives: localOnly && unit.binaryProject != null
+            ? '${stage.directory.repositoryRelativePath}/'
+                  '${ReleaseAssets.producerRoot(unit.binaryProject!)}/archives'
+            : null,
+      );
+      if (stageOnly) {
+        return (
+          code: ExitCodes.ok,
+          publication: null,
+          readyToPublish: !localOnly,
+          staged: staged,
+        );
+      }
+      return (
+        code: ExitCodes.ok,
+        publication: publication(prepared),
+        readyToPublish: false,
+        staged: staged,
+      );
+    }
+    return (
+      code: ExitCodes.ok,
+      publication: publication(prepared),
+      readyToPublish: false,
+      staged: null,
+    );
+  }
+
+  /// Says, once for the run, what every unit's stage holds: the names its
+  /// release would claim first, where local archives are, and whether each
+  /// stage was built now or was already there.
+  void _sayStaged(List<_Staged> staged) {
+    _sayStageClaims(
+      [for (final unit in staged) ...unit.claims],
+      [
+        for (final unit in staged)
+          if (unit.signing case final signing?
+              when signing.firstCertificate != null)
+            signing,
+      ],
+    );
+    for (final unit in staged) {
+      if (unit.archives case final archives?) {
         output.blank();
         output.line(
           'Archives',
-          note:
-              '${stage.directory.repositoryRelativePath}/'
-              '${ReleaseAssets.producerRoot(project)}/archives',
+          note: staged.length == 1
+              ? archives
+              : '${unit.unit.name} ${unit.unit.version} · $archives',
           role: VisualRole.secondary,
           noteRole: VisualRole.secondary,
         );
       }
-      output.blank();
-      output.line(
-        '${unit.name} ${unit.version} '
-        '${reusedStage ? 'is already staged and verified.' : 'staged successfully.'}',
-        mark: Mark.done,
-        strong: true,
-      );
-      if (!localOnly) {
-        final command = 'rk release ${unit.name}';
-        output.report.next(command);
-        output.blank();
-        output.line(
-          'Ready to publish: $command',
-          depth: 1,
-          role: VisualRole.operatorAction,
-        );
-      }
-      if (stageOnly) return (code: ExitCodes.ok, publication: null);
     }
-
-    return (
-      code: ExitCodes.ok,
-      publication: PublicationPlan(
-        unit: unit,
-        steps: checklist.steps,
-        publicSteps: publicSteps,
-        targets: targets,
-        states: states,
-        actions: publicActions,
-        prepared: prepared,
-        stage: stage,
-        recoversWithoutStage: plan.recoversWithoutStage,
-      ),
+    String names(Iterable<_Staged> units) => _series([
+      for (final unit in units) '${unit.unit.name} ${unit.unit.version}',
+    ]);
+    final built = staged.where((unit) => !unit.reused).toList();
+    final reused = staged.where((unit) => unit.reused).toList();
+    output.blank();
+    output.line(
+      '${[if (built.isNotEmpty) '${names(built)} staged successfully', if (reused.isNotEmpty) '${names(reused)} ${reused.length == 1 ? 'is' : 'are'} already staged and verified'].join('; ')}.',
+      mark: Mark.done,
+      strong: true,
     );
   }
 
-  Future<Inspection> _observeForRelease(
-    Step step,
-    ResolvedUnit unit,
-    StageInspection stage,
-  ) {
-    if (step.kind == StepKind.completeStage) {
-      return Future.value(stage.asInspection);
-    }
-    if (!step.isPublic &&
-        step.kind != StepKind.prerequisite &&
-        stage.reusable) {
-      return Future.value(
-        const Inspection.exact(detail: 'validated in the release stage'),
+  /// Says, once for the run, the command that publishes what [staged]
+  /// holds: the unit's own `rk release`, unless several units were staged or
+  /// the unit releases after a sibling — then the repository's, which
+  /// publishes them in order.
+  void _sayReadyToPublish(List<UnitSnapshot> staged) {
+    final command = staged.length == 1 && !staged.single.releasesAfterSibling
+        ? 'rk release ${staged.single.unit.name}'
+        : 'rk release';
+    // Only the tag a release pushes needs a commit origin can fetch. Until
+    // origin has it, the release would refuse (RK-GIT-003), so that comes
+    // first, and nothing is offered that would refuse.
+    final unpushed =
+        staged.any((read) => read.unit.publish.contains(PublishTarget.gitTag))
+        ? git.unpushedProblem()
+        : null;
+    output.blank();
+    if (unpushed != null) {
+      output.warning(unpushed, depth: 1);
+      output.line(
+        'Ready to publish once origin has this commit: $command',
+        depth: 1,
+        role: VisualRole.operatorAction,
       );
+      return;
     }
-    return inspector.inspect(step, unit);
+    output.report.next(command);
+    output.line(
+      'Ready to publish: $command',
+      depth: 1,
+      role: VisualRole.operatorAction,
+    );
   }
-
-  /// Whether the targets a unit has left can all finish from authenticated
-  /// public inputs once its stage is gone, as a moving channel may. One
-  /// versioned publication that still needs bytes keeps the original stage
-  /// recovery-critical for the whole run.
-  bool _recoversWithoutStage(
-    StageInspection stageInspection,
-    List<TargetPlan> unfinished,
-    Map<String, Inspection> states,
-  ) =>
-      !stageOnly &&
-      !stageInspection.reusable &&
-      unfinished.isNotEmpty &&
-      unfinished.every((target) {
-        final state = states[target.step.id]!;
-        return state.isAbsent &&
-            inspector.targets
-                .moduleForTarget(target)
-                .recoversWithoutStage(state);
-      });
-
-  /// Whether a partial public release needs the exact stage it no longer has.
-  /// Only built release assets make the original stage recovery-critical; a
-  /// unit without them, or a pub.dev package, stages again from its commit.
-  /// Unread destinations cannot authorize reconstruction once unit-level
-  /// release progress is established.
-  bool _needsLostStage(
-    ResolvedUnit unit,
-    StageInspection stageInspection,
-    List<Step> publicSteps,
-    Map<String, Inspection> states, {
-    required bool recoversWithoutStage,
-  }) =>
-      !_releasedElsewhere(publicSteps, states) &&
-      !stageInspection.reusable &&
-      !recoversWithoutStage &&
-      hasRecoveryCriticalPublicProgress(unit, [
-        for (final step in publicSteps) (step, states[step.id]!),
-      ]) &&
-      publicSteps.any((step) {
-        final state = states[step.id]!;
-        return state.isAbsent || state.verdict == Verdict.unknown;
-      });
-
-  /// Whether an earlier commit released this version. It is public from that
-  /// commit's stage, not from one this commit could have lost: what remains
-  /// of it is finished there (RK-GIT-009), and what cannot be read, including
-  /// a tag whose commit this clone has yet to fetch, says so.
-  static bool _releasedElsewhere(
-    List<Step> publicSteps,
-    Map<String, Inspection> states,
-  ) => publicSteps.any((step) => states[step.id]!.releasedFrom != null);
 
   /// Refuses what this machine cannot finish, before any work rather than at
   /// the last step.
@@ -1092,14 +848,12 @@ class ReleaseCommand {
   }
 
   void _validate(ResolvedUnit unit, Diagnostics problems) {
-    if (sourceWarning == null) {
-      final uncommitted = repositoryGit.uncommittedProblem();
-      if (uncommitted != null) problems.report(uncommitted);
-    }
+    // A stage is named by its commit, so every unit needs a clean one.
+    if (git.stagingProblem() case final problem?) problems.report(problem);
     // Staging is private: only the tag a release pushes needs a commit
     // origin can fetch.
     if (!stageOnly && unit.publish.contains(PublishTarget.gitTag)) {
-      final unpushed = repositoryGit.unpushedProblem();
+      final unpushed = git.unpushedProblem();
       if (unpushed != null) problems.report(unpushed);
     }
     for (final project in unit.projects) {
@@ -1113,13 +867,13 @@ class ReleaseCommand {
     }
   }
 
-  /// Shows irreversible first-claim facts beside a completed private stage.
+  /// Shows irreversible first-claim facts beside the completed private
+  /// stages: every unit's, under one heading.
   void _sayStageClaims(
     List<TargetClaim> claims,
-    ReleaseSigningContext? signing,
+    List<ReleaseSigningContext> firstSignings,
   ) {
-    final firstSigning = signing?.firstCertificate == null ? null : signing;
-    if (claims.isEmpty && firstSigning == null) return;
+    if (claims.isEmpty && firstSignings.isEmpty) return;
     output.blank();
     // Tense matters: at staging nothing public has happened yet, so saying
     // these *are* permanent would be false a moment before it is true.
@@ -1138,7 +892,7 @@ class ReleaseCommand {
         noteRole: VisualRole.secondary,
       );
     }
-    if (firstSigning != null) {
+    for (final firstSigning in firstSignings) {
       output.line(
         'macOS code identifier',
         note: firstSigning.codeId,
@@ -1162,64 +916,38 @@ class ReleaseCommand {
       certificate.replaceFirst('Developer ID Application: ', '');
 }
 
-/// One unit's public reads, started before any unit is shown.
-final class _UnitReads {
-  _UnitReads({required this.states, this.history, required this.problems});
+/// What one unit's completed stage holds, for the run's closing summary.
+typedef _Staged = ({
+  ResolvedUnit unit,
+  bool reused,
+  List<TargetClaim> claims,
+  ReleaseSigningContext? signing,
+  String? archives,
+});
 
-  /// Each step's state as it arrives, by step id.
-  final Map<String, Future<Inspection>> states;
+/// "a", "a and b", "a, b and c": several names in one sentence.
+String _series(List<String> names) => names.length <= 2
+    ? names.join(' and ')
+    : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 
-  /// The lanes' version history; null when the unit reads it itself.
-  final Future<ReleaseHistoryCheck>? history;
+/// One unit's release: what was read, shared with `rk status`, and what
+/// planning made of it.
+final class _Unit {
+  _Unit(this.read);
 
-  /// What the history read refuses.
-  final Diagnostics problems;
-}
+  final UnitSnapshot read;
 
-/// One unit's release after its checks: what staging it needs, if any.
-final class _ReleasePlan {
-  _ReleasePlan({
-    required this.inspected,
-    required this.stage,
-    required this.stageInspection,
-    required this.publicSteps,
-    required this.publicActions,
-    required this.alreadyReleased,
-  });
-
-  final _InspectedUnit inspected;
-  final ReleaseStage stage;
-  final StageInspection stageInspection;
-  final List<Step> publicSteps;
-  final Map<String, ReleaseAction> publicActions;
-  final bool alreadyReleased;
-
-  /// Whether every remaining target can finish from public inputs alone.
-  var recoversWithoutStage = false;
+  /// Whether what this unit has left finishes from public inputs, without
+  /// its stage.
+  var recovering = false;
 
   /// The stage to build or reuse; null when none is needed.
   UnitStaging? staging;
 
-  ResolvedUnit get unit => inspected.unit;
-}
-
-/// The one public snapshot a release takes of a unit, before staging. It
-/// carries no session or permission to perform a public operation.
-final class _InspectedUnit {
-  _InspectedUnit({
-    required this.unit,
-    required this.checklist,
-    required Iterable<TargetPlan> targets,
-    required Map<String, Inspection> states,
-    required this.history,
-    required this.stageReusable,
-  }) : targets = List.unmodifiable(targets),
-       states = Map.unmodifiable(states);
-
-  final ResolvedUnit unit;
-  final Checklist checklist;
-  final List<TargetPlan> targets;
-  final Map<String, Inspection> states;
-  final ReleaseHistoryCheck history;
-  final bool stageReusable;
+  late final actions = {
+    for (final step in read.publicSteps)
+      step.id: read.states[step.id]!.isExact
+          ? ReleaseAction.alreadyPublished
+          : ReleaseAction.notAttempted,
+  };
 }

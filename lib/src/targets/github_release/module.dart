@@ -100,52 +100,13 @@ final class GithubReleaseTargetModule extends TargetModule {
       return Inspection.conflict(message, evidence: evidence);
     }
     final bundle = (resolvedBundle as ReleaseBundleAvailable).bundle;
-    final notes = File(stage.directory.resolve('release-notes.md'));
-    if (!notes.existsSync()) {
-      return const Inspection.conflict(
-        'the completed stage has no release notes',
-      );
-    }
     return destination.inspectExact(
       GithubReleaseExpectation(
         tag: tag,
-        title: '${unit.name} ${unit.version}',
-        body: notes.readAsStringSync(),
         prerelease: unit.version.isPrerelease,
         assetSha256: bundle.sha256ByPublicName,
       ),
     );
-  }
-
-  @override
-  Future<TargetHistory> inspectHistory(
-    TargetReadContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-  ) async {
-    final tools = context.tools;
-    if (tools == null) {
-      return TargetHistory.versioned(
-        inspection: const Inspection.unknown('no tools to read the forge with'),
-        target: target,
-      );
-    }
-    final repository = context.repository;
-    if (repository == null) {
-      return TargetHistory.versioned(
-        inspection: const Inspection.unknown('no origin remote to ask'),
-        target: target,
-      );
-    }
-    final inspection =
-        await GithubRelease(
-          tools: tools,
-          repository: repository,
-          workingDirectory: context.git.root,
-        ).inspectLatestVersion(
-          requiredTargetTagPattern(unit, PublishTarget.githubRelease),
-        );
-    return TargetHistory.versioned(inspection: inspection, target: target);
   }
 
   @override
@@ -271,7 +232,6 @@ final class GithubReleaseTargetModule extends TargetModule {
           'GitHub private draft state may have changed; no GitHub Release '
               'was confirmed public.',
       },
-      permanent: outcome.permanent,
       evidence: outcome.ok ? null : outcome.transcript,
     );
   }

@@ -28,7 +28,7 @@ import pyte
 
 class Terminal:
     def __init__(self, executable, command, project, home, *, cols=132, rows=32, arguments=(), environment=None):
-        self.mouse = command == 'use'
+        self.mouse = command in ('use', 'install', 'uninstall')  # all open the use table
         self.master, self.slave = pty.openpty()
         self.set_size(cols, rows)
         self.before = termios.tcgetattr(self.slave)
@@ -176,8 +176,7 @@ class Terminal:
         history = '\n'.join(''.join(cell.data for cell in line.values())
                             for line in self.screen.history.top) + self.text()
         assert 'Shell history stays here' in history, history
-        for title in ['Choose what runs locally.', 'Choose where', 'Choose the outputs', 'Review release.toml',
-                      'Install a source', 'Remove a source']:
+        for title in ['Choose what runs locally.', 'Choose the outputs', 'Review release.toml']:
             assert title not in self.text(), f'Inline frame survived exit: {self.text()}'
         assert b'\x1b[?25h' in self.raw, 'cursor hidden after exit'
         assert b'\x1b[?1003h' not in self.raw, 'enabled mouse hover tracking'
@@ -212,26 +211,14 @@ def main():
         root = Path(temporary).resolve()
         home = root / 'install'
         project = fixture(home, True)
-        with Terminal(executable, 'install', project, home) as terminal:
-            terminal.wait('Install a source.')
-            terminal.send(b'\t\r')
-            terminal.wait('installed from Local', timeout=60)
-            terminal.finish()
-        assert not (home / 'data/rk/bin/orbit').exists(), 'install changed routing'
-        print('install: prepared without switching; inline restored', flush=True)
-        with Terminal(executable, 'uninstall', project, home) as terminal:
-            terminal.wait('Remove a source')
-            terminal.send(b'\t\r')
-            terminal.wait('Remove orbit from Local?')
-            terminal.send(b'\x1b')
-            terminal.wait('Remove a source')
-            terminal.send(b'\r')  # Cancellation restores the originating cell.
-            terminal.wait('Remove orbit from Local?')
-            terminal.activate('Remove installation')
-            terminal.wait('removed from Local')
-            terminal.finish()
-        assert (project / 'bin/orbit.dart').exists(), 'local uninstall removed checkout'
-        print('uninstall: confirmation, cancellation, removal; inline restored', flush=True)
+        for command in ['install', 'uninstall']:
+            with Terminal(executable, command, project, home) as terminal:
+                terminal.wait(f'rk {command}')
+                terminal.wait('Choose what runs locally.')
+                terminal.send(b'\x1b')
+                terminal.finish()
+        assert not (home / 'data/rk/bin/orbit').exists(), 'opening the table changed routing'
+        print('install/uninstall: open the use table; inline restored', flush=True)
 
         home = root / 'use'
         project = fixture(home, True)
@@ -273,9 +260,7 @@ def main():
                 terminal.wait_layout(
                     (lambda lines: any('Binary' in line and 'Git tag' in line for line in lines))
                     if command == 'init' else
-                    (lambda lines: any('Source' in line and 'Available' in line for line in lines))
-                    if command == 'use' else
-                    (lambda lines: any('PROJECT' in line for line in lines)))
+                    (lambda lines: any('Source' in line and 'Available' in line for line in lines)))
                 terminal.send(b'\x1b')
                 terminal.finish()
             if command == 'init':

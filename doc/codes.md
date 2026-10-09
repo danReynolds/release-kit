@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-164 codes across 28 families.
+150 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -103,7 +103,7 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-029` | "$platform" is listed twice | `lib/src/engine/config.dart` |
 | `RK-CONF-032` | $key must be text | `lib/src/engine/config.dart` |
 | `RK-CONF-033` | git will not accept the tag pattern for "$unit": $issue | `lib/src/engine/config.dart` |
-| `RK-CONF-034` | release.toml is there and rk could not read it | `lib/src/commands/init.dart`, `bin/rk.dart` |
+| `RK-CONF-034` | release.toml is there and rk could not read it | `lib/src/commands/init.dart`, `lib/src/engine/release_source.dart` |
 | `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
 | `RK-CONF-037` | $key is empty | `lib/src/engine/config.dart` |
 | `RK-CONF-038` | a target is declared at the wrong unit or project scope | `lib/src/engine/config.dart` |
@@ -125,9 +125,11 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-DEP-002` | rk cannot tell whether "${project.name}" accepts $name ${sibling.version}: it requires … | `lib/src/engine/release_dependencies.dart` |
 | `RK-DEP-003` | the packages in "${unit.name}" depend on each other in a circle, so there is no order t… | `lib/src/engine/release_dependencies.dart` |
 | `RK-DEP-004` | the release units depend on each other in a circle | `lib/src/engine/release_dependencies.dart` |
+
+RK-DEP-002 (a version constraint Pub cannot parse, which Pub reports when it
+stages the package) is retired and not reused.
 
 ## RK-GIT — The repository
 
@@ -139,7 +141,7 @@ fails, and the count below is checked against the rows.
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart` |
 | `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
-| `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart`, `bin/rk.dart` |
+| `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart` |
 | `RK-GIT-009` | $tag was released from ${_short(releasedFrom)}, and its release is unfinished | `lib/src/engine/inspect.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
 
@@ -153,14 +155,13 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-HOST-001` | this machine cannot produce $platform | `lib/src/binary_chain.dart`, `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
+| `RK-HOST-001` | this machine cannot produce $platform | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
 
 ## RK-INIT — init
 
 | code | says | declared in |
 |---|---|---|
 | `RK-INIT-001` | the config rk would propose is one rk itself refuses | `lib/src/commands/init.dart` |
-| `RK-INIT-002` | release.toml already exists | `lib/src/commands/init.dart` |
 | `RK-INIT-003` | nothing here can be released | `lib/src/commands/init.dart` |
 | `RK-INIT-004` | release.toml appeared before rk could write it | `lib/src/commands/init.dart` |
 | `RK-INIT-005` | .gitignore changed while init was being reviewed | `lib/src/commands/init.dart` |
@@ -187,11 +188,11 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-NOTARY-001` | $platform: the archive for notarization failed | `lib/src/binary_chain.dart` |
 | `RK-NOTARY-002` | $platform: notarization did not complete | `lib/src/binary_chain.dart` |
-| `RK-NOTARY-003` | $platform: Apple accepted the submission and the log  could not be fetched | `lib/src/binary_chain.dart` |
 | `RK-NOTARY-004` | the rk-notary credential is not ready | `lib/src/commands/release_stage_coordinator.dart` |
 
-RK-NOTARY-005 (the delayed Gatekeeper ticket warning) is a retired historical
-meaning and is not reused.
+RK-NOTARY-003 (an accepted submission whose log could not be fetched) and
+RK-NOTARY-005 (the delayed Gatekeeper ticket warning) are retired historical
+meanings and are not reused.
 
 ## RK-PKG — The package as pub sees it
 
@@ -214,9 +215,9 @@ meaning and is not reused.
 | `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev/module.dart`, `lib/src/targets/pub_dev/package_stage.dart` |
 | `RK-PUB-012` | pub validation reported a package warning | `lib/src/targets/pub_dev/package_stage.dart` |
-| `RK-PUB-013` | a published version is not available to a fresh Dart resolver yet | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-014` | ${project.name} resolves with Flutter packages, and the Dart rk uses is not part of a Flutter SDK | `lib/src/targets/pub_dev/package_stage.dart` |
 | `RK-PUB-017` | Pub cannot resolve $package the way its consumers do | `lib/src/targets/pub_dev/package_stage.dart` |
+| `RK-PUB-019` | Pub could not resolve dependencies or reach the registry for ${project.name} | `lib/src/targets/pub_dev/package_stage.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused. So are RK-AUTH-003, RK-DEST-001, RK-SIGN-013 and
@@ -228,7 +229,6 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 |---|---|---|
 | `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/targets/target_module.dart` |
-| `RK-REL-004` | a consumer availability check could not run | `lib/src/commands/release_publication_coordinator.dart` |
 
 ## RK-RES — The config resolved against the repository
 
@@ -254,15 +254,11 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-SIGN-001` | the published release names no team rk can read | `lib/src/binary_chain.dart`, `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-SIGN-001` | the published release names no team rk can read | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-002` | $platform: signing failed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-003` | the signature does not match the identity users  already installed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-014` | the signed binary does not run | `lib/src/binary_chain.dart` |
-| `RK-SIGN-015` | the signature no longer verifies after the signed binary ran | `lib/src/binary_chain.dart` |
-| `RK-SIGN-016` | the macOS signature does not verify in the final archive | `lib/src/binary_chain.dart` |
 | `RK-SIGN-017` | the code hash of $file could not be read | `lib/src/binary_chain.dart` |
-| `RK-SIGN-018` | the runtime does not admit exactly the module it ships with | `lib/src/binary_chain.dart` |
-| `RK-SIGN-019` | the runtime's library load constraint could not be read | `lib/src/binary_chain.dart` |
 | `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release_stage_coordinator.dart` |
@@ -270,15 +266,17 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 | `RK-SIGN-009` | no release states what this program is called | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-010` | no certificate for the team the published release names | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-011` | several certificates for the published team | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-012` | the selected signing certificate fingerprint could not be read | `lib/src/commands/release_stage_coordinator.dart` |
+
+RK-SIGN-012 (the certificate's SHA-256 fingerprint, read only to be compared
+with itself) and RK-SIGN-015, RK-SIGN-016, RK-SIGN-018 and RK-SIGN-019, checks
+that read back signatures rk had just written, are retired and not reused.
 
 ## RK-SRC — Source binding
 
 | code | says | declared in |
 |---|---|---|
-| `RK-SRC-001` | a unit selects targets that require Git from unbound source | `lib/src/engine/release_source.dart`, `bin/rk.dart` |
-| `RK-SRC-002` | an unbound stage cannot be authorized by a later run | `lib/src/commands/release.dart` |
-| `RK-SRC-003` | the source snapshot could not be selected or read | `lib/src/engine/release_source.dart`, `bin/rk.dart` |
+| `RK-SRC-003` | the source could not be read | `lib/src/engine/release_source.dart` |
+| `RK-SRC-004` | there is no commit to stage or release | `lib/src/engine/git.dart` |
 
 ## RK-STAGE — The private release stage
 
@@ -296,11 +294,7 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 |---|---|---|
 | `RK-TAG-001` | the tag ${unit.tag} could not be created | `lib/src/targets/git_tag/transaction.dart` |
 | `RK-TAG-002` | the tag ${unit.tag} could not be pushed | `lib/src/targets/git_tag/transaction.dart` |
-| `RK-TAG-003` | the push reported success, and origin does not list  ${unit.tag} | `lib/src/targets/git_tag/module.dart` |
-| `RK-TAG-004` | origin did not confirm the release binding on ${act.coordinate ?? target.coordinate} | `lib/src/targets/git_tag/module.dart` |
 | `RK-TAG-005` | this project signs its release tags, and no signing key is configured | `lib/src/targets/git_tag/transaction.dart` |
-| `RK-TAG-006` | this project signs its release tags, and ${unit.tag} was created without a signature | `lib/src/targets/git_tag/transaction.dart` |
-| `RK-TAG-007` | ${unit.tag} is signed, and its signature could not be verified on this machine | `lib/src/targets/git_tag/transaction.dart` |
 
 ## RK-TOML — The TOML subset
 

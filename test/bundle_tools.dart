@@ -5,10 +5,10 @@ import 'dart:typed_data';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/digest.dart';
 
-/// Models compiler/copy/launcher outputs for release orchestration tests, and
-/// what codesign reports about the files it signed: identifiers, code hashes
-/// and embedded library load constraints. No platform executable runs. Real
-/// launcher and pinning behavior have separate tests.
+/// Models compiler and launcher outputs for release orchestration tests, and
+/// what codesign reports about the files it signed: identifiers and code
+/// hashes, which depend on any embedded library load constraint. No platform
+/// executable runs. Real launcher and pinning behavior have separate tests.
 ///
 /// A scripted result always wins, as [RecordingTools] promises. The model
 /// answers only the codesign displays nothing scripted.
@@ -30,7 +30,9 @@ class BundleRecordingTools extends RecordingTools {
     Map<String, String>? environment,
     Duration? timeout,
   }) async {
-    final key = '$executable ${arguments.join(' ')}';
+    final key =
+        '${executable.endsWith(_fixtureDart) ? 'dart' : executable} '
+        '${arguments.join(' ')}';
     calls.add(key);
     probe?.call(key, workingDirectory);
     onRun?.call(key);
@@ -45,14 +47,8 @@ class BundleRecordingTools extends RecordingTools {
       File(output)
         ..parent.createSync(recursive: true)
         ..writeAsStringSync('BINARY 1.0.0');
-    } else if (executable == '/bin/cp') {
-      File(arguments.first).copySync(arguments.last);
-      // A copy carries its source's signature, not one made here.
-      _signatures.remove(arguments.last);
     } else if (executable.endsWith('/clang')) {
       File(arguments.last).writeAsStringSync('LAUNCHER');
-    } else if (executable == '/bin/chmod') {
-      Process.runSync(executable, arguments);
     } else if (executable == 'codesign' && arguments.contains('--identifier')) {
       final path = arguments.last;
       final identifier = arguments[arguments.indexOf('--identifier') + 1];
@@ -97,7 +93,7 @@ class BundleRecordingTools extends RecordingTools {
   ToolResult? _display(String executable, List<String> arguments) {
     if (executable != 'codesign' || arguments.length != 2) return null;
     final [flag, path] = arguments;
-    if (flag != '-dvvv' && flag != '-dvvvvvv') return null;
+    if (flag != '-dvvv') return null;
     final file = File(path);
     if (!file.existsSync()) {
       return ToolResult(
@@ -114,17 +110,28 @@ class BundleRecordingTools extends RecordingTools {
         stderr: '$path: code object is not signed at all',
       );
     }
-    final constraint = signature.constraint;
     return ToolResult(
       exitCode: 0,
       stdout: '',
-      stderr: flag == '-dvvv'
-          ? 'CandidateCDHash sha256=${signature.cdhash}\n'
-          : constraint == null
-          ? 'CDHash=${signature.cdhash}\nSignature=fixture\n'
-          : constraintDisplay(constraint, cdhash: signature.cdhash),
+      stderr: 'CandidateCDHash sha256=${signature.cdhash}\n',
     );
   }
+}
+
+const _fixtureDart = '/rk-fixture-sdk/bin/dart';
+
+/// A Dart SDK laid out as a bundle build reads it, under [parent]: `bin/dart`,
+/// a few-byte `bin/dartaotruntime` and `LICENSE`. A modelled macOS bundle
+/// built with it copies and hashes that stand-in rather than this machine's
+/// real runtime, which is megabytes and differs between machines. Its `dart`
+/// is recorded as plain `dart`, the name the scripts answer to.
+String fixtureDartSdk(Directory parent) {
+  final bin = Directory('${parent.path}/rk-fixture-sdk/bin')
+    ..createSync(recursive: true);
+  File('${bin.path}/dart').writeAsStringSync('DART');
+  File('${bin.path}/dartaotruntime').writeAsStringSync('RUNTIME');
+  File('${bin.parent.path}/LICENSE').writeAsStringSync('LICENSE');
+  return '${bin.path}/dart';
 }
 
 /// A signature made here. Its code hash depends on the bytes it covers and
@@ -144,44 +151,15 @@ final class _Signature {
     return _Signature._(
       digest,
       Sha256.hex(utf8.encode(signed)).substring(0, 40),
-      constraint,
     );
   }
-  _Signature._(this._digest, this.cdhash, this.constraint);
+  _Signature._(this._digest, this.cdhash);
 
   final String _digest;
   final String cdhash;
-  final Map<String, Object?>? constraint;
 
   bool covers(List<int> bytes) => Sha256.hex(bytes) == _digest;
 }
-
-/// The library load constraint rk writes to pin [hashes].
-Map<String, Object?> pinConstraint(List<String> hashes) => {
-  'cdhash': {
-    r'$in': [
-      for (final hash in hashes)
-        Uint8List.fromList([
-          for (var index = 0; index < hash.length; index += 2)
-            int.parse(hash.substring(index, index + 2), radix: 16),
-        ]),
-    ],
-  },
-};
-
-/// codesign's highest-verbosity display of a signature whose library load
-/// constraint is [constraint], laid out as macOS 26 prints it.
-String constraintDisplay(
-  Map<String, Object?> constraint, {
-  String cdhash = '1111111111111111111111111111111111111111',
-}) => [
-  'Library Load Constraints:',
-  '\tHas Library Load Constraints',
-  'CDHash=$cdhash',
-  'Signature=adhoc',
-  'Internal requirements count=0 size=12',
-  ..._render({'ccat': 0, 'comp': 1, 'reqs': constraint, 'vers': 1}, 1),
-].join('\n');
 
 List<String> _render(Object? value, int depth) {
   final indent = '\t' * depth;

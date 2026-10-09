@@ -77,8 +77,7 @@ Map<String, Object?> stagePlanFor(ResolvedUnit unit, GitState git) => {
     'homebrew_tap': unit.homebrewTap,
     'targets': unit.publish.map((target) => target.configName).toList()..sort(),
   },
-  'source_binding': git.isBound ? 'git' : 'unbound',
-  if (git.isBound) 'repository': git.originUrl,
+  'repository': git.originUrl,
   'projects': [
     for (final project in unit.projects)
       {

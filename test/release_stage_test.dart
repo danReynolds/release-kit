@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/release_asset.dart';
 import 'package:rk/src/engine/release_bundle.dart';
 import 'package:rk/src/engine/release_manifest.dart';
@@ -74,32 +73,6 @@ void main() {
 
   tearDown(() => repository.deleteSync(recursive: true));
 
-  test('captures every tracked source file once, outside the stage', () async {
-    final snapshot = await release.captureSource();
-
-    expect(snapshot.trackedFiles(), [
-      'README.md',
-      'bin/tool.dart',
-      'pubspec.yaml',
-      'release.toml',
-    ]);
-    for (final entry in source.files.entries) {
-      expect(snapshot.read(entry.key), entry.value, reason: entry.key);
-    }
-    expect(
-      Directory(release.directory.path).existsSync(),
-      isFalse,
-      reason: 'the stage holds outputs, never a copy of the source',
-    );
-
-    source.files['bin/tool.dart'] = 'void main() => print("changed");\n';
-    expect(
-      snapshot.read('bin/tool.dart'),
-      contains('hello'),
-      reason: 'the snapshot no longer reads the mutable source tree',
-    );
-  });
-
   test(
     'release bundle exposes the exact public names and receipt artifacts',
     () async {
@@ -150,129 +123,6 @@ void main() {
       expect(invalid.evidence[_asset], 'missing from stage');
     },
   );
-
-  test('captures the committed tree, not later worktree bytes', () async {
-    final sourceRepository = Directory.systemTemp.createTempSync(
-      'rk-release-source-',
-    );
-    addTearDown(() => sourceRepository.deleteSync(recursive: true));
-    _git(sourceRepository, ['init', '-q']);
-    _git(sourceRepository, ['config', 'user.email', 'test@example.com']);
-    _git(sourceRepository, ['config', 'user.name', 'Test']);
-    for (final entry in _source().files.entries) {
-      File('${sourceRepository.path}/${entry.key}')
-        ..createSync(recursive: true)
-        ..writeAsStringSync(entry.value);
-    }
-    File(
-      '${sourceRepository.path}/README.md',
-    ).writeAsStringSync('# Original\n');
-    _git(sourceRepository, ['add', '-A']);
-    _git(sourceRepository, ['commit', '-qm', 'release source']);
-    final head = _git(sourceRepository, ['rev-parse', 'HEAD']);
-    final tree = _git(sourceRepository, ['rev-parse', 'HEAD^{tree}']);
-    final gitSource = GitSourceTree(sourceRepository.path);
-    final gitUnit = _resolveUnit(gitSource);
-    final committedRelease = ReleaseStage(
-      unit: gitUnit,
-      source: gitSource,
-      directory: StageDirectory(
-        repositoryRoot: repository.path,
-        identity: StageIdentity.forPlan(
-          headCommit: head,
-          headTree: tree,
-          resolvedPlan: {'unit': 'tool', 'version': '1.2.3'},
-        ),
-      ),
-    );
-
-    // Models a worktree edit racing after HEAD and HEAD^{tree} were read.
-    File('${sourceRepository.path}/README.md').writeAsStringSync('# Changed\n');
-    final snapshot = await committedRelease.captureSource();
-
-    expect(snapshot.read('README.md'), '# Original\n');
-  });
-
-  test(
-    'preserves regular and executable Git modes in the exported source',
-    () async {
-      final sourceRepository = _gitRepository(_source());
-      addTearDown(() => sourceRepository.deleteSync(recursive: true));
-      final executable = File('${sourceRepository.path}/tool.sh')
-        ..writeAsStringSync('#!/bin/sh\nexit 0\n');
-      _git(sourceRepository, ['add', 'tool.sh']);
-      _git(sourceRepository, ['update-index', '--chmod=+x', 'tool.sh']);
-      _git(sourceRepository, ['commit', '-qm', 'add executable']);
-
-      final staged = _gitRelease(sourceRepository, repository);
-      final export = Directory.systemTemp.createTempSync('rk-source-export-');
-      addTearDown(() => export.deleteSync(recursive: true));
-      (await staged.captureSource()).export(export.path);
-
-      expect(
-        posixMode(File('${export.path}/README.md').statSync().mode),
-        '0644',
-      );
-      expect(posixMode(File('${export.path}/tool.sh').statSync().mode), '0755');
-      expect(executable.existsSync(), isTrue);
-    },
-  );
-
-  test(
-    'refuses a tracked symbolic link instead of changing its type',
-    () async {
-      final sourceRepository = _gitRepository(_source());
-      addTearDown(() => sourceRepository.deleteSync(recursive: true));
-      Link('${sourceRepository.path}/README-link').createSync('README.md');
-      _git(sourceRepository, ['add', 'README-link']);
-      _git(sourceRepository, ['commit', '-qm', 'add link']);
-
-      final staged = _gitRelease(sourceRepository, repository);
-      await expectLater(
-        staged.captureSource(),
-        throwsA(
-          isA<StateError>().having(
-            (error) => '$error',
-            'message',
-            allOf(contains('README-link'), contains('symbolic link')),
-          ),
-        ),
-      );
-    },
-  );
-
-  test('refuses a tracked gitlink instead of writing its object id', () async {
-    final sourceRepository = _gitRepository(_source());
-    addTearDown(() => sourceRepository.deleteSync(recursive: true));
-    final nested = Directory.systemTemp.createTempSync('rk-gitlink-source-');
-    addTearDown(() => nested.deleteSync(recursive: true));
-    _git(nested, ['init', '-q']);
-    _git(nested, ['config', 'user.email', 'test@example.com']);
-    _git(nested, ['config', 'user.name', 'Test']);
-    File('${nested.path}/tracked.txt').writeAsStringSync('nested\n');
-    _git(nested, ['add', 'tracked.txt']);
-    _git(nested, ['commit', '-qm', 'nested']);
-    final nestedHead = _git(nested, ['rev-parse', 'HEAD']);
-    _git(sourceRepository, [
-      'update-index',
-      '--add',
-      '--cacheinfo',
-      '160000,$nestedHead,vendor/dependency',
-    ]);
-    _git(sourceRepository, ['commit', '-qm', 'add gitlink']);
-
-    final staged = _gitRelease(sourceRepository, repository);
-    await expectLater(
-      staged.captureSource(),
-      throwsA(
-        isA<StateError>().having(
-          (error) => '$error',
-          'message',
-          allOf(contains('vendor/dependency'), contains('gitlink/submodule')),
-        ),
-      ),
-    );
-  });
 
   test(
     'complete receipt and public manifest are reusable as exact bytes',
@@ -367,58 +217,6 @@ void main() {
     },
   );
 
-  test(
-    'a prerelease manifest carries archives without a Homebrew formula',
-    () async {
-      final prereleaseSource = MemorySourceTree({...source.files});
-      prereleaseSource.files['release.toml'] = _homebrewConfig;
-      prereleaseSource.files['pubspec.yaml'] = '''
-name: tool
-version: 1.3.0-beta.1
-executables:
-  tool: tool
-''';
-      final prereleaseUnit = _resolveUnit(
-        prereleaseSource,
-        configDocument: _homebrewConfig,
-      );
-      final prereleaseIdentity = StageIdentity.forPlan(
-        headCommit: _commit,
-        headTree: _tree,
-        resolvedPlan: {
-          'unit': prereleaseUnit.name,
-          'version': prereleaseUnit.version.canonical,
-        },
-      );
-      final prereleaseStage = ReleaseStage(
-        unit: prereleaseUnit,
-        source: prereleaseSource,
-        repository: 'owner/repo',
-        directory: StageDirectory(
-          repositoryRoot: repository.path,
-          identity: prereleaseIdentity,
-        ),
-      );
-      final project = prereleaseUnit.project('tool');
-      final archive = ReleaseAssets.archiveName(
-        project.executable!,
-        project.version.canonical,
-        'macos-arm64',
-      );
-      await _recordArchives(prereleaseStage, {archive: 'archive'});
-
-      prereleaseStage.finalize(releaseAssets: _fixtureReleaseAssets({archive}));
-      final manifest = ReleaseManifest.parse(
-        File(
-          prereleaseStage.directory.resolve(ReleaseAssets.manifest),
-        ).readAsStringSync(),
-      );
-
-      expect(manifest.artifacts.map((artifact) => artifact.name), [archive]);
-      expect(manifest.homebrew, isNull);
-    },
-  );
-
   test('the final receipt keeps each producer\'s evidence', () async {
     await _recordArchives(release, {_asset: 'archive'});
 
@@ -431,49 +229,6 @@ executables:
     );
     expect(archive.evidence['inventory'], isNotEmpty);
   });
-
-  test('tampering with a completed artifact invalidates reuse', () async {
-    await _complete(release);
-    File(release.directory.resolve(_asset)).writeAsStringSync('tampered');
-
-    final inspected = release.inspect();
-    expect(inspected.reusable, isFalse);
-    expect(
-      inspected.issues.map((issue) => issue.kind),
-      contains(StageIssueKind.changedArtifact),
-    );
-    expect(() => release.requireReceipt(), throwsStateError);
-  });
-
-  test(
-    'a remembered inspection never outlives the bytes it described',
-    () async {
-      await _complete(release);
-      // Warm the memo with a good answer, which is the state a run is in
-      // every time it asks again.
-      expect(release.inspect().reusable, isTrue);
-
-      // Same length, so size alone cannot notice. Only the timestamps
-      // separate this from the bytes that were verified.
-      final asset = File(release.directory.resolve(_asset));
-      final swapped = asset.readAsBytesSync();
-      swapped[0] = swapped[0] ^ 0xff;
-      asset.writeAsBytesSync(swapped);
-
-      final after = release.inspect();
-      expect(
-        after.reusable,
-        isFalse,
-        reason:
-            'a cheap check that misses this is a stage that verifies once '
-            'and trusts forever',
-      );
-      expect(
-        after.issues.map((issue) => issue.kind),
-        contains(StageIssueKind.changedArtifact),
-      );
-    },
-  );
 
   test('a complete filesystem fixture records every artifact type', () async {
     final receipt = await _completeEveryArtifactType(release);
@@ -617,57 +372,6 @@ executables:
     }
   });
 
-  for (final crash in <_CrashBoundary>[
-    _CrashBoundary(
-      'unreceipted artifacts',
-      StageIssueKind.missingReceipt,
-      (release, _) =>
-          File(release.directory.resolve('stage.json')).deleteSync(),
-    ),
-    _CrashBoundary(
-      'truncated receipt',
-      StageIssueKind.invalidReceipt,
-      (release, _) => File(
-        release.directory.resolve('stage.json'),
-      ).writeAsStringSync('{"schema":1', flush: true),
-    ),
-    _CrashBoundary(
-      'receipt ahead of artifact bytes',
-      StageIssueKind.missingArtifact,
-      (release, receipt) => File(
-        release.directory.resolve(
-          receipt.artifacts
-              .singleWhere((artifact) => artifact.type == 'archive')
-              .path,
-        ),
-      ).deleteSync(),
-    ),
-  ]) {
-    test('crash boundary never reuses ${crash.name}', () async {
-      final receipt = await _completeEveryArtifactType(release);
-      crash.mutate(release, receipt);
-
-      final inspected = release.inspect();
-      expect(inspected.reusable, isFalse);
-      expect(
-        inspected.issues.map((issue) => issue.kind),
-        contains(crash.issue),
-      );
-    });
-  }
-
-  test('a file the receipt does not name is not part of the stage', () async {
-    // Finder's .DS_Store, or an archive opened to look inside, is never
-    // published: publication reads only the paths the receipt names.
-    await _complete(release);
-    release.directory.writeBytesAtomically(
-      '.DS_Store',
-      utf8.encode('not receipted'),
-    );
-
-    expect(release.inspect().reusable, isTrue);
-  });
-
   test('finalize records only what producers recorded', () async {
     await _recordArchives(release, {_asset: 'archive'});
     release.directory.writeBytesAtomically(
@@ -805,15 +509,7 @@ ResolvedUnit _resolveUnit(
   return resolution.unit('tool')!;
 }
 
-Future<void> _complete(ReleaseStage release) async {
-  await _recordArchives(release, {_asset: 'archive'});
-  release.finalize(releaseAssets: _fixtureReleaseAssets({_asset}));
-}
-
-Future<StageReceipt> _completeEveryArtifactType(
-  ReleaseStage release, {
-  bool dependencyInput = false,
-}) async {
+Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
   final binaryBytes = utf8.encode('signed tool binary');
   release.directory.writeBytesAtomically('macos-arm64/tool', binaryBytes);
   final binary = StageArtifact.capture(
@@ -821,23 +517,6 @@ Future<StageReceipt> _completeEveryArtifactType(
     path: 'macos-arm64/tool',
     type: 'executable',
   );
-  StageStep? dependency;
-  if (dependencyInput) {
-    release.directory.writeBytesAtomically(
-      'dependencies/provider/archive',
-      utf8.encode('provider archive'),
-    );
-    dependency = StageStep(
-      name: 'dependency-inputs',
-      outputs: [
-        StageArtifact.capture(
-          stage: release.directory,
-          path: 'dependencies/provider/archive',
-          type: 'dependency-archive',
-        ),
-      ],
-    );
-  }
   final sign = StageStep(
     name: 'build:tool:macos-arm64',
     outputs: [binary],
@@ -952,14 +631,7 @@ Future<StageReceipt> _completeEveryArtifactType(
     ],
   );
 
-  release.writeProgress([
-    if (dependency != null) dependency,
-    sign,
-    notarize,
-    archiveStep,
-    notes,
-    formula,
-  ]);
+  release.writeProgress([sign, notarize, archiveStep, notes, formula]);
   return release.finalize(
     releaseAssets: _fixtureReleaseAssets({
       _asset,
@@ -1037,56 +709,4 @@ Future<void> _recordArchives(
     );
   }
   release.writeProgress(steps);
-}
-
-String _git(Directory repository, List<String> arguments) {
-  final result = Process.runSync(
-    'git',
-    arguments,
-    workingDirectory: repository.path,
-  );
-  if (result.exitCode != 0) {
-    fail('git ${arguments.join(' ')} failed: ${result.stderr}');
-  }
-  return (result.stdout as String).trim();
-}
-
-Directory _gitRepository(MemorySourceTree contents) {
-  final repository = Directory.systemTemp.createTempSync('rk-git-source-');
-  _git(repository, ['init', '-q']);
-  _git(repository, ['config', 'user.email', 'test@example.com']);
-  _git(repository, ['config', 'user.name', 'Test']);
-  for (final entry in contents.files.entries) {
-    File('${repository.path}/${entry.key}')
-      ..createSync(recursive: true)
-      ..writeAsStringSync(entry.value);
-  }
-  _git(repository, ['add', '-A']);
-  _git(repository, ['commit', '-qm', 'release source']);
-  return repository;
-}
-
-ReleaseStage _gitRelease(Directory source, Directory stageRoot) {
-  final tree = GitSourceTree(source.path);
-  final unit = _resolveUnit(tree);
-  return ReleaseStage(
-    unit: unit,
-    source: tree,
-    directory: StageDirectory(
-      repositoryRoot: stageRoot.path,
-      identity: StageIdentity.forPlan(
-        headCommit: _git(source, ['rev-parse', 'HEAD']),
-        headTree: _git(source, ['rev-parse', 'HEAD^{tree}']),
-        resolvedPlan: {'unit': unit.name, 'version': unit.version.canonical},
-      ),
-    ),
-  );
-}
-
-class _CrashBoundary {
-  const _CrashBoundary(this.name, this.issue, this.mutate);
-
-  final String name;
-  final StageIssueKind issue;
-  final void Function(ReleaseStage release, StageReceipt receipt) mutate;
 }

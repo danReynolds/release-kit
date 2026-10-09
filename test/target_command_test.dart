@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/engine/config.dart';
-import 'package:rk/src/version.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/release_choice.dart';
@@ -22,44 +21,30 @@ void main() {
   });
   tearDownAll(() => outsideRepository.deleteSync(recursive: true));
 
-  test('list is an installed-binary reference, not repository status', () {
+  test('list names every release choice, outside any repository', () {
     final run = rk(['target', 'list']);
 
     expect(run.code, 0, reason: run.all);
-    // Sourced, not spelled: a version bump is not a behaviour change, and
-    // freezing the literal here makes every release edit this test.
-    expect(run.stdout, contains('Release choices supported by rk $rkVersion'));
-    expect(run.stdout, contains('does not read the current folder'));
-    expect(run.stdout, contains('Local output'));
-    expect(run.stdout, contains('binary'));
-    expect(run.stdout, contains('Release targets'));
-    for (final target in ReleaseConfig.targetNames) {
-      expect(run.stdout, contains(target));
+    for (final choice in ReleaseChoice.values) {
+      expect(run.stdout, contains(choice.id));
     }
   });
 
-  test('Homebrew detail explains selection, requirements, and override', () {
-    final run = rk(['target', 'homebrew']);
+  test('a choice\'s detail names what it needs and how to configure it', () {
+    for (final (choice, names) in [
+      ('homebrew', ['binary', 'git-tag', 'github-release', 'homebrew_tap']),
+      ('binary', ['binary_platforms']),
+    ]) {
+      final run = rk(['target', choice]);
 
-    expect(run.code, 0, reason: run.all);
-    expect(run.stdout, contains('project\'s publish list'));
-    expect(run.stdout, contains('binary'));
-    expect(run.stdout, contains('git-tag'));
-    expect(run.stdout, contains('github-release'));
-    expect(run.stdout, contains('homebrew_tap = "owner/repository"'));
-    expect(run.stdout, contains('Default: <GitHub owner>/homebrew-tap'));
-    for (final platform in ReleaseConfig.supportedPlatformsList) {
-      expect(run.stdout, contains(platform));
+      expect(run.code, 0, reason: run.all);
+      for (final name in names) {
+        expect(run.stdout, contains(name), reason: choice);
+      }
+      for (final platform in ReleaseConfig.supportedPlatformsList) {
+        expect(run.stdout, contains(platform), reason: choice);
+      }
     }
-  });
-
-  test('binary says it is local and is not a publish-list value', () {
-    final run = rk(['target', 'binary']);
-
-    expect(run.code, 0, reason: run.all);
-    expect(run.stdout, contains('publishes them nowhere'));
-    expect(run.stdout, contains('`binary` does not go in publish'));
-    expect(run.stdout, contains('binary_platforms'));
   });
 
   test('JSON is the same static catalog with no local selection claims', () {
@@ -132,7 +117,7 @@ void main() {
   });
 
   test(
-    'unknown and missing names are usage errors with discovery remedies',
+    'an unknown name is a usage error with a discovery remedy; no name lists',
     () {
       final unknown = rk(['target', 'npm', '--json']);
       expect(unknown.code, 2, reason: unknown.all);
@@ -140,10 +125,15 @@ void main() {
       expect(unknown.problems.single['message'], contains('"npm"'));
       expect(unknown.problems.single['remedy'], contains('rk target list'));
 
+      // No name lists them, as `rk target list` does.
       final missing = rk(['target', '--json']);
-      expect(missing.code, 2, reason: missing.all);
-      expect(missing.problems.single['code'], 'RK-CLI-009');
-      expect(missing.problems.single['remedy'], contains('rk target <name>'));
+      expect(missing.code, 0, reason: missing.all);
+      expect(missing.problems, isEmpty);
+      expect(
+        missing.json['release_choices'],
+        rk(['target', 'list', '--json']).json['release_choices'],
+      );
+      expect(rk(['target']).stdout, rk(['target', 'list']).stdout);
     },
   );
 }

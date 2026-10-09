@@ -53,32 +53,46 @@ class PlatformCapability {
       capability == Capability.native || capability == Capability.crossCompiled;
 }
 
+/// Why a binary for another platform was not run: nothing here can run it.
+const noContainerRuntime =
+    'no container runtime here to run it in — start Docker or colima to '
+    'have rk prove it runs';
+
 /// Resolves what this host can do, per platform.
 class HostCapabilities {
+  /// A host whose container runtime is known: [containerRuntime] answered,
+  /// or, when null, nothing does.
   HostCapabilities({
     required this.hostPlatform,
-    required this.containerRuntime,
-    required this.hasNativeAssets,
-  });
+    required String? containerRuntime,
+  }) : _known = true,
+       _answer = containerRuntime,
+       _probe = null;
+
+  HostCapabilities._probing(this.hostPlatform, Future<String?> Function() probe)
+    : _known = false,
+      _answer = null,
+      _probe = probe;
 
   /// The platform identifier of the machine rk is running on.
   final String hostPlatform;
 
-  /// Whether a Linux binary can be executed here for its smoke test.
-  /// The container runtime that answered — `docker`, `podman`, or null.
+  final bool _known;
+  final String? _answer;
+  final Future<String?> Function()? _probe;
+  Future<String?>? _asked;
+
+  /// The container runtime that runs a Linux binary for its smoke test —
+  /// `docker`, `podman`, or null when none answers — asked the first time a
+  /// smoke test needs one.
   ///
   /// The name, not a boolean: detection accepted either while the smoke
   /// test ran `docker` regardless, so a podman-only machine passed the
   /// capability check and then failed the build on a command it does not
   /// have. A check that passes where the act fails is the one thing rk's
   /// preflight exists to prevent.
-  final String? containerRuntime;
-
-  bool get hasContainerRuntime => containerRuntime != null;
-
-  /// Whether the project compiles native code, which the SDK cannot
-  /// cross-compile because it ships no C toolchain for another target.
-  final bool hasNativeAssets;
+  Future<String?> containerRuntime() =>
+      _known ? Future.value(_answer) : _asked ??= _probe!();
 
   /// Targets `dart compile exe` can cross-compile to. macOS is absent: an x64
   /// macOS binary can be produced neither natively on Apple Silicon nor by
@@ -100,48 +114,34 @@ class HostCapabilities {
       );
     }
 
-    if (hasNativeAssets) {
-      return PlatformCapability(
-        platform,
-        Capability.blocked,
-        reason:
-            'this project compiles native code, and the SDK ships no C '
-            'toolchain for another target',
-      );
-    }
-
-    if (!hasContainerRuntime) {
+    // A host that has not asked yet may still find a runtime when a smoke
+    // test needs one.
+    if (_known && _answer == null) {
       return PlatformCapability(
         platform,
         Capability.buildableUnproven,
-        reason:
-            'no container runtime here to run it in — start Docker or '
-            'colima to have rk prove it runs',
+        reason: noContainerRuntime,
       );
     }
 
     return PlatformCapability(platform, Capability.crossCompiled);
   }
 
-  /// Reads the host, and whether a container runtime is answering.
+  /// This host, asking for a container runtime only when a smoke test
+  /// first needs one: most runs build nothing for another platform, and a
+  /// reused stage builds nothing at all.
   ///
-  /// A container runtime is optional evidence, so probing one must be optional
-  /// too: a missing, stopped, or wedged daemon degrades cross-build smoke tests
-  /// to `built, not executed`; it never holds up the release indefinitely.
-  static Future<HostCapabilities> detect({
-    bool hasNativeAssets = false,
+  /// A container runtime is optional evidence, so probing one must be
+  /// optional too: a missing, stopped, or wedged daemon degrades
+  /// cross-build smoke tests to `built, not executed`; it never holds up the
+  /// release indefinitely.
+  static HostCapabilities detect({
     Tools tools = const SystemTools(),
     Duration runtimeProbeTimeout = const Duration(seconds: 2),
-  }) async {
-    return HostCapabilities(
-      hostPlatform: _hostPlatform(),
-      containerRuntime: await _containerRuntimeRunning(
-        tools,
-        runtimeProbeTimeout,
-      ),
-      hasNativeAssets: hasNativeAssets,
-    );
-  }
+  }) => HostCapabilities._probing(
+    _hostPlatform(),
+    () => _containerRuntimeRunning(tools, runtimeProbeTimeout),
+  );
 
   /// The cheap, read-only capability view used by status.
   ///
@@ -149,12 +149,8 @@ class HostCapabilities {
   /// contact Apple. Linux cross-targets remain producible-but-unproven without
   /// a runtime, while targets the SDK cannot produce from this OS are known
   /// blockers and can be reported before `rk stage` is attempted.
-  static HostCapabilities inspect({bool hasNativeAssets = false}) =>
-      HostCapabilities(
-        hostPlatform: _hostPlatform(),
-        containerRuntime: null,
-        hasNativeAssets: hasNativeAssets,
-      );
+  static HostCapabilities inspect() =>
+      HostCapabilities(hostPlatform: _hostPlatform(), containerRuntime: null);
 
   static String _hostPlatform() {
     final os = Platform.isMacOS

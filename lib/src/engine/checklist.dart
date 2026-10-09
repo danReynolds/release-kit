@@ -1,7 +1,6 @@
 import 'assets.dart';
 import 'dependency_graph.dart';
 import 'diagnostic.dart';
-import 'native_dependencies.dart';
 import 'publish_target.dart';
 import 'release_dependencies.dart';
 import 'resolve.dart';
@@ -55,6 +54,10 @@ class Checklist {
           kind: StepKind.prerequisite,
           unit: unit.name,
           coordinate: prerequisite.coordinate,
+          requires: (
+            package: prerequisite.package,
+            version: '${prerequisite.version}',
+          ),
           summary:
               '${prerequisite.package} ${prerequisite.version} must be '
               'live on pub.dev',
@@ -68,13 +71,6 @@ class Checklist {
     final publicationOrder = sourceDependencies
         ? dependencies.projects(unit, diagnostics)
         : unit.projects;
-    final publicationSelections = sourceDependencies
-        ? dependencies.selections(
-            unit,
-            diagnostics,
-            phase: DependencyPhase.publication,
-          )
-        : const <NativeCandidateSelection>[];
 
     // Every local producer runs before a public identity exists. Their output
     // is not permission to publish until the complete-stage barrier has
@@ -126,18 +122,14 @@ class Checklist {
       if (step == null) continue;
       final needs = <String>[tag?.id ?? completeStage.id];
 
-      // Use the same native projection as ordering; do not reconstruct edges
-      // from names or turn private development inputs into public prerequisites.
-      for (final selection in publicationSelections) {
-        if (!selection.requirements.any(
-          (requirement) => requirement.owner == project.name,
-        )) {
-          continue;
-        }
-        final sibling = published[selection.candidate?.project];
-        if (sibling != null &&
-            sibling.id != step.id &&
-            !needs.contains(sibling.id)) {
+      // The same requirements as the order; development inputs are never
+      // public prerequisites.
+      for (final provider
+          in sourceDependencies
+              ? dependencies.requires(project)
+              : const <ResolvedProject>[]) {
+        final sibling = published[provider.name];
+        if (sibling != null && !needs.contains(sibling.id)) {
           needs.add(sibling.id);
         }
       }
@@ -386,6 +378,7 @@ class Step {
     this.project,
     this.platform,
     this.coordinate,
+    this.requires,
     this.target,
   }) {
     if (kind.isPublic && target == null) {
@@ -408,6 +401,7 @@ class Step {
     project: project,
     platform: platform,
     coordinate: coordinate,
+    requires: requires,
     target: target,
   );
 
@@ -422,6 +416,9 @@ class Step {
   /// What this step acts on, so an executor never has to take an id apart to
   /// recover it.
   final String? coordinate;
+
+  /// The package and version a prerequisite waits for on pub.dev.
+  final ({String package, String version})? requires;
 
   /// The concrete destination identity. [kind] describes lifecycle mechanics;
   /// several registry providers can therefore share one step kind without

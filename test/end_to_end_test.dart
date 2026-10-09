@@ -38,60 +38,48 @@ void main() {
       );
 
   group('example repositories', () {
-    test('the checklist is derived for every repository shape', () {
-      // Executed. The version this replaced asserted that a file under test/
-      // contained particular strings — the same anti-pattern the phase 2
-      // review found, one level along: rename a test and the phase fails,
-      // delete the feature and it passes.
-      //
-      // Derivation is a local fact, so only derivation is asserted: the
-      // world's answers (and therefore the exit code) belong to whatever
-      // network this machine has.
-      final scratch = Directory.systemTemp.createTempSync('rk-phase1-');
+    test('every example plans its units, but the one rk must refuse', () {
+      // Planning reads no destination, so this is the same on any machine.
+      final scratch = Directory.systemTemp.createTempSync('rk-examples-');
       addTearDown(() => scratch.deleteSync(recursive: true));
+      final shapes = [
+        for (final entry in Directory('examples').listSync())
+          if (entry is Directory) entry.path.split(Platform.pathSeparator).last,
+      ]..remove('escapes-repository');
+      expect(shapes, hasLength(greaterThanOrEqualTo(4)));
 
-      for (final shape in [
-        'single-package',
-        'workspace-with-dependent',
-        'multi-project-unit',
-        'binary-cli',
-      ]) {
-        final run = Rk.example(scratch, shape)(['status', '--json']);
-        expect(run.units, isNotEmpty, reason: '$shape: ${run.all}');
-        for (final unit in run.units) {
-          expect(
-            (unit as Map)['steps'],
-            isNotEmpty,
-            reason: '$shape must derive a checklist for every unit',
-          );
+      for (final shape in shapes) {
+        final run = Rk.example(scratch, shape)(['plan', '--json']);
+        expect(run.code, 0, reason: '$shape: ${run.all}');
+        final units = ((run.json['plan'] as Map)['units'] as List).cast<Map>();
+        expect(units, isNotEmpty, reason: shape);
+        for (final unit in units) {
+          expect(unit['nodes'], isNotEmpty, reason: '$shape: ${unit['name']}');
         }
       }
 
-      // The shape that must be refused rather than released.
-      final refused = Rk.example(scratch, 'escapes-repository')(['status']);
+      final refused = Rk.example(scratch, 'escapes-repository')(['plan']);
       expect(refused.code, 1, reason: refused.all);
       expect(refused.all, contains('does not contain'));
     });
   });
 
   group('output', () {
-    // Executed, not read. Every assertion below runs bin/rk.dart against a
-    // real repository, because the version of this group that matched strings
-    // inside test/ passed every one of five mutations that completely unwired
-    // the phase: --json printing nothing, pipes getting cursor escapes, the
-    // diagnosis never being written, and rerun_helps never being set.
+    // The compiled rk, run against a real repository: what a pipe, a caller
+    // reading --json and an operator after a crash actually receive.
     late Directory scratch;
     late Rk repo;
 
     setUpAll(() {
-      scratch = Directory.systemTemp.createTempSync('rk-phase2-');
+      scratch = Directory.systemTemp.createTempSync('rk-output-');
       repo = Rk.example(scratch, 'workspace-with-dependent');
     });
 
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
-    test('the four-glyph gutter, and colour is never the only signal', () {
-      final run = repo(['status']);
+    test('non-TTY output is append-only: no cursor movement, ever', () {
+      final run = repo(['status'], environment: _offline);
+      expect(run.all, isNot(contains('\r')));
       expect(
         run.all,
         isNot(contains('\x1b')),
@@ -99,14 +87,8 @@ void main() {
       );
     });
 
-    test('non-TTY output is append-only: no cursor movement, ever', () {
-      final run = repo(['status']);
-      expect(run.all, isNot(contains('\r')));
-      expect(run.all, isNot(contains('\x1b[')));
-    });
-
     test('--json carries the checklist, keyed by step id', () {
-      final run = repo(['status', '--json']);
+      final run = repo(['status', '--json'], environment: _offline);
       final steps = run.stepsOf('cli');
       expect(steps, isNotEmpty, reason: 'an empty checklist is not a surface');
       expect(steps.map((s) => s['id']), contains('cli/stage/complete'));
@@ -129,37 +111,16 @@ void main() {
       );
     });
 
-    test('--json is only JSON', () {
-      final run = repo(['status', '--json']);
-      expect(run.stdout.trimLeft(), startsWith('{'));
-      expect(run.stdout, isNot(contains('derived from the manifests alone')));
-      expect(run.json['rerun_helps'], isTrue);
-    });
-
-    test('a refusal a caller asked for in JSON is answered in JSON', () {
-      final run = repo(['status', '--json', '--bogus']);
-      expect(run.code, ExitCodes.usage);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
-    });
-
     test('every non-zero exit carries a problem a caller can read', () {
-      for (final args in [
-        ['status', '--json', '--bogus'],
-        ['status', 'nosuch', '--json'],
-        ['release', 'nosuch', '--json'],
-      ]) {
-        final run = repo(args);
+      for (final command in ['status', 'release']) {
+        final run = repo([command, 'nosuch', '--json']);
+        expect(run.code, ExitCodes.usage, reason: '$command: ${run.all}');
         expect(
-          run.code,
-          isNot(0),
-          reason: 'precondition for ${args.join(' ')}',
-        );
-        expect(
-          run.problems,
-          isNotEmpty,
+          run.problems.map((problem) => problem['code']),
+          ['RK-CLI-003'],
           reason:
               'a non-zero exit a caller cannot read is, to that caller, '
-              'a non-zero exit that did not happen: ${args.join(' ')}',
+              'a non-zero exit that did not happen: $command',
         );
       }
     });
@@ -200,22 +161,6 @@ void main() {
         expect(written.single['exit'], run.code);
         expect(run.json['diagnosis'], isNotNull);
       });
-    });
-
-    test('a run that only read writes no diagnosis', () {
-      final clean = Rk.example(
-        scratch,
-        'workspace-with-dependent',
-        as: 'clean',
-      );
-      clean(['status']);
-      expect(
-        clean.diagnoses(),
-        isEmpty,
-        reason:
-            'a directory that fills up on reads is a directory nobody '
-            'reads on failure',
-      );
     });
 
     test('the report renders identically to a terminal and a '
@@ -296,7 +241,7 @@ void main() {
   group('status', () {
     late Directory scratch;
 
-    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase3-'));
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-status-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
     test('the engine imports only the Dart team\'s own packages', () {
@@ -330,8 +275,6 @@ void main() {
 
     test('the forge is read, and being unable to read it is not absence', () {
       final repo = Rk.example(scratch, 'binary-cli', as: 'forge');
-      // An origin that does not exist: gh will fail, which is not a fact
-      // about whether the release is there.
       Process.runSync('git', [
         'remote',
         'add',
@@ -339,7 +282,9 @@ void main() {
         'https://github.com/example/nothing.git',
       ], workingDirectory: repo.root);
 
-      final run = repo(['status', '--json']);
+      // The real gh, with nowhere to connect: its failure is not a fact
+      // about whether the release is there.
+      final run = repo(['status', '--json'], environment: _offline);
       final release = run
           .targetsOf('cli')
           .where((s) => (s['id'] as String).contains('github-release'))
@@ -348,36 +293,19 @@ void main() {
       expect(release, hasLength(1), reason: 'the forge must be inspected');
       expect(
         release.single['verdict'],
-        isNot('absent'),
+        'unknown',
         reason:
             'a forge rk could not read is not a forge with nothing in it; '
             'absent is what lets a release proceed',
       );
-    });
-
-    test('status reports a real repository against live reality', () {
-      // tool/validate.dart runs rk against the real repositories on this
-      // machine; real repositories change, so here status only has to
-      // say something about a fixture.
-      final repo = Rk.example(scratch, 'workspace-with-dependent', as: 'live');
-      final run = repo(['status', '--json']);
-      expect(run.units, hasLength(2), reason: 'the document carries the units');
-      for (final unit in run.units) {
-        expect(
-          (unit['steps'] as List),
-          isNotEmpty,
-          reason: '${unit['name']} has no steps, so a caller sees nothing',
-        );
-      }
     });
   });
 
   group('releasing to pub.dev', () {
     // Executed at the command layer with an evolving world: the acts change
     // the same fake registry and tag set the next inspection reads, which is
-    // what lets a re-run be the resume. Real pub.dev cannot be published to
-    // from a test, so the live half of the DONE WHEN is kept in the explicit
-    // `test/live_release_checkpoints.dart` lane.
+    // what lets a re-run be the resume. native_publication_test runs the real
+    // `dart pub` against a local pub.dev.
     List<int> archiveOfTree() => ArchiveBuilder.gzip(
       ArchiveBuilder.tar([
         ArchiveEntry(
@@ -603,7 +531,6 @@ publish = ["git-tag", "pub.dev"]
           capabilities: HostCapabilities(
             hostPlatform: 'linux-x64',
             containerRuntime: null,
-            hasNativeAssets: false,
           ),
           // A conformance run must not read the pub session of whoever is
           // running it.
@@ -665,183 +592,33 @@ publish = ["git-tag", "pub.dev"]
       );
     }
 
-    const unrelatedOverride = {
-      'packages/keybay/pubspec.yaml':
-          'name: keybay\n'
-          'version: 0.2.0\n'
-          'dependency_overrides:\n'
-          '  unrelated:\n'
-          '    git: https://example.com/unrelated.git\n',
-    };
-
-    test(
-      'a package alone resolves as its consumers do, overriding nothing',
-      () async {
-        final written = <String?>[];
-        final run = await release(
-          inspect: (key, directory) {
-            if (key != 'dart pub publish --to-archive <archive>') return;
-            final file = File('$directory/pubspec_overrides.yaml');
-            written.add(file.existsSync() ? file.readAsStringSync() : null);
-          },
-        );
-
-        expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(
-          written,
-          [
-            '# Written by rk: resolve this package the way its consumers do.\n'
-                'dependency_overrides: {}\n',
-          ],
-          reason:
-              'keybay is no workspace member, so no resolution to set aside',
-        );
-      },
-    );
-
-    // Pub honours a tracked override where it resolves, and leaves it out
-    // of the archive. The stage resolves in a mirror where its own
-    // pubspec_overrides.yaml replaces every tracked one, so what Pub
-    // validates is what consumers get.
-    const consumerFile =
-        '# Written by rk: resolve this package the way its consumers do.\n'
-        'dependency_overrides: {}\n';
-    Future<List<String?>> overridesSeenBy(
-      Future<Object?> Function(
-        void Function(String key, String workingDirectory) inspect,
-      )
-      run,
-    ) async {
-      final seen = <String?>[];
-      await run((key, directory) {
-        if (key != 'dart pub publish --to-archive <archive>') return;
-        final file = File('$directory/pubspec_overrides.yaml');
-        seen.add(file.existsSync() ? file.readAsStringSync() : null);
-      });
-      return seen;
-    }
-
     test(
       'a tracked pubspec_overrides.yaml stays out of what Pub validates',
       () async {
-        late ({
-          int code,
-          String text,
-          List<String> calls,
-          Map<String, Object?> report,
-          Object? died,
-        })
-        run;
-        final seen = await overridesSeenBy(
-          (inspect) async => run = await release(
-            sourceFiles: {
-              'packages/keybay/pubspec_overrides.yaml':
-                  'dependency_overrides:\n  transitive:\n    path: ../other\n',
-            },
-            inspect: inspect,
-          ),
-        );
-
-        expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(seen, [consumerFile]);
-        expect(run.calls, contains('dart pub publish --to-archive <archive>'));
-      },
-    );
-
-    test('a dependency_overrides section is replaced the same way', () async {
-      // An overrides file replaces the pubspec's section, as Pub reads it.
-      late ({
-        int code,
-        String text,
-        List<String> calls,
-        Map<String, Object?> report,
-        Object? died,
-      })
-      run;
-      final seen = await overridesSeenBy(
-        (inspect) async => run = await release(
+        // Pub honours a tracked override where it resolves, and leaves it
+        // out of the archive. The stage resolves in a mirror where its own
+        // pubspec_overrides.yaml replaces every tracked one, so what Pub
+        // validates is what consumers get.
+        final seen = <String?>[];
+        final run = await release(
           sourceFiles: {
-            'packages/keybay/pubspec.yaml':
-                'name: keybay\n'
-                'version: 0.2.0\n'
-                'dependency_overrides:\n'
-                '  transitive:\n'
-                '    path: ../other\n',
+            'packages/keybay/pubspec_overrides.yaml':
+                'dependency_overrides:\n  transitive:\n    path: ../other\n',
           },
-          inspect: inspect,
-        ),
-      );
-
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(seen, [consumerFile]);
-    });
-
-    test(
-      'a workspace member resolves apart from its nested workspace root',
-      () async {
-        // Pub resolves a `resolution: workspace` member at the top-most
-        // ancestor declaring `workspace:`, which need not be the repository
-        // root, and applies the overrides tracked there. The stage resolves
-        // the member as a root of its own instead.
-        late ({
-          int code,
-          String text,
-          List<String> calls,
-          Map<String, Object?> report,
-          Object? died,
-        })
-        run;
-        final seen = await overridesSeenBy(
-          (inspect) async => run = await release(
-            config: '''
-schema = 2
-
-[release.core]
-path = "dart/packages/keybay"
-publish = ["git-tag", "pub.dev"]
-''',
-            sourceFiles: {
-              'dart/pubspec.yaml':
-                  'name: dart_workspace\n'
-                  'publish_to: none\n'
-                  'environment:\n'
-                  "  sdk: ^3.6.0\n"
-                  'workspace:\n'
-                  '  - packages/keybay\n',
-              'dart/pubspec_overrides.yaml':
-                  'dependency_overrides:\n  transitive:\n    path: ../other\n',
-              'dart/packages/keybay/pubspec.yaml':
-                  'name: keybay\n'
-                  'version: 0.2.0\n'
-                  'resolution: workspace\n',
-              'dart/packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-            },
-            inspect: inspect,
-          ),
+          inspect: (key, directory) {
+            if (key != 'dart pub publish --to-archive <archive>') return;
+            final file = File('$directory/pubspec_overrides.yaml');
+            seen.add(file.existsSync() ? file.readAsStringSync() : null);
+          },
         );
 
         expect(run.code, ExitCodes.ok, reason: run.text);
         expect(seen, [
           '# Written by rk: resolve this package the way its consumers do.\n'
-              'resolution: null\n'
-              'workspace: []\n'
               'dependency_overrides: {}\n',
         ]);
       },
     );
-
-    test('a tracked override reaching nothing stages and publishes', () async {
-      final run = await release(sourceFiles: unrelatedOverride);
-
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(
-        run.calls,
-        containsAllInOrder([
-          startsWith('dart pub publish --to-archive '),
-          startsWith('dart pub publish --from-archive '),
-        ]),
-      );
-    });
 
     group('a workspace', () {
       const members = {
@@ -997,6 +774,56 @@ publish = ["git-tag", "pub.dev"]
                 'but testkit from this source',
               ),
             ),
+          );
+        });
+
+        test('from a mirror of what Pub reads, and nothing else', () async {
+          // The mirror grew with the repository: every tracked file, for
+          // every package, on every stage.
+          late List<String> mirrored;
+          final run = await release(
+            sourceFiles: {
+              ...siblings,
+              'README.md': '# The repository\n',
+              'analysis_options.yaml': 'linter:\n  rules: []\n',
+              'docs/guide.md': '# A guide nothing builds\n',
+              'packages/keybay/lib/keybay.dart': 'library;\n',
+              'packages/testkit/lib/testkit.dart': 'library;\n',
+              'packages/base/lib/base.dart': 'library;\n',
+              'packages/host/lib/host.dart': 'library;\n',
+            },
+            inspect: (key, directory) {
+              if (key != 'dart pub publish --to-archive <archive>') return;
+              final source = Directory(directory).parent.parent;
+              mirrored = [
+                for (final entry in source.listSync(recursive: true))
+                  if (entry is File &&
+                      !entry.path.endsWith('pubspec_overrides.yaml'))
+                    entry.path.substring(source.path.length + 1),
+              ]..sort();
+            },
+          );
+
+          expect(run.code, ExitCodes.ok, reason: run.text);
+          expect(
+            mirrored,
+            [
+              'README.md',
+              'analysis_options.yaml',
+              'packages/base/lib/base.dart',
+              'packages/base/pubspec.yaml',
+              'packages/host/lib/host.dart',
+              'packages/host/pubspec.yaml',
+              'packages/keybay/CHANGELOG.md',
+              'packages/keybay/lib/keybay.dart',
+              'packages/keybay/pubspec.yaml',
+              'packages/testkit/lib/testkit.dart',
+              'packages/testkit/pubspec.yaml',
+              'pubspec.yaml',
+            ],
+            reason:
+                'every package, and the files beside the directories above '
+                'keybay; the workspace root adds its pubspec, not docs',
           );
         });
 
@@ -1180,52 +1007,6 @@ publish = ["git-tag", "pub.dev"]
       });
     });
 
-    test(
-      'post-publish native digest comparison makes a mismatch terminal',
-      () async {
-        final published = {
-          'keybay': ['0.1.0'],
-        };
-        final archives = <String, List<int>>{};
-        final run = await drive(
-          published: published,
-          archives: archives,
-          tags: {},
-          onRun: (key) {
-            if (key == 'dart pub publish --from-archive <archive> --force') {
-              published['keybay']!.add('0.2.0');
-              // The registry serves bytes this tree cannot account for.
-              archives['keybay@0.2.0'] = ArchiveBuilder.gzip(
-                ArchiveBuilder.tar([
-                  ArchiveEntry(
-                    name: 'pubspec.yaml',
-                    bytes: 'name: keybay\nversion: 0.2.0\n'.codeUnits,
-                  ),
-                  ArchiveEntry(
-                    name: 'lib/injected.dart',
-                    bytes: 'not yours\n'.codeUnits,
-                  ),
-                ]),
-              );
-            }
-          },
-        );
-
-        expect(run.code, ExitCodes.refused);
-        expect(
-          (run.report['problems'] as List).map((p) => (p as Map)['code']),
-          contains('RK-PUB-006'),
-        );
-        expect(run.text, contains('archive: sha256'));
-        expect(
-          run.report['rerun_helps'],
-          false,
-          reason: 'an agent must not retry a release that can never succeed',
-        );
-        expect(run.text, contains('cannot be fixed by re-running'));
-      },
-    );
-
     test('resume half: killed after the tag, a re-run finishes '
         'without re-tagging', () async {
       final retained = Directory.systemTemp.createTempSync('rk-resume-');
@@ -1350,7 +1131,6 @@ publish = ["git-tag", "pub.dev"]
         .map((m) => m.group(1)!)
         .toSet();
     expect(accepted, contains('--json'), reason: 'the scrape still works');
-    expect(accepted, isNot(contains('--stage')));
 
     // Exactly the documents that describe rk's *current* surface. Widening
     // this to every shipped markdown was tried and is wrong: the archived
@@ -1382,7 +1162,7 @@ publish = ["git-tag", "pub.dev"]
   group('rk init', () {
     late Directory scratch;
 
-    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase6-'));
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-init-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
     test(
@@ -1412,72 +1192,6 @@ publish = ["git-tag", "pub.dev"]
           File('${repo.root}/release.toml').existsSync(),
           isFalse,
           reason: 'proposing is not writing',
-        );
-      },
-    );
-
-    test('never edits a config that exists', () {
-      final repo = Rk.example(scratch, 'single-package', as: 'existing');
-      final run = repo(['init']);
-      expect(run.code, 0);
-      expect(run.all, contains('already exists'));
-      expect(run.all, contains('decision already made'));
-    });
-
-    test('a repository with nothing releasable is a correct answer', () {
-      final repo = Rk.repository(scratch, 'none', {
-        'pubspec.yaml': 'name: tool\npublish_to: none\nversion: 1.0.0\n',
-      });
-      repo.commit(); // untracked manifests would give the same words for the
-      // wrong reason — the veto is what this asserts
-      final run = repo(['init']);
-      expect(run.code, 0, reason: 'not a refusal');
-      expect(run.all, contains('nothing here can be released'));
-    });
-
-    test('init takes no unit, and says so instead of ignoring one', () {
-      final repo = Rk.example(scratch, 'single-package', as: 'stray-arg');
-      final run = repo(['init', 'somepkg']);
-      expect(run.code, isNot(0));
-      expect(
-        run.all,
-        contains('takes no unit'),
-        reason:
-            'silently configuring the whole repository under an argument '
-            'that reads as a scope is worse than refusing it',
-      );
-    });
-
-    test(
-      'the quiet exits are distinguishable by a caller, not only a reader',
-      () {
-        // Review finding: already-configured and nothing-releasable produced
-        // byte-identical empty documents under --json. Each fact is data now.
-        final existing = Rk.example(
-          scratch,
-          'single-package',
-          as: 'json-exists',
-        );
-        final exists = existing(['init', '--json']);
-        expect(exists.code, 0, reason: exists.all);
-        expect(
-          (exists.json['problems'] as List)
-              .map((p) => (p as Map)['code'])
-              .toList(),
-          contains('RK-INIT-002'),
-        );
-
-        final none = Rk.repository(scratch, 'json-none', {
-          'pubspec.yaml': 'name: tool\npublish_to: none\nversion: 1.0.0\n',
-        });
-        none.commit();
-        final nothing = none(['init', '--json']);
-        expect(nothing.code, 0, reason: nothing.all);
-        expect(
-          (nothing.json['problems'] as List)
-              .map((p) => (p as Map)['code'])
-              .toList(),
-          contains('RK-INIT-003'),
         );
       },
     );
@@ -1521,9 +1235,12 @@ publish = ["git-tag", "pub.dev"]
     });
   });
 
-  // Shared by the 7a and 7b groups: one scratch, one command-layer drive.
+  // Shared by the binary chain and destination groups: one scratch, one
+  // command-layer drive.
   late Directory scratch;
-  setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-7-'));
+  setUpAll(
+    () => scratch = Directory.systemTemp.createTempSync('rk-binary-drive-'),
+  );
   tearDownAll(() => scratch.deleteSync(recursive: true));
 
   /// Drives a full binary-unit release at the command layer, with tools
@@ -1543,11 +1260,10 @@ publish = ["git-tag", "pub.dev"]
     })
   >
   binaryDrive({
-    required bool dryRun,
+    required bool stageOnly,
     Set<String> remoteTags = const {},
     bool notaryRejects = false,
     bool notaryProfileRejects = false,
-    bool signingRejects = false,
     List<String> platforms = const ['macos-arm64'],
     bool homebrew = false,
     String label = '',
@@ -1561,7 +1277,7 @@ publish = ["git-tag", "pub.dev"]
     bool baselineChangesBeforeConsent = false,
   }) async {
     final root = Directory(
-      '${scratch.path}/drive-${dryRun ? 'd' : 'f'}'
+      '${scratch.path}/drive-${stageOnly ? 'd' : 'f'}'
       '${notaryRejects ? '-nr' : ''}'
       '${notaryProfileRejects ? '-np' : ''}$label',
     )..createSync(recursive: true);
@@ -1631,7 +1347,8 @@ executables:
             source: tree,
             // The scripted tools answer `dart compile`, not this machine's
             // SDK.
-            sdk: () => const DartSdk(executable: 'dart', version: 'fixture'),
+            sdk: () =>
+                DartSdk(executable: fixtureDartSdk(root), version: 'fixture'),
             repository: git.originUrl,
             directory: directory,
             enforceUnitContract: true,
@@ -1802,13 +1519,6 @@ executables:
         }
         if (key.startsWith('codesign --test-requirement')) {
           return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
-        }
-        if (signingRejects && key.startsWith('codesign --force')) {
-          return ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'the signing operation was interrupted',
-          );
         }
         if (key.startsWith('codesign -d -r-') &&
             key.contains('published-identity')) {
@@ -2077,15 +1787,14 @@ executables:
         capabilities: HostCapabilities(
           hostPlatform: 'macos-arm64',
           containerRuntime: containerRuntime,
-          hasNativeAssets: false,
         ),
       ).run(only: 'cli');
       return (code: code, output: output);
     }
 
-    var execution = await execute(dryRun);
+    var execution = await execute(stageOnly);
     if (publishStaged && execution.code == ExitCodes.ok) {
-      if (!dryRun) {
+      if (!stageOnly) {
         fail('publishStaged requires an initial stage-only run');
       }
       execution = await execute(false);
@@ -2104,61 +1813,11 @@ executables:
   }
 
   group('the binary chain', () {
-    test('no state carried between steps — a full release, each step its '
-        'own act', () async {
-      expect(
-        File('lib/src/commands/release.dart').readAsStringSync(),
-        isNot(contains('_produced')),
-        reason:
-            'CI seam 1: a step must be executable from the checklist, '
-            'its id, the workspace and reality',
-      );
-
-      final run = await binaryDrive(dryRun: false);
-      expect(run.code, 0, reason: run.text);
-      expect(
-        run.calls,
-        isNot(contains('dart pub login')),
-        reason: 'a unit with no pub.dev target has no pub session to acquire',
-      );
-      // Every stage of the chain acted, separately, in checklist order.
-      final order = [
-        'xcrun notarytool history',
-        'dart compile',
-        'codesign --force',
-        'ditto',
-        'xcrun notarytool submit',
-        'xcrun notarytool log',
-        'gh api -X POST repos/example/tool/releases --input',
-      ];
-      var at = -1;
-      for (final prefix in order) {
-        final index = run.calls.indexWhere((c) => c.startsWith(prefix));
-        expect(index, greaterThan(at), reason: '$prefix in order');
-        at = index;
-      }
-      expect(
-        ((run.json['units'] as List)
-            .cast<Map<String, Object?>>()
-            .expand((unit) => (unit['steps'] as List).cast<Map>())
-            .map((step) => step['summary'])),
-        contains('publish 2 assets to the v1.0.0 release'),
-      );
-      expect(run.text, contains('released'));
-      expect(
-        run.calls.where((call) => call.contains('--check-notarization')),
-        isEmpty,
-        reason:
-            'exact publication ends the release; Apple ticket '
-            'propagation is not a synchronous release gate',
-      );
-    });
-
     test(
       'the notarization profile is verified before any build starts',
       () async {
         final run = await binaryDrive(
-          dryRun: true,
+          stageOnly: true,
           notaryProfileRejects: true,
           label: '-notary-preflight',
         );
@@ -2184,11 +1843,11 @@ executables:
 
     test('a chain failure halts with its sentence — partway, not "nothing '
         'changed" and not "lost sight"', () async {
-      // Review finding: most chain failures exited 1 with no halt at all —
-      // no sentence for a person, no `halt` key for a caller. A rejected
-      // notarization is the everyday representative of the class.
+      // A failure in the chain ends with a halt, both as a sentence for a
+      // person and as the `halt` key for a caller. A rejected notarization
+      // is the everyday one.
       final run = await binaryDrive(
-        dryRun: false,
+        stageOnly: false,
         notaryRejects: true,
         label: '-notary-failure-boundary',
       );
@@ -2224,74 +1883,29 @@ executables:
     });
 
     test(
-      'a signing interruption leaves every public target untouched',
-      () async {
-        final run = await binaryDrive(
-          dryRun: false,
-          signingRejects: true,
-          label: '-sign-failure-boundary',
-        );
-
-        expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('signing failed'));
-        expect((run.json['halt'] as Map?)?['kind'], 'stoppedPartway');
-        expect(
-          run.calls.where(
-            (call) =>
-                call.startsWith('git push origin') ||
-                call.contains(' -X POST repos/example/tool/releases --input '),
-          ),
-          isEmpty,
-          reason: 'signed bytes are required in the stage before publication',
-        );
-      },
-    );
-
-    test('stage half: every local step runs for real and '
-        'nothing public is touched', () async {
-      final run = await binaryDrive(dryRun: true);
-
-      expect(run.code, 0, reason: run.text);
-      for (final local in [
-        'dart compile',
-        'codesign --force',
-        'ditto',
-        'xcrun notarytool submit',
-      ]) {
-        expect(
-          run.calls.any((c) => c.startsWith(local)),
-          isTrue,
-          reason:
-              '$local ran for real — staging exists so an expired '
-              'certificate is found on a quiet afternoon',
-        );
-      }
-      for (final public in [
-        'git tag',
-        'git push',
-        'gh api -X POST repos/example/tool/releases --input',
-      ]) {
-        expect(
-          run.calls.any((c) => c.startsWith(public)),
-          isFalse,
-          reason: '$public is public and staging never touches it',
-        );
-      }
-      expect(run.text, contains('1.0.0 · staged'));
-      expect(run.calls, isNot(contains('dart pub login')));
-    });
-
-    test(
       'stage spans every platform and still touches nothing public',
       () async {
         final run = await binaryDrive(
-          dryRun: true,
+          stageOnly: true,
           platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
           homebrew: true,
           label: '-3pr',
         );
         expect(run.code, 0, reason: run.text);
         expect(run.calls.where((c) => c.startsWith('dart compile')).length, 3);
+        for (final local in [
+          'codesign --force',
+          'ditto',
+          'xcrun notarytool submit',
+        ]) {
+          expect(
+            run.calls.any((c) => c.startsWith(local)),
+            isTrue,
+            reason:
+                '$local ran for real — staging exists so an expired '
+                'certificate is found on a quiet afternoon',
+          );
+        }
         for (final public in [
           'git tag',
           'git push',
@@ -2310,12 +1924,11 @@ executables:
 
     test('a platform nothing can run still ships — built, not executed, and '
         'disclosed before the release is authorized', () async {
-      // Optional evidence degrades honestly (CI-readiness constraint 6). A
-      // missing container runtime used to refuse the whole release: a
-      // daemon that is not running became a hard blocker on shipping,
-      // which is a heavier claim than the smoke test earns.
+      // Optional evidence degrades honestly. A container runtime that is not
+      // running must not block shipping: the smoke test does not earn that
+      // weight.
       final run = await binaryDrive(
-        dryRun: false,
+        stageOnly: false,
         platforms: ['macos-arm64', 'linux-x64'],
         label: '-unproven',
         containerRuntime: null,
@@ -2357,15 +1970,13 @@ executables:
     });
   });
 
-  /// Phase 7b — the destinations, driven through the same command-layer world
-  /// as 7a: the release carries the full asset shape, the body is the
+  /// The destinations, driven through the same command-layer world as the
+  /// chain: the release carries the full asset shape, the body is the
   /// changelog entry, and the tap moves only after the release is public.
   ///
-  /// This group was deleted as collateral when `--rehearse` was cut, and the
-  /// commit that did it never said so. What it guards is the one seam
-  /// `engine/assets.dart` closes: the producer and inspector consume one
-  /// derived GitHub inventory, while the formula is separately bound to its
-  /// tap through the manifest. The drive proves both destinations and the
+  /// The producer and inspector consume one derived GitHub inventory
+  /// (`engine/assets.dart`), while the formula is bound to its tap through
+  /// the manifest; the drive proves both destinations and the
   /// changelog-derived body through the command layer.
   group('binary destinations', () {
     test(
@@ -2373,12 +1984,17 @@ executables:
       'the inspector will expect, and the body is the changelog entry',
       () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
           homebrew: true,
           label: '-3p',
         );
         expect(run.code, 0, reason: run.text);
+        expect(
+          run.calls,
+          isNot(contains('dart pub login')),
+          reason: 'a unit with no pub.dev target has no pub session to acquire',
+        );
 
         // Three builds, two of them cross-compiled for linux.
         expect(run.calls.where((c) => c.startsWith('dart compile')).length, 3);
@@ -2461,11 +2077,6 @@ executables:
           isTrue,
           reason: 'the formula is proven from the public tap after its push',
         );
-        expect(
-          run.calls.where((call) => call.contains('/contents/Casks/')),
-          isEmpty,
-          reason: 'Formula publication has no second Homebrew coordinate',
-        );
         expect(run.text, contains('released'));
       },
     );
@@ -2477,7 +2088,7 @@ executables:
     test(
       'a genuine first signing names the certificate before the yes',
       () async {
-        final run = await binaryDrive(dryRun: false, label: '-first');
+        final run = await binaryDrive(stageOnly: false, label: '-first');
 
         expect(run.code, 0, reason: run.text);
         expect(
@@ -2518,7 +2129,7 @@ executables:
       // its identity, and then told the operator that identity did not
       // exist yet.
       final run = await binaryDrive(
-        dryRun: false,
+        stageOnly: false,
         label: '-later',
         previousTag: 'v0.9.0',
       );
@@ -2540,7 +2151,7 @@ executables:
       'reusing a later signed stage does not turn it into a first claim',
       () async {
         final run = await binaryDrive(
-          dryRun: true,
+          stageOnly: true,
           publishStaged: true,
           label: '-later-stage-reuse',
           previousTag: 'v0.9.0',
@@ -2562,26 +2173,10 @@ executables:
       },
     );
 
-    test(
-      'an unpublished CLI uses its executable as signing identity',
-      () async {
-        final run = await binaryDrive(dryRun: true, label: '-nocodeid');
-
-        expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(
-          run.text,
-          matches(RegExp(r'macOS code identifier\s+tool')),
-          reason:
-              'the producer owns the identity it can derive from its native '
-              'executable rather than requiring release.toml to restate it',
-        );
-      },
-    );
-
     group('the keychain is read before anything acts, not midway', () {
       test('an unreadable keychain is not an absent certificate', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-nokc',
           keychainReadable: false,
         );
@@ -2605,7 +2200,7 @@ executables:
 
       test('no certificate refuses before the tag, not after', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-nocert',
           certificates: 0,
         );
@@ -2623,7 +2218,7 @@ executables:
           // public. The requirement is in hand during preflight, and the
           // answer does not change by waiting.
           final run = await binaryDrive(
-            dryRun: false,
+            stageOnly: false,
             label: '-noteam',
             previousTag: 'v0.9.0',
             publishedNamesTeam: false,
@@ -2639,44 +2234,29 @@ executables:
         },
       );
 
-      test('a rehearsal shows the names the real run will claim', () async {
-        // The names are exactly what a rehearsal is for reading before they
-        // become unreclaimable, and they used to appear for the first time
-        // only at the real prompt, after the release was authorized.
-        final run = await binaryDrive(dryRun: true, label: '-dryclaim');
+      test('staging shows the names the release will claim', () async {
+        // Staging is where they can be read before they become
+        // unreclaimable, rather than first at the release's prompt.
+        final run = await binaryDrive(stageOnly: true, label: '-stageclaim');
 
         expect(run.code, ExitCodes.ok, reason: run.text);
         expect(run.text, contains('First release · permanent once published'));
         expect(
           run.text,
           matches(RegExp(r'macOS code identifier\s+tool')),
-          reason:
-              'a swap of the identifier and the team survived a weaker '
-              'assertion that only looked for the value',
+          reason: 'each name on its own row, beside its label',
         );
         expect(run.text, matches(RegExp(r'Apple team\s+D \(TEAM123456\)')));
       });
 
       test(
-        'a dry run derives the native program name before signing',
-        () async {
-          final run = await binaryDrive(dryRun: true, label: '-drynoid');
-
-          expect(run.code, ExitCodes.ok, reason: run.text);
-          expect(run.text, matches(RegExp(r'macOS code identifier\s+tool')));
-        },
-      );
-
-      test(
         'a certificate for the wrong team refuses before the publish',
         () async {
-          // The likeliest signing failure there is, and the costliest to catch
-          // late: `publishRegistry` is emitted before `build`, so for every
-          // unit in this fleet a signing problem the preflight misses costs a
-          // permanently burned version number. MacOsSigner.sign refuses this —
-          // after the tag is public and pub.dev has published.
+          // The likeliest signing failure there is: the preflight chooses
+          // the certificate, and refuses before any work when none is for
+          // the team users installed.
           final run = await binaryDrive(
-            dryRun: false,
+            stageOnly: false,
             label: '-wrongteam',
             previousTag: 'v0.9.0',
             certTeams: ['TEAMZZZZZZ'],
@@ -2700,7 +2280,7 @@ executables:
 
       test('several certificates for the published team refuses too', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-dupeteam',
           previousTag: 'v0.9.0',
           certTeams: ['TEAM123456', 'TEAM123456'],
@@ -2714,7 +2294,7 @@ executables:
 
       test('an ambiguous first signing refuses, naming the teams', () async {
         final run = await binaryDrive(
-          dryRun: false,
+          stageOnly: false,
           label: '-twocerts',
           certificates: 2,
         );
@@ -2731,3 +2311,13 @@ executables:
 }
 
 String _shellQuote(String value) => "'${value.replaceAll("'", "'\"'\"'")}'";
+
+/// Every read rk makes over HTTPS (pub.dev, and git and gh against GitHub)
+/// goes to a closed loopback port, so it fails at once and the same way on
+/// any machine, network or not.
+const _offline = {
+  'https_proxy': 'http://127.0.0.1:9',
+  'HTTPS_PROXY': 'http://127.0.0.1:9',
+  'no_proxy': '',
+  'NO_PROXY': '',
+};

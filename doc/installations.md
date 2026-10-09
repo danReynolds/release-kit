@@ -12,11 +12,14 @@ rk use homebrew                 # select it; install first if missing
 rk uninstall pub                # confirm removal of an inactive installation
 ```
 
+Bare `rk install` and `rk uninstall` open the same table as `rk use`, which
+installs, updates and removes from its rows.
+
 The picker opens inline beneath your prompt and grows to fit its content, up to
 24 rows. The source table is left-aligned and capped at 104 columns, shrinking
 with narrower terminals. Other command matrices cap at 128 columns to fit their
 additional outputs. Your terminal keeps its background; green marks the effective
-default and blue marks action focus. `rk use` accepts mouse clicks; hovering
+default and blue marks action focus. The table accepts mouse clicks; hovering
 does not highlight buttons or move keyboard focus. It opens without focus, so
 the default stays green until you navigate or click. Checkmarks and reverse
 video preserve those distinctions with `NO_COLOR`. Use Tab or arrow keys to
@@ -28,9 +31,9 @@ another row; choose Done or press Escape when finished. `-p` limits it to one
 project and restores single-action completion. Errors stay open for inspection
 and retry. The source table shows unavailable reasons and repair commands
 beneath the affected row and disables unavailable actions. Uninstall appears in
-the footer for a focused inactive installation. A damaged owned installation
-also offers Remove directly. Removal asks for confirmation and restores your
-place when cancelled; it never removes the active or saved selected source.
+the footer for a focused inactive installation. Removal asks for confirmation
+and restores your place when cancelled; it never removes the active or saved
+selected source.
 
 
 Long configuration reviews and explanations show a scrollbar and accept
@@ -119,18 +122,21 @@ from any directory.
 | Source | When offered | Preparation and execution |
 | --- | --- | --- |
 | Local | Package declares executables | `dart pub get` in this exact checkout; launch the mapped `bin` entrypoint with Dart |
-| Homebrew | Project publishes to Homebrew | Install the configured tap/formula with `--skip-link`; launch its complete keg |
+| Homebrew | Project publishes to Homebrew | Install the configured tap/formula with `--skip-link`; launch it through Homebrew's `opt` link, which follows upgrades |
 | Pub | Project publishes to pub.dev | Activate the package with `--no-executables`; run its native global activation |
 | GitHub | Project publishes native binaries through GitHub Releases | Download the latest stable release matching the unit's tag pattern and the current platform |
 
 Existing Pub and Homebrew installations are discovered through their native
-metadata. Pub path/Git activations are identified as a different source and are
+metadata: Pub's activation, and Homebrew's `opt/<name>` link with the receipt
+that names the tap it came from (what `brew list --full-name` reads), so
+inspecting Homebrew asks `brew` only for its prefix. Pub path/Git activations are identified as a different source and are
 not overwritten. Custom Pub registries and private GitHub downloads are not
 supported by these installation adapters yet. A missing Dart or Homebrew tool
 is reported with a reason; RK does not install the package manager itself.
 
 `install` leaves routing unchanged. `use` prepares a missing installation and
-then switches. Existing published installations are reused, never silently
+then switches. Local is the checkout itself: `rk install local` prepares it,
+and Local shows as installed only while it is selected. Existing published installations are reused, never silently
 upgraded. Local preparation refreshes dependencies and binds the checkout from
 which you invoke it. Source edits are picked up on the next invocation, with no
 reinstallation or Git pull. The launched program keeps your working directory
@@ -146,12 +152,15 @@ GitHub release; they are not independent publisher authentication.
 
 ## Routing and recovery
 
-Managed command shims live in `$XDG_DATA_HOME/rk/bin`, or
-`~/.local/share/rk/bin`. RK owns only those shims and its installation state.
-All commands in a project share one atomic selection pointer. A failed prepare
-or a cancellation before that pointer changes leaves the old selection usable.
-Cancelling waits for the current package-manager operation to settle; an
-installation that already finished can remain installed without being selected.
+Command launchers live in `$XDG_DATA_HOME/rk/bin`, or `~/.local/share/rk/bin`.
+Each one names its project and source in a header, so rk reads the selection
+back from the launchers rather than storing it; the only other state is
+GitHub downloads, in `downloads/<package>/<version>` beside `bin`. `use`
+replaces each command's launcher atomically. A failed prepare or a
+cancellation before the launchers are written leaves the old selection
+usable. Cancelling waits for the current package-manager operation to settle;
+an installation that already finished can remain installed without being
+selected.
 
 On fish, `use` prepends this directory through `fish_add_path` using universal
 state. Existing fish sessions normally pick that up at their next prompt.
@@ -159,28 +168,47 @@ Other shells receive the exact PATH command to run and persist in their own
 configuration. RK never rewrites shell startup files. The next `rk use --list`
 checks the environment actually inherited from the shell.
 
-When changing RK itself with `use`, `install --latest`, or `uninstall`, RK preserves and checks
-an independent copy of the running manager first. The result prints its exact
-path: run that path with `use` from an RK project to reopen this version even if
-the default is now older. It lives under the managed data directory's `managers`
-folder, outside provider installations. Native binaries and runtime/snapshot
-bundles are retained; a Dart source invocation compiles a standalone copy.
+A launcher names its project by package name and its source by name, as in
+`# rk-managed:orbit_cli:homebrew`, and each command's launcher is read on its
+own. RK refuses to overwrite a command in its bin directory that it did not
+write, or that it selected for another project; `rk use --list` reports a
+command another project's launcher holds. Changing a project's origin or
+moving its checkout does not lock rk out of its own commands. A launcher rk
+0.1.14 wrote names its project by a hash and forwards to that project's
+`projects/<hash>/current`, which records the source: rk reads the selection
+from there, and the next `rk use` of a project exporting the command replaces
+it.
 
-RK refuses to overwrite an unrelated command in its managed bin directory or
-to follow symbolic links through its owned state directories. The project
-identity combines GitHub origin and native package name; without a GitHub
-origin it uses the configuration root and package name. Adding or changing an
-origin can therefore require resolving an existing command ownership conflict.
-
-Removing the active source is refused: select another first. Uninstalling Local
-removes RK's registration, never the checkout. Uninstalling Pub or Homebrew
-removes that package manager's installation, including one installed outside RK.
-GitHub uninstall removes only RK's verified managed download directory.
+Removing a source any of the project's commands runs is refused: select
+another first. Local is the checkout itself, so there is nothing to uninstall.
+Uninstalling Pub or Homebrew removes that package manager's installation,
+including one installed outside RK. GitHub uninstall removes RK's downloads
+for that project. An update replaces the previous download once the new one is
+installed and routed. A download is recorded by its directory, so an install
+or update interrupted after unpacking finishes when it runs again, without
+downloading again.
 
 If a checkout or native installation moves or disappears, launchers stop with
-repair instructions. They do not fall back to another source. Native package
-managers can also change installations independently; inspect the source table
-and run `use` again to rebind the desired source.
+repair instructions. They do not fall back to another source. Homebrew and Pub
+launchers follow their package manager's own upgrades: `brew upgrade` moves the
+`opt` link, and `dart pub global run` runs whatever Pub has activated.
+
+### When rk's own checkout does not compile
+
+With Local selected in rk's own checkout, `rk` runs that checkout, and rk
+keeps no copy of itself: while the checkout does not compile, `rk use` cannot
+run to switch back. Make the checkout compile again (`git stash`, say), or run
+a published rk by its path from the checkout:
+
+```sh
+$(brew --prefix)/opt/rk/bin/rk use homebrew
+dart pub global run rk use pub
+~/.local/share/rk/downloads/rk/<version>/rk use github
+```
+
+The published rk must already be installed (`dart pub global activate rk`
+installs one) and newer than 0.1.14, which refuses to replace these
+launchers.
 
 ## Implementation and qualification
 
@@ -191,7 +219,7 @@ Status uses green for verified stage/publication facts. Its cells inspect
 release evidence, while Use changes local installations and command routing.
 
 `installations/manager.dart` owns the shared operation lifecycle;
-`installations/store.dart` owns receipts and atomic routing. Provider adapters
+`installations/store.dart` owns the launchers. Provider adapters
 live beside their publication counterparts under `targets/*/installation.dart`.
 The Local adapter owns Dart source preparation. The Fleury views in `tui/`
 provide input and presentation and call the same coordinator as explicit CLI
@@ -201,9 +229,11 @@ The TUI dependency raises RK's minimum SDK to Dart 3.10.4. Fleury is confined to
 `lib/src/tui`. Elsewhere rk imports only the Dart team's `crypto`, `pub_semver`
 and `yaml`: SHA-256 digests, Pub's version semantics (the Pub installation
 adapter evaluates SDK constraints with them), and pubspecs read as Pub reads
-them. A test in `test/end_to_end_test.dart` keeps it that way. The GitHub adapter
-limits download and decompression sizes, then reuses the release engine's exact
-archive inventory validator.
+them. A test in `test/end_to_end_test.dart` keeps it that way. One HTTPS fetch
+serves the pub.dev and GitHub checks and downloads. The GitHub adapter limits
+download and decompression sizes, then reuses the release engine's exact
+archive inventory validator. `RK_TIMINGS=1` traces where an installation
+command's time goes.
 
 The [qualification record](archive/installation-qualification.md) lists the
 checks run when installations were built.

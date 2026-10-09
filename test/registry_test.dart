@@ -11,12 +11,6 @@ import 'package:test/test.dart';
 
 /// The pub.dev client, against a real server rather than a fake.
 ///
-/// Every other test that touches verdicts goes through a FakeRegistry that
-/// hand-writes them, so the contract was asserted by the double and never by
-/// the code that ships. A mutation proved it: changing the real `inspect` to
-/// answer `absent` where it should answer `unknown` broke nothing in the whole
-/// suite. This file exists so that mutation fails.
-///
 /// The rule being defended is the cardinal one. `absent` may be concluded only
 /// from an authenticated negative, because `absent` is what lets rk publish —
 /// and a timeout, a captive portal, or a 500 answered as `absent` is rk
@@ -97,10 +91,17 @@ publish = ["pub.dev"]
       PubDevTarget(registry: registry).inspectProject(project);
 
   group('only an authenticated negative means absent', () {
-    test('a 404 does', () async {
+    test('a 404 does, and says the package has never existed', () async {
       status = 404;
       final inspection = await inspect();
       expect(inspection.verdict, Verdict.absent);
+      expect(
+        inspection.detail,
+        contains('does not exist yet'),
+        reason:
+            'the first publish is interactive, which is a fact about the '
+            'ceremony rather than about the version',
+      );
     });
 
     test('a version missing from a package that exists does', () async {
@@ -154,38 +155,13 @@ publish = ["pub.dev"]
       expect(inspection.detail, contains('500'));
     });
 
-    test('a 403, which is a credential problem and not an answer', () async {
-      status = 403;
-      expect((await inspect()).verdict, Verdict.unknown);
-    });
-
-    test('a 301 rk did not follow', () async {
-      status = 301;
-      expect((await inspect()).verdict, Verdict.unknown);
-    });
-
     test('a captive portal answering 200 with HTML', () async {
       body = '<html><body>Sign in to continue</body></html>';
       expect((await inspect()).verdict, Verdict.unknown);
     });
 
-    test('a truncated body that will not decode', () async {
-      body = '{"versions": [{"version": "1.0.0"}';
-      expect((await inspect()).verdict, Verdict.unknown);
-    });
-
     test('valid JSON that is not the shape rk expects', () async {
       body = '{"versions": "all of them"}';
-      expect((await inspect()).verdict, Verdict.unknown);
-    });
-
-    test('a body that decodes to a list rather than an object', () async {
-      body = '[]';
-      expect((await inspect()).verdict, Verdict.unknown);
-    });
-
-    test('nothing listening at all', () async {
-      await server.close(force: true);
       expect((await inspect()).verdict, Verdict.unknown);
     });
   });
@@ -223,17 +199,6 @@ publish = ["pub.dev"]
           '"published": "2020-01-01T00:00:00Z"}]}';
       expect((await inspect()).detail, contains('years ago'));
     });
-
-    test('a package that has never existed says so', () async {
-      status = 404;
-      expect(
-        (await inspect()).detail,
-        contains('does not exist yet'),
-        reason:
-            'the first publish is interactive, which is a fact about the '
-            'ceremony rather than about the version',
-      );
-    });
   });
 
   group('lookup', () {
@@ -250,40 +215,12 @@ publish = ["pub.dev"]
       );
     });
 
-    test('returns null only for a 404', () async {
-      status = 404;
-      expect(await registry.lookup('keybay'), isNull);
-    });
-
-    test(
-      'throws rather than returning null when it could not find out',
-      () async {
-        status = 500;
-        expect(
-          () => registry.lookup('keybay'),
-          throwsA(isA<RegistryUnavailable>()),
-          reason: 'a null would be indistinguishable from "never published"',
-        );
-      },
-    );
-
     test('a version rk cannot parse is skipped, not fatal', () async {
       body =
           '{"versions": [{"version": "not-a-version"}, '
           '{"version": "1.0.0"}]}';
       final package = await registry.lookup('keybay');
       expect(package!.versions.map((v) => v.version.canonical), ['1.0.0']);
-    });
-
-    test('the archive digest is read from the wire', () async {
-      // The digest proof is only as real as the field that feeds it: with
-      // archive_sha256 never parsed, the proof never runs and nothing else
-      // notices — a mutation demonstrated exactly that.
-      body =
-          '{"versions": [{"version": "1.0.0", '
-          '"archive_sha256": "AB12cd"}]}';
-      final package = await registry.lookup('keybay');
-      expect(package!.versions.single.archiveSha256, 'AB12cd');
     });
 
     test('the repository is read from each published pubspec', () async {

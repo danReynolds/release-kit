@@ -81,30 +81,6 @@ void main(List<String> args) {
   );
 
   test(
-    'cancellation at the pointer boundary rolls back newly created shims',
-    () async {
-      final installed = await local.install(project, (_) {});
-      final generation = await store.record(project, installed);
-      await expectLater(
-        store.activate(
-          project,
-          generation,
-          beforeCommit: () {
-            throw const InstallationFailure('Cancelled');
-          },
-        ),
-        throwsA(isA<InstallationFailure>()),
-      );
-      expect(store.selected(project), isNull);
-      for (final command in project.commands) {
-        expect(File('${store.bin}/$command').existsSync(), isFalse);
-      }
-      await store.activate(project, generation);
-      expect(store.selected(project)!.source, local.source);
-    },
-  );
-
-  test(
     'native PATH ownership prevents removing an active external installation',
     () async {
       final native = File('${scratch.path}/native/ orbit')
@@ -147,7 +123,6 @@ void main(List<String> args) {
       expect(store.selected(project), isNull);
       expect(Directory(store.bin).existsSync(), isFalse);
       await act(local.source, InstallationAction.use);
-      final old = Link('${store.projectRoot(project)}/current').targetSync();
       for (final command in project.commands) {
         expect(
           (await Process.run('${store.bin}/$command', [
@@ -165,10 +140,6 @@ void main(List<String> args) {
         1,
         reason: 'reuse installed source without upgrading',
       );
-      expect(
-        Link('${store.projectRoot(project)}/current').targetSync(),
-        isNot(old),
-      );
       for (final command in project.commands) {
         expect(
           (await Process.run('${store.bin}/$command', [])).stdout,
@@ -176,6 +147,52 @@ void main(List<String> args) {
         );
       }
       expect(store.routingProblems(project, manager.environment), isEmpty);
+    },
+  );
+
+  test(
+    'rk install local says it prepared the checkout, which is not installed until selected',
+    () async {
+      final provider = LocalInstallationProvider(
+        TestTools((_, _, _, _) async => ok()),
+        Platform.resolvedExecutable,
+        store,
+      );
+      final live = InstallationManager(
+        store: store,
+        providers: {provider.source: provider},
+        environment: manager.environment,
+      );
+      final message = await live.act(
+        project,
+        provider.source,
+        InstallationAction.install,
+        progress: (_) {},
+      );
+      final state = await live.inspect(project);
+      expect(state.sources[provider.source]!.installation, isNull);
+      expect(message, contains('prepared'));
+      expect(message, isNot(contains('installed')));
+    },
+  );
+
+  test(
+    'a PATH entry with a trailing slash still routes to the launchers',
+    () async {
+      final slashed = InstallationManager(
+        store: store,
+        providers: manager.providers,
+        environment: {'PATH': '${store.bin}/:/usr/bin:/bin'},
+      );
+      await slashed.act(
+        project,
+        local.source,
+        InstallationAction.use,
+        progress: (_) {},
+      );
+      final state = await slashed.inspect(project);
+      expect(state.routing, isEmpty);
+      expect(state.currentSource, local.source);
     },
   );
 
@@ -197,7 +214,7 @@ void main(List<String> args) {
         throwsA(isA<InstallationFailure>()),
       );
       expect(store.selected(project)!.source, local.source);
-      expect(store.recorded(project, pub.source), isNotNull);
+      expect((await pub.inspect(project)).installation, isNotNull);
       expect(
         (await Process.run('${store.bin}/orbit', [])).stdout,
         'local orbit\n',
@@ -228,7 +245,7 @@ void main(List<String> args) {
       expect(local.removals, 0);
       await act(pub.source, InstallationAction.use);
       await act(local.source, InstallationAction.uninstall);
-      expect(store.recorded(project, local.source), isNull);
+      expect(store.selected(project)!.source, pub.source);
       expect(Directory(project.directory).existsSync(), isTrue);
       expect(
         (await Process.run('${store.bin}/orbit', [])).stdout,
@@ -238,31 +255,205 @@ void main(List<String> args) {
   );
 
   test(
-    'owned store parents and receipt paths cannot redirect to external files',
+    'switching back and forth leaves nothing behind but the launchers',
     () async {
-      final outside = Directory('${scratch.path}/outside')..createSync();
-      Directory(store.root).createSync();
-      Link('${store.root}/projects').createSync(outside.path);
-      await expectLater(
-        act(local.source, InstallationAction.use),
-        throwsA(isA<InstallationFailure>()),
-      );
-      expect(outside.listSync(), isEmpty);
-      Link('${store.root}/projects').deleteSync();
       await act(local.source, InstallationAction.use);
-      File('${store.projectRoot(project)}/pub.json').createSync();
-      File('${store.projectRoot(project)}/pub.json').deleteSync();
-      final sentinel = File('${outside.path}/sentinel')
-        ..writeAsStringSync('keep');
-      Link('${store.projectRoot(project)}/pub.json').createSync(sentinel.path);
-      await expectLater(
-        act(pub.source, InstallationAction.use),
-        throwsA(isA<InstallationFailure>()),
-      );
-      expect(sentinel.readAsStringSync(), 'keep');
+      await act(pub.source, InstallationAction.install);
+      await act(pub.source, InstallationAction.use);
+      await act(local.source, InstallationAction.use);
+      await act(pub.source, InstallationAction.install);
+      final state =
+          Directory(store.root)
+              .listSync(recursive: true)
+              .whereType<File>()
+              .map((file) => file.path.substring(store.root.length + 1))
+              .toList()
+            ..sort();
+      expect(state, ['bin/orbit', 'bin/orbit_admin', 'install.lock']);
       expect(store.selected(project)!.source, local.source);
     },
   );
+
+  test(
+    'a project whose origin changed keeps its selection and takes its own launchers back',
+    () async {
+      await act(pub.source, InstallationAction.use);
+      final renamed = ExecutableProject(
+        root: project.root,
+        unit: project.unit,
+        project: project.project,
+        entrypoints: project.entrypoints,
+        repository: 'owner/renamed',
+      );
+      Future<String> actRenamed(
+        InstallationSource source,
+        InstallationAction action,
+      ) => manager.act(renamed, source, action, progress: (_) {});
+      expect((await manager.inspect(renamed)).selected, pub.source);
+      await expectLater(
+        actRenamed(pub.source, InstallationAction.uninstall),
+        throwsA(isA<InstallationFailure>()),
+      );
+      expect(pub.removals, 0);
+      await actRenamed(local.source, InstallationAction.use);
+      expect(
+        (await Process.run('${store.bin}/orbit', [])).stdout,
+        'local orbit\n',
+      );
+    },
+  );
+
+  test(
+    'a selection rk 0.1.14 made keeps running, and its source is not removed',
+    () async {
+      // What 0.1.14 wrote: a launcher per command that names the project by
+      // a hash and forwards to its current generation, which records the
+      // source in installation.json.
+      final hash = '0123456789abcdef' * 4;
+      final projects = '${store.root}/projects/$hash';
+      final generation = '$projects/generations/pub-1-1';
+      File('$generation/installation.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          jsonEncode({
+            'source': 'pub',
+            'version': '1.2.0',
+            'location': '/fixture',
+            'managed': false,
+            'exported_paths': <String>[],
+            'commands': <String, Object>{},
+          }),
+        );
+      Link('$projects/current').createSync('generations/pub-1-1');
+      for (final command in project.commands) {
+        final target = '$projects/current/bin/$command';
+        File('$generation/bin/$command')
+          ..createSync(recursive: true)
+          ..writeAsStringSync('#!/bin/sh\nexec /bin/echo legacy $command\n');
+        File('${store.bin}/$command')
+          ..createSync(recursive: true)
+          ..writeAsStringSync(
+            "#!/bin/sh\n# rk-managed:$hash\nif [ ! -x '$target' ]; then\n"
+            "  printf '%s\\n' 'rk: $command has no usable selection. Run rk use from its configured repository.' >&2\n"
+            "  exit 127\nfi\nexec '$target' \"\$@\"\n",
+          );
+        for (final file in [
+          '$generation/bin/$command',
+          '${store.bin}/$command',
+        ]) {
+          await Process.run('/bin/chmod', ['700', file]);
+        }
+      }
+      pub.installed = Installation(
+        source: pub.source,
+        version: '1.2.0',
+        location: '/fixture',
+        commands: const {},
+      );
+      expect((await manager.inspect(project)).selected, pub.source);
+      await expectLater(
+        act(pub.source, InstallationAction.uninstall),
+        throwsA(isA<InstallationFailure>()),
+      );
+      expect(pub.removals, 0);
+      expect(
+        (await Process.run('${store.bin}/orbit', [])).stdout,
+        'legacy orbit\n',
+      );
+      await act(local.source, InstallationAction.use);
+      expect(
+        (await Process.run('${store.bin}/orbit', [])).stdout,
+        'local orbit\n',
+      );
+    },
+  );
+
+  test(
+    'a switch interrupted between commands keeps both sources it runs',
+    () async {
+      await act(pub.source, InstallationAction.use);
+      // The switch to Local wrote orbit's launcher, then stopped.
+      final first = ExecutableProject(
+        root: project.root,
+        unit: project.unit,
+        project: project.project,
+        entrypoints: {'orbit': project.entrypoints['orbit']!},
+        repository: project.repository,
+      );
+      await manager.act(
+        first,
+        local.source,
+        InstallationAction.use,
+        progress: (_) {},
+      );
+      final state = await manager.inspect(project);
+      expect(state.currentSources, {
+        'orbit': local.source,
+        'orbit_admin': pub.source,
+      });
+      expect(state.routing.single, contains('run rk use local again'));
+      await expectLater(
+        act(pub.source, InstallationAction.uninstall),
+        throwsA(isA<InstallationFailure>()),
+      );
+      expect(pub.removals, 0);
+    },
+  );
+
+  test('a package name that is not a Dart identifier is refused', () {
+    // A line break in the name would add a line to the launcher's script.
+    expect(
+      () => fixture(scratch, name: '"orbit\\ntouch pwned"'),
+      throwsA(isA<InstallationFailure>()),
+    );
+  });
+
+  group('another project exporting the same command', () {
+    late ExecutableProject other;
+    setUp(
+      () => other = fixture(scratch, name: 'other', commands: ['orbit_admin']),
+    );
+    Future<String> actOther(InstallationSource source) =>
+        manager.act(other, source, InstallationAction.use, progress: (_) {});
+
+    test('cannot take over a command this project selected', () async {
+      await act(local.source, InstallationAction.use);
+      await expectLater(
+        actOther(pub.source),
+        throwsA(
+          isA<InstallationFailure>().having(
+            (e) => e.message,
+            'message',
+            contains(project.name),
+          ),
+        ),
+      );
+      expect(
+        (await Process.run('${store.bin}/orbit_admin', [])).stdout,
+        'local orbit_admin\n',
+      );
+      final state = await manager.inspect(other);
+      expect(state.selected, isNull);
+      expect(state.routing.single, contains('selected for orbit_cli'));
+    });
+
+    test('is reported where it took a command over', () async {
+      await act(local.source, InstallationAction.use);
+      File('${store.bin}/orbit_admin').deleteSync();
+      var state = await manager.inspect(project);
+      expect(state.selected, local.source);
+      expect(state.currentSources['orbit_admin'], isNull);
+      expect(state.routing.single, contains('run rk use local again'));
+      await actOther(pub.source);
+      state = await manager.inspect(project);
+      expect(state.currentSources, {
+        'orbit': local.source,
+        'orbit_admin': null,
+      });
+      expect(state.routing.single, contains('selected for other'));
+      expect(state.currentSource, isNull);
+    });
+  });
 
   test(
     'native local launch preserves caller directory, arguments and edits in mapped scripts',

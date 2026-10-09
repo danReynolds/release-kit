@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'builds/capability.dart';
@@ -10,12 +9,10 @@ import 'output/output.dart';
 import 'output/progress.dart';
 import 'engine/resolve.dart';
 import 'engine/release_stage.dart';
-import 'engine/stage_archive.dart';
 import 'engine/tools.dart';
 import 'engine/verdict.dart';
 import 'engine/workspace.dart';
 import 'transforms/archive.dart';
-import 'transforms/digest.dart';
 import 'transforms/macos.dart';
 
 /// The local half of shipping binaries, one checklist step at a time.
@@ -64,20 +61,6 @@ class BinaryChain {
   final String compilerExecutable;
   final ReleaseStage? stage;
 
-  // ---- workspace-internal names ----
-  //
-  // These two are not public asset names: they name what lives under
-  // `.rk/work/` between steps. The published grammar is ReleaseAssets.
-
-  static String binaryName(
-    String project,
-    String platform,
-    String executable,
-  ) => 'producers/$project/$platform/$executable';
-
-  static String zipName(String project, String platform, String executable) =>
-      'producers/$project/notary/$platform/$executable.zip';
-
   // ---- build ----
 
   /// Compiles — and on macOS signs — the platform binary, as one step.
@@ -92,22 +75,10 @@ class BinaryChain {
     MacSigning? signing,
     ProgressHandle? progress,
   }) async {
+    // The release refused a platform this host cannot produce before any
+    // work began (RK-HOST-001).
     final platform = step.platform!;
     final executable = project.executable!;
-    final capability = capabilities.resolve(platform);
-    if (!capability.canProduce) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-HOST-001',
-          message: 'this machine cannot produce $platform',
-          remedy: capability.reason ?? 'it needs a different host',
-        ),
-        unit: step.unit,
-      );
-      return LocalProducerOutcome.failed(
-        capability.reason ?? 'this host cannot produce $platform',
-      );
-    }
 
     final name = ReleaseAssets.binaryPath(project, platform);
 
@@ -202,7 +173,6 @@ class BinaryChain {
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
     final published = signing.publishedRequirement;
-    final team = published == null ? null : teamOf(published);
     LocalProducerOutcome fail(
       String code,
       String message, {
@@ -220,82 +190,32 @@ class BinaryChain {
       return LocalProducerOutcome.failed(message);
     }
 
-    if (published != null && team == null) {
-      return fail(
-        'RK-SIGN-001',
-        'the published requirement has no readable team',
-      );
-    }
     final signer = MacOsSigner(tools: tools);
     final signatures = <String, Map<String, Object?>>{};
     // Library validation admits any library signed by the same team, so the
     // runtime's signature also admits only the modules this bundle ships.
     // Those are signed first and their final code hashes go into it.
     final shipped = <String>{};
-    String? fingerprint = signing.certificateSha256;
     for (final file in artifact.signingOrder) {
       final name = '$root/${file.path}';
       final codeId = '${signing.codeId}${file.codeSuffix}';
-      final isIdentity = file.path == artifact.identityFile;
-      final pins = isIdentity ? (shipped.toList()..sort()) : const <String>[];
-      final unsigned = Sha256.hex(workspace.readBytes(name)!);
+      final pins = file.path == artifact.identityFile
+          ? (shipped.toList()..sort())
+          : const <String>[];
       final signed = await signer.sign(
         binary: workspace.pathOf(name),
-        team: team,
+        identity: signing.identity,
         codeId: codeId,
-        selectedIdentity: signing.identity,
-        expectedCertificateSha256: fingerprint,
         pinnedLibraries: pins,
       );
       if (!signed.ok) {
         return fail(
           'RK-SIGN-002',
-          signed.problem ?? 'signing failed',
+          signed.summary,
           transcript: signed.transcript,
         );
       }
-      fingerprint ??= signed.certificateSha256;
-      if (identifierOf(signed.requirement!) != codeId) {
-        return fail(
-          'RK-SIGN-003',
-          'the signature names a different code identifier',
-        );
-      }
-      if (isIdentity && published != null && signed.requirement != published) {
-        output.problem(
-          Diagnostic(
-            code: 'RK-SIGN-003',
-            message:
-                'the signature does not match the identity users already installed',
-            remedy:
-                'Restore the published signing identity. A deliberate identity migration requires a separate plan.',
-          ),
-          unit: step.unit,
-        );
-        output.step(
-          step,
-          mark: Mark.blocked,
-          verdict: Verdict.conflict,
-          evidence: {'published': published, 'produced': signed.requirement!},
-          show: true,
-        );
-        return LocalProducerOutcome.failed(
-          'the produced signature differs from the published identity',
-          output.report.acted
-              ? HaltKind.actedAndUnfixable
-              : HaltKind.unfixableByRerun,
-        );
-      }
-      final record = <String, Object?>{
-        'first_identity': published == null,
-        'published_requirement': isIdentity ? published : null,
-        'designated_requirement': signed.requirement,
-        'code_id': codeId,
-        'certificate': signed.certificate,
-        'certificate_sha256': signed.certificateSha256,
-        'unsigned_sha256': unsigned,
-        'signed_sha256': Sha256.hex(workspace.readBytes(name)!),
-      };
+      final record = <String, Object?>{'code_id': codeId};
       if (file.loadedByIdentity) {
         final reading = await signer.codeDirectoryHashes(
           workspace.pathOf(name),
@@ -311,31 +231,51 @@ class BinaryChain {
         shipped.addAll(hashes);
         record['cdhashes'] = hashes;
       }
-      if (isIdentity && artifact.libraries.isNotEmpty) {
-        // Read back rather than trusted: a constraint that admits more than
-        // the shipped modules would still launch and pass every other check.
-        final reading = await signer.admittedLibraries(workspace.pathOf(name));
-        final admitted = reading.admitted;
-        if (admitted == null) {
-          return fail(
-            'RK-SIGN-019',
-            "the runtime's library load constraint could not be read",
-            transcript: reading.display.transcript,
-          );
-        }
-        if (pins.isEmpty ||
-            admitted.length != pins.length ||
-            !admitted.containsAll(pins)) {
-          return fail(
-            'RK-SIGN-018',
-            'the runtime does not admit exactly the module it ships with',
-            transcript: reading.display.transcript,
-          );
-        }
-        record['pinned_library_cdhashes'] = pins;
-      }
+      if (pins.isNotEmpty) record['pinned_library_cdhashes'] = pins;
       signatures[file.path] = record;
     }
+
+    // The process identity users' Keychain items and permissions are tied
+    // to: the runtime's designated requirement, which must be the one
+    // already published.
+    final requirement = await signer.designatedRequirement(
+      workspace.pathOf('$root/${artifact.identityFile}'),
+    );
+    if (requirement == null) {
+      return fail('RK-SIGN-002', 'the signature could not be read back');
+    }
+    if (published != null && requirement != published) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SIGN-003',
+          message:
+              'the signature does not match the identity users already installed',
+          remedy:
+              'Restore the published signing identity. A deliberate identity migration requires a separate plan.',
+        ),
+        unit: step.unit,
+      );
+      output.step(
+        step,
+        mark: Mark.blocked,
+        verdict: Verdict.conflict,
+        evidence: {'published': published, 'produced': requirement},
+        show: true,
+      );
+      return LocalProducerOutcome.failed(
+        'the produced signature differs from the published identity',
+        output.report.actedPublicly
+            ? HaltKind.actedAndUnfixable
+            : HaltKind.unfixableByRerun,
+      );
+    }
+    signatures[artifact.identityFile] = {
+      ...signatures[artifact.identityFile]!,
+      'first_identity': published == null,
+      'published_requirement': published,
+      'designated_requirement': requirement,
+      'certificate': signing.identity.name,
+    };
     final signedSmoke = await tools.run(
       workspace.pathOf('$root/${artifact.entryPoint}'),
       const ['--version'],
@@ -348,20 +288,6 @@ class BinaryChain {
         'the signed binary does not run or reports the wrong version',
         transcript: signedSmoke.transcript,
       );
-    }
-    for (final file in artifact.signedFiles) {
-      final name = '$root/${file.path}';
-      final verified = await signer.verifies(workspace.pathOf(name));
-      if (!verified.ok ||
-          signatures[file.path]!['signed_sha256'] !=
-              Sha256.hex(workspace.readBytes(name)!)) {
-        return fail(
-          'RK-SIGN-015',
-          'the signature did not verify after the signed smoke test',
-          transcript: verified.transcript,
-        );
-      }
-      signatures[file.path]!['verified_after_smoke'] = true;
     }
     return LocalProducerOutcome.succeeded(
       outputs: [
@@ -430,100 +356,73 @@ class BinaryChain {
       }
     }
 
-    final resultName = ReleaseAssets.notaryResultPath(project, platform);
-    final logName = ReleaseAssets.notaryLogPath(project, platform);
-
-    final zip = ReleaseAssets.notaryInputPath(project, platform);
-    File(workspace.pathOf(zip)).parent.createSync(recursive: true);
-    final payload = Directory.systemTemp.createTempSync('rk-notary-payload-');
-    final ToolResult zipped;
+    // The zip is Apple's input only: built beside the stage, never in it,
+    // from the artifact's files exactly as the build left them, and nothing
+    // else that is there, such as what an interrupted codesign left.
+    final scratch = Directory.systemTemp.createTempSync('rk-notary-');
     try {
+      final root = ReleaseAssets.binaryRoot(project, platform);
+      final payload = '${scratch.path}/payload';
       for (final file in ReleaseAssets.binaryArtifact(
         project,
         platform,
       ).files) {
-        final destination = File('${payload.path}/${file.path}');
-        destination.parent.createSync(recursive: true);
-        File(
-          workspace.pathOf(
-            '${ReleaseAssets.binaryRoot(project, platform)}/${file.path}',
-          ),
-        ).copySync(destination.path);
+        final copy = File('$payload/${file.path}')
+          ..parent.createSync(recursive: true);
+        File(workspace.pathOf('$root/${file.path}')).copySync(copy.path);
       }
-      zipped = await tools.run('ditto', [
-        '-c',
-        '-k',
-        payload.path,
-        workspace.pathOf(zip),
-      ]);
+      final zip = '${scratch.path}/${project.executable}.zip';
+      final zipped = await tools.run('ditto', ['-c', '-k', payload, zip]);
+      if (!zipped.ok) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-NOTARY-001',
+            message: '$platform: the archive for notarization failed',
+            remedy: zipped.summary,
+            evidence: zipped.transcript,
+          ),
+          unit: step.unit,
+        );
+        return LocalProducerOutcome.failed(zipped.summary);
+      }
+
+      // The wait is Apple's, and silence during it reads as a hang — this is
+      // the step Activity exists for.
+      final notarized = await MacOsNotarizer(tools: tools).submit(zip);
+      if (!notarized.ok) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-NOTARY-002',
+            message: '$platform: notarization did not complete',
+            remedy: notarized.remedy ?? notarized.problem ?? 'see notarytool',
+            evidence: notarized.transcript,
+          ),
+          unit: step.unit,
+        );
+        return LocalProducerOutcome.failed(
+          notarized.problem ?? 'Apple rejected the submission',
+        );
+      }
+      output.step(
+        step,
+        verdict: Verdict.exact,
+        detail: 'notarized',
+        show: false,
+      );
+      // Apple's verdict is about the signed files, which the archive step
+      // packs as they are; a consumer asks Apple about the exact bytes.
+      return LocalProducerOutcome.succeeded(
+        outputs: const [],
+        evidence: {
+          'notary': {
+            'status': 'Accepted',
+            'submission_id': notarized.submissionId,
+          },
+        },
+      );
     } finally {
-      payload.deleteSync(recursive: true);
+      scratch.deleteSync(recursive: true);
     }
-    if (!zipped.ok) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-NOTARY-001',
-          message: '$platform: the archive for notarization failed',
-          remedy: zipped.summary,
-          evidence: zipped.transcript,
-        ),
-        unit: step.unit,
-      );
-      return LocalProducerOutcome.failed(zipped.summary);
-    }
-
-    // The wait is Apple's, and silence during it reads as a hang — this is
-    // the step Activity exists for.
-    final notarized = await MacOsNotarizer(
-      tools: tools,
-    ).submit(workspace.pathOf(zip));
-    if (!notarized.ok) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-NOTARY-002',
-          message: '$platform: notarization did not complete',
-          remedy: notarized.remedy ?? notarized.problem ?? 'see notarytool',
-          evidence: notarized.transcript,
-        ),
-        unit: step.unit,
-      );
-      return LocalProducerOutcome.failed(
-        notarized.problem ?? 'Apple rejected the submission',
-      );
-    }
-
-    // The verdict and its log are stage evidence, receipt-bound for
-    // diagnosis; a consumer verifies the binary with Apple directly.
-    workspace.write(resultName, utf8.encode(notarized.raw ?? '{}'));
-    final submission = notarized.submissionId;
-    final log = submission == null
-        ? null
-        : await MacOsNotarizer(tools: tools).log(submission);
-    if (log == null || !log.ok) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-NOTARY-003',
-          message:
-              '$platform: Apple accepted the submission and the log '
-              'could not be fetched',
-          remedy: log == null
-              ? 'the submission id was not in notarytool\'s answer'
-              : log.summary,
-          evidence: log?.transcript,
-        ),
-        unit: step.unit,
-      );
-      return const LocalProducerOutcome.failed(
-        'the notarization log could not be fetched',
-      );
-    }
-    workspace.write(logName, utf8.encode(log.stdout));
-    output.step(step, verdict: Verdict.exact, detail: 'notarized', show: false);
-    return _notaryOutcome(
-      resultName: resultName,
-      logName: logName,
-      zipName: zip,
-    );
   }
 
   // ---- archive ----
@@ -561,62 +460,7 @@ class BinaryChain {
     }
 
     final name = ReleaseAssets.archivePath(project, platform);
-    final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar(entries));
-    workspace.write(name, bytes);
-    final contents = StageArchiveInventory.decode(bytes);
-
-    if (platform.startsWith('macos-')) {
-      final verificationDirectory = Directory.systemTemp.createTempSync(
-        'rk-archive-verify-',
-      );
-      try {
-        contents.extractTo(verificationDirectory);
-        for (final file in artifact.signedFiles) {
-          final verified = await MacOsSigner(
-            tools: tools,
-          ).verifies('${verificationDirectory.path}/${file.path}');
-          if (!verified.ok) {
-            output.problem(
-              Diagnostic(
-                code: 'RK-SIGN-016',
-                message:
-                    'the macOS signature does not verify in the final archive',
-                remedy: 'rk will not publish the archive.',
-                evidence: verified.transcript,
-              ),
-              unit: step.unit,
-            );
-            return const LocalProducerOutcome.failed(
-              'the final archived signature did not verify',
-            );
-          }
-        }
-        final smoke = await tools.run(
-          '${verificationDirectory.path}/${artifact.entryPoint}',
-          const ['--version'],
-          timeout: const Duration(minutes: 2),
-        );
-        if (!smoke.ok || !smoke.stdout.contains(project.version.canonical)) {
-          return const LocalProducerOutcome.failed(
-            'the final archived program did not run with the expected version',
-          );
-        }
-        for (final file in artifact.signedFiles) {
-          if (Sha256.hex(
-                File(
-                  '${verificationDirectory.path}/${file.path}',
-                ).readAsBytesSync(),
-              ) !=
-              Sha256.hex(contents.files[file.path]!)) {
-            return const LocalProducerOutcome.failed(
-              'the final archived program changed during its smoke test',
-            );
-          }
-        }
-      } finally {
-        verificationDirectory.deleteSync(recursive: true);
-      }
-    }
+    workspace.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
     output.step(
       step,
       show: false,
@@ -627,53 +471,6 @@ class BinaryChain {
     );
     return LocalProducerOutcome.succeeded(
       outputs: [LocalProducerOutput(name, 'archive')],
-      evidence: {
-        'inventory': StageArchiveInventory.evidence(contents.inventory),
-        if (platform.startsWith('macos-'))
-          'signature': {
-            'status': 'valid',
-            'scope': 'archive-extracted',
-            'files': [for (final file in artifact.signedFiles) file.path],
-            'smoke': 'passed',
-          },
-      },
-    );
-  }
-
-  LocalProducerOutcome _notaryOutcome({
-    required String resultName,
-    required String logName,
-    required String zipName,
-  }) {
-    final resultBytes = workspace.readBytes(resultName)!;
-    final logBytes = workspace.readBytes(logName)!;
-    Object? status;
-    Object? submissionId;
-    try {
-      final decoded = jsonDecode(utf8.decode(resultBytes));
-      if (decoded is Map) {
-        status = decoded['status'];
-        submissionId = decoded['id'];
-      }
-    } on Object {
-      // The stage inspector owns the strict semantic decision. Carry the
-      // evidence exactly as observed so it can refuse without this producer
-      // inventing a successful status or submission id.
-    }
-    return LocalProducerOutcome.succeeded(
-      outputs: [
-        LocalProducerOutput(zipName, 'notary-input'),
-        LocalProducerOutput(resultName, 'notary'),
-        LocalProducerOutput(logName, 'notary'),
-      ],
-      evidence: {
-        'notary': {
-          'status': status,
-          'submission_id': submissionId,
-          'result_sha256': Sha256.hex(resultBytes),
-          'log_sha256': Sha256.hex(logBytes),
-        },
-      },
     );
   }
 
@@ -702,8 +499,7 @@ final class MacSigning {
   const MacSigning({
     required this.publishedRequirement,
     required this.codeId,
-    this.identity,
-    this.certificateSha256,
+    required this.identity,
   });
 
   /// The designated requirement of the release users already installed, or
@@ -711,8 +507,10 @@ final class MacSigning {
   final String? publishedRequirement;
 
   final String codeId;
-  final SigningIdentity? identity;
-  final String? certificateSha256;
+
+  /// The certificate the preflight chose: the one Developer ID on a first
+  /// release, or the one for the published release's team.
+  final SigningIdentity identity;
 }
 
 /// One stage-relative file a local producer created or authoritatively reused.

@@ -48,14 +48,10 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
       return StageStepContract(receiptNameFor(step), outputs: binaries);
 
     case StepKind.notarize:
+      // Apple's verdict is evidence; the step adds no file to the stage.
       return StageStepContract(
         receiptNameFor(step),
         inputs: binaries.keys.toSet(),
-        outputs: {
-          ReleaseAssets.notaryResultPath(project, platform!): 'notary',
-          ReleaseAssets.notaryLogPath(project, platform): 'notary',
-          ReleaseAssets.notaryInputPath(project, platform): 'notary-input',
-        },
       );
 
     case StepKind.archive:

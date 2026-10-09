@@ -56,36 +56,22 @@ class StageBoard {
       for (final stage in targetStages.where(
         (stage) => stage.target.step.id == target.step.id,
       )) {
-        final outputBindings = <String>{};
         for (final view in stage.progress) {
-          final output = view.output;
-          if (output != null &&
-              !stage.contract.step.outputs.containsKey(output)) {
-            throw StateError(
-              '${stage.contract.step.name} progress binds undeclared output '
-              '$output',
-            );
-          }
-          if (output != null && !outputBindings.add(output)) {
-            throw StateError(
-              '${stage.contract.step.name} binds output $output twice',
-            );
-          }
           final row = view.artifact == null
               ? StageBoardRow(
-                  '${target.step.id}/${stage.contract.step.name}/${view.id}',
+                  '${target.step.id}/${stage.contract.name}/${view.id}',
                   view.label!,
                 )
               : rows.singleWhere(
                   (row) => row.name == view.artifact,
                   orElse: () => throw StateError(
-                    '${stage.contract.step.name} binds undeclared artifact '
+                    '${stage.contract.name} binds undeclared artifact '
                     '${view.artifact}',
                   ),
                 );
           if (!rows.contains(row)) rows.add(row);
-          bind(stage.contract.step.name, row);
-          progressRows['${stage.contract.step.name}/${view.id}'] = row;
+          bind(stage.contract.name, row);
+          progressRows['${stage.contract.name}/${view.id}'] = row;
         }
       }
       if (rows.isNotEmpty) {
@@ -111,12 +97,11 @@ class StageBoard {
           binaryProject.version.canonical,
           platform,
         );
+        // Named as the file is: the path inside the stage means nothing to
+        // a reader, and the stage says where its archives are.
         if (!publishedArtifacts.contains(publicName)) {
           localRows.add(
-            StageBoardRow(
-              'local/${binaryProject.name}/$platform',
-              ReleaseAssets.archivePath(binaryProject, platform),
-            ),
+            StageBoardRow('local/${binaryProject.name}/$platform', publicName),
           );
         }
       }

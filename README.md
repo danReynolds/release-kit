@@ -1,8 +1,19 @@
 # rk
 
-Release kit manages releasing a project to your configured targets: Git tags,
-a GitHub Release, Homebrew, standalone binaries — as one checked plan instead
-of a release script.
+rk makes releasing code simple. A repository says what it releases and where
+each piece goes — Dart packages to pub.dev, Git tags, GitHub Releases,
+Homebrew formulas, standalone binaries — and rk turns that into one plan for
+the whole repository and carries it out with one command:
+
+```console
+$ rk init       # say what to release: writes release.toml
+$ rk status     # what is released, staged and left to do
+$ rk release    # release the rest, in dependency order, asking once
+```
+
+`rk release` builds what is not built, shows every remaining target, asks
+once, and publishes providers before the packages that need them. Re-running
+it finishes a release that stopped anywhere, and publishes nothing twice.
 
 ## Features
 
@@ -11,8 +22,8 @@ of a release script.
   fields are errors.
 - **Reality first.** A target that is already public is recorded, not
   published again.
-- **Fail-closed.** The complete plan is validated before the first step
-  acts, and every refusal names the problem and the fix
+- **Refuses before acting.** The complete plan is checked before the first
+  step acts, and every refusal names the problem and the fix
   ([doc/codes.md](doc/codes.md)).
 - **No secrets.** Publication sessions belong to `dart pub`, `gh` and `git`;
   signing and notarization credentials to `codesign` and `notarytool`. rk
@@ -20,29 +31,13 @@ of a release script.
   `status` and `stage` never do. A `dart pub login` rk runs leaves its
   session in place, as one you ran yourself would.
 - **Signed when you say so.** rk signs a release tag when `tag.gpgSign` is
-  set or earlier release tags are signed, as git does; a signing key alone
-  does not sign it. rk reads the signature back off the tag it created
-  instead of trusting the config, and refuses one it cannot verify rather
-  than reporting it as signed.
+  set, as git does; a signing key alone does not sign it.
 - **Final bytes checked.** Linux executables and macOS Dart bundles use one
-  artifact contract. Every macOS code file is signed; the installed command
-  is tested before and after archiving. See [CLI artifacts](doc/cli-artifacts.md)
+  artifact contract. Every macOS code file is signed, and the installed
+  command is run before it is archived. See [CLI artifacts](doc/cli-artifacts.md)
   for layouts, signing and compile-time metadata.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
-
-## Dogfood your commands
-
-```sh
-rk use                     # compare installed and available versions; choose a source
-rk use local               # bind this checkout; edits work on the next run
-rk install pub             # prepare without switching
-rk use --list              # sources, installation state and PATH resolution
-```
-
-Run inside the configured project. With multiple executable packages, select
-one in the inline table or add `-p package_name`. Every command in a package
-switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
 
 ## Getting Started
 
@@ -95,9 +90,6 @@ terminals receive the tree; narrow terminals and pipes receive an outline, and
 destinations themselves, not a log; "Not staged" is the private work
 that must finish before anything goes public.
 
-`rk status` shows progress while checking, prints its report, and returns to the
-prompt. The report stays in terminal scrollback; rerun it for a fresh check.
-`rk use` is interactive because it manages local executables.
 See [release status](doc/status.md) for the report's evidence and meaning.
 
 When Binary or Homebrew is selected, `rk init` proposes every binary platform
@@ -124,7 +116,7 @@ release-kit · main@888444b
         producers/rk/archives/rk-0.1.0-linux-arm64.tar.gz
         producers/rk/archives/rk-0.1.0-linux-x64.tar.gz
         producers/rk/archives/rk-0.1.0-macos-arm64.tar.gz
-      pub.dev                    rk source
+      pub.dev                    rk package archive
       GitHub Release             4 artifacts
       Homebrew                   rk.rb
 ```
@@ -250,14 +242,15 @@ first claims, signing identities and preparation warnings, and asks once:
 
 ```console
 $ rk release
-Releasing core 0.3.0
-  ...
+Releasing core 0.3.0 and cli 0.1.0
+  example · main@3f2a91c
+
 2 units staged
     core 0.3.0 · pub.dev · example_core
-✓     package archive                              staged
+    ✓ package archive                              staged
     cli 0.1.0 · pub.dev · example_cli
-✓     package archive                              staged
-Release order: core 0.3.0 -> cli 0.1.0
+    ✓ package archive                              staged
+Release order: core 0.3.0 › cli 0.1.0
 
   Release core 0.3.0
     pub.dev                  example_core 0.3.0 · permanent · first claim
@@ -272,16 +265,17 @@ and acquires no publication session. The yes covers exactly the targets shown
 and nothing else; a target that was already public when asked is never acted
 on. Right before each act rk reads that target again, skipping one another run
 has published since, checks the staged bytes it publishes, acts, and reads the
-result back.
+result back. A Git tag is read once a run, with every other tag: git accepts a
+tag push only as the exact object it was given, so its answer is the read-back.
 
-Packages publish in dependency order, and each waits until the version it
-uploaded is available before the next unit starts. Development-only
+Packages publish in dependency order, and each waits until pub.dev lists the
+version it uploaded before the next unit starts. Development-only
 dependencies never become publication prerequisites.
 
 Public releases are not atomic. If a later publication fails, earlier completed
 targets remain public; rerunning rechecks them and resumes with the recorded
-stage. See the [repository release contract](doc/repository-release-plan.md)
-for recovery.
+stage. See [recovery](doc/release-pipeline.md#recovery) for when a release
+needs the stage it started from.
 
 ## Release assets your own build makes
 
@@ -328,25 +322,38 @@ The rest is an ordinary rk release. The build runs once per stage, the
 release is drafted, published and read back, and its tag carries the
 manifest of what was built.
 
+## Dogfood your commands
+
+```sh
+rk use                     # compare installed and available versions; choose a source
+rk use local               # bind this checkout; edits work on the next run
+rk install pub             # prepare without switching
+rk use --list              # sources, installation state and PATH resolution
+```
+
+Run inside the configured project. With multiple executable packages, select
+one in the inline table or add `-p package_name`. Every command in a package
+switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
+
 ## Commands
 
 | | |
 |---|---|
 | `rk init` | choose outputs and review `release.toml` |
+| `rk status [unit]` | what is released, staged and left to do |
+| `rk stage [unit]` | prepare and validate artifacts; publish nothing |
+| `rk release` | publish unfinished units, in dependency order |
+| `rk release <unit>` | one unit |
+| `rk plan [unit]` | show the configured source-only release graph |
+| `rk target [name]` | what this binary can create or publish, or one target in detail |
+| `rk clean` | remove this repository's private stages |
 | `rk use [source] [-p project]` | install if needed, then select command source |
 | `rk install [source] [-p project]` | prepare a source without switching |
 | `rk uninstall [source] [-p project]` | remove a confirmed inactive installation |
-| `rk plan [unit]` | show the configured source-only release graph |
-| `rk status` | inspect this repository |
-| `rk stage [unit]` | prepare and validate artifacts; publish nothing |
-| `rk release` | publish unfinished units |
-| `rk release <unit>` | one unit |
-| `rk target list` | what this binary can create or publish |
-| `rk target <name>` | one target: requirements and a minimal example |
-| `rk clean` | remove this repository's private stages |
+| `rk help [command]` | the commands, output marks and exit codes, or one command's flags |
 
-`rk -h` lists the commands, output marks, and exit codes. Use
-`rk <command> -h` for its flags and examples.
+`rk help` (or `rk -h`) lists the commands, output marks, and exit codes.
+`rk help <command>` (or `rk <command> -h`) shows its flags and examples.
 
 On a terminal, a finished step keeps how long it took once that reaches a
 second, and a successful `stage` or `release` of ten seconds or more ends
@@ -397,10 +404,10 @@ repository's stages, lists their recorded identities, and asks first. Receipt
 metadata helps identify a stage; it does not prove that its bytes are no longer
 needed.
 
-Git-identified targets (`git-tag`, `github-release`, `homebrew`) need a
-clean working tree. A registry-only or local release may include
-uncommitted work: rk warns, snapshots that tree once, and builds and
-publishes from that snapshot.
+A release is of a commit. `rk stage` and `rk release` build from a clean,
+committed working tree, and refuse uncommitted changes or a directory outside
+Git before doing anything. `rk status` and `rk plan` read either as it is, and
+say what staging needs.
 
 Releases run from your machine. The design anticipates CI; support is
 deferred.

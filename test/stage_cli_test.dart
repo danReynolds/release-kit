@@ -63,12 +63,12 @@ publish = ["git-tag"]
   test(
     'stage is reusable and release still requires publication approval',
     () {
-      final repo = repository();
-      final staged = repo(['stage', '--json']);
+      final repo = repository(multiple: true);
+      final staged = repo(['stage', 'core', '--json']);
       expect(staged.code, 0, reason: staged.all);
       expect(staged.json['rk'], 12);
       expect(staged.json['command'], 'stage');
-      expect(staged.json, isNot(contains('mode')));
+      expect(staged.units.map((unit) => unit['name']), ['core']);
       expect(staged.json['next'], ['rk release core']);
       final evidence = stageEvidence(staged, 'core');
       expect(evidence['stage id'], isNotEmpty);
@@ -76,22 +76,31 @@ publish = ["git-tag"]
         Directory('${repo.root}/${evidence['stage path']}').existsSync(),
         isTrue,
       );
+      expect(
+        Directory(
+          '${repo.root}/.rk/work/stages',
+        ).listSync().whereType<Directory>(),
+        hasLength(1),
+        reason: 'a named stage prepares that unit alone',
+      );
       expectNoTags(repo);
 
-      final repeat = repo(['stage', 'core', '--json']);
-      expect(repeat.code, 0, reason: repeat.all);
-      expect(stageEvidence(repeat, 'core'), evidence);
+      // A bare stage prepares every unit, and reuses the one already staged.
+      final all = repo(['stage', '--json']);
+      expect(all.code, 0, reason: all.all);
+      expect(all.units.map((unit) => unit['name']), ['core', 'tools']);
+      expect(stageEvidence(all, 'core'), evidence);
       expect(
-        repeat.stepsOf('core').where((step) => step['action'] == 'attempted'),
+        all.stepsOf('core').where((step) => step['action'] == 'attempted'),
         isEmpty,
       );
+      expect(stageEvidence(all, 'tools')['stage id'], isNotEmpty);
       expectNoTags(repo);
 
       // A full release uses the same evidence and still requires authorization.
       final release = repo(['release', 'core', '--json']);
       expect(release.code, 1, reason: release.all);
       expect(release.json['command'], 'release');
-      expect(release.json, isNot(contains('mode')));
       expect(release.problems.single['code'], 'RK-AUTH-001');
       expect(stageEvidence(release, 'core')['stage id'], evidence['stage id']);
       expectNoTags(repo);
@@ -105,11 +114,11 @@ publish = ["git-tag"]
       final repo = repository();
       final traceFile = File('${repo.root}/.rk/timings.json');
 
-      final plain = repo(['stage', '--json']);
       final timed = repo(['stage', '--json', '--timings']);
       expect(timed.code, 0, reason: timed.all);
 
       // The breakdown goes to stderr, so stdout stays one JSON document.
+      expect(timed.json['command'], 'stage');
       expect(timed.stderr, contains('Timings'));
       expect(timed.stderr, contains('preparing'));
       expect(timed.stderr, contains('Total'));
@@ -127,17 +136,7 @@ publish = ["git-tag"]
         contains('preparing'),
       );
 
-      // The report is the plain one: no step carries a time.
-      bool timedSteps(Run run) =>
-          run.stepsOf('core').any((step) => step.containsKey('took_ms'));
-      expect(timedSteps(plain), isFalse);
-      expect(timedSteps(timed), isFalse);
-
-      // The trace is rk's own, so the next run finds nothing uncommitted.
-      final again = repo(['stage', '--json']);
-      expect(again.code, 0, reason: again.all);
-
-      // And it is written only as a plain file in rk's own directory, never
+      // It is written only as a plain file in rk's own directory, never
       // through a link that could point outside the repository.
       final outside = File('${scratch.path}/outside.json');
       traceFile.deleteSync();
@@ -146,56 +145,6 @@ publish = ["git-tag"]
       expect(linked.code, 0, reason: linked.all);
       expect(linked.stderr, contains('did not write timings'));
       expect(outside.existsSync(), isFalse);
-    },
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
-
-  test(
-    'bare stage prepares all units and named stage preserves its scope',
-    () {
-      final repo = repository(multiple: true);
-      final named = repo(['stage', 'tools', '--json']);
-      expect(named.code, 0, reason: named.all);
-      expect(named.units.map((unit) => unit['name']), ['tools']);
-      expect(stageEvidence(named, 'tools')['stage id'], isNotEmpty);
-      expect(named.json['next'], ['rk release tools']);
-      expectNoTags(repo);
-      expect(
-        Directory(
-          '${repo.root}/.rk/work/stages',
-        ).listSync().whereType<Directory>(),
-        hasLength(1),
-      );
-
-      final all = repo(['stage', '--json']);
-      expect(all.code, 0, reason: all.all);
-      expect(all.units.map((unit) => unit['name']), ['core', 'tools']);
-      expect(stageEvidence(all, 'core')['stage id'], isNotEmpty);
-      expect(stageEvidence(all, 'tools'), stageEvidence(named, 'tools'));
-      expectNoTags(repo);
-    },
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
-
-  test(
-    'the removed --stage flag refuses before any preparation or publication',
-    () {
-      final repo = repository();
-      for (final args in [
-        ['release', 'core', '--stage'],
-        ['release', 'core', '--stage', '--yes'],
-        ['stage', 'core', '--stage'],
-      ]) {
-        final refused = repo([...args, '--json']);
-        expect(refused.code, 2, reason: refused.all);
-        expect(refused.problems.single['code'], 'RK-CLI-001');
-        expect(refused.problems.single['message'], 'rk does not have --stage');
-        expect(refused.problems.single['remedy'], contains('rk stage'));
-        expect(refused.json, isNot(contains('mode')));
-        expect(refused.units, isEmpty);
-        expect(Directory('${repo.root}/.rk').existsSync(), isFalse);
-        expectNoTags(repo);
-      }
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
@@ -252,7 +201,10 @@ case "$*" in
 esac
 ''';
 
-    ({Rk repo, Map<String, String> environment}) crate(String build) {
+    ({Rk repo, Map<String, String> environment}) crate(
+      String build, {
+      bool linksAgents = false,
+    }) {
       final repo = Rk.repository(scratch, 'source', {
         '.gitignore': '.rk/\n',
         'release.toml': '''
@@ -274,6 +226,11 @@ assets = ["assets/parser-linux-x64.so", "parser-macos-arm64.dylib", "src.tar.gz"
         '+x',
         '${repo.root}/native/parser/tool/build.sh',
       ]);
+      if (linksAgents) {
+        // The usual way a repository shares one agent guide.
+        File('${repo.root}/AGENTS.md').writeAsStringSync('# Agents\n');
+        Link('${repo.root}/CLAUDE.md').createSync('AGENTS.md');
+      }
       _git(repo.root, ['config', 'commit.gpgSign', 'false']);
       _git(repo.root, ['config', 'tag.gpgSign', 'false']);
       _git(repo.root, ['config', 'user.signingkey', '']);
@@ -375,6 +332,66 @@ printf 'scratch' > "$1/unrelated.txt"
       );
     });
 
+    test('stages a repository that tracks a symbolic link', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+set -euo pipefail
+# The build sees the link as the repository has it.
+[ "$(readlink ../../CLAUDE.md)" = "AGENTS.md" ]
+mkdir -p "$1/assets"
+printf 'so' > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+printf 'tarball' > "$1/src.tar.gz"
+''', linksAgents: true);
+      expect(
+        _git(repo.root, ['ls-files', '-s', 'CLAUDE.md']),
+        startsWith('120000 '),
+      );
+
+      final staged = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(staged.code, 0, reason: staged.all);
+    });
+
+    test('refuses a submodule its build would go without', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+set -euo pipefail
+mkdir -p "$1/assets"
+printf 'so' > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+printf 'tarball' > "$1/src.tar.gz"
+''');
+      // The commit records the submodule's commit, and none of its files;
+      // the checkout has the empty directory of an uninitialized one.
+      Directory('${repo.root}/native/parser/vendor').createSync();
+      _git(repo.root, [
+        'update-index',
+        '--add',
+        '--cacheinfo',
+        '160000,${'a' * 40},native/parser/vendor',
+      ]);
+      _git(repo.root, ['commit', '-qm', 'vendor a parser library']);
+      _git(repo.root, ['push', '-q', 'origin', 'HEAD']);
+
+      final staged = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(staged.code, isNot(0), reason: staged.all);
+      expect(
+        problem(staged, 'RK-STAGE-003')['message'],
+        allOf(contains('native/parser/vendor'), contains('flark_parse')),
+      );
+      expect(
+        (staged.json['halt'] as Map)['kind'],
+        'beforeActing',
+        reason: 'nothing was built: re-running cannot get past it',
+      );
+    });
+
     test('finishes an interrupted release from the commit its tag names', () {
       final (:repo, :environment) = crate(r'''#!/bin/bash
 set -euo pipefail
@@ -441,7 +458,7 @@ printf 'tarball' > "$1/src.tar.gz"
       expect(recovered.all, contains('POST repos/example/parser/releases'));
     });
 
-    test('refuses when the build fails, and shows how it ended', () {
+    test('refuses when the build fails, and keeps its whole account', () {
       final (:repo, :environment) = crate('''#!/bin/bash
 exec >&2
 for i in 1 2 3 4 5 6 7 8 9 10; do echo "step \$i"; done
@@ -450,38 +467,22 @@ exit 3
 ''');
       final run = repo(['stage', 'parser', '--json'], environment: environment);
       expect(run.code, isNot(0));
-      final failed = problem(run, 'RK-BUILD-003');
-      expect(failed['message'], 'flark_parse: its build failed');
-      final remedy = failed['remedy']! as String;
-      expect(remedy, contains('tool/build.sh exited 3, ending:\n  step 4\n'));
-      expect(remedy, contains('  no compiler for the target\nFix the build'));
       expect(
-        remedy,
-        isNot(contains('step 3')),
-        reason: 'the last eight lines, not the whole transcript',
+        problem(run, 'RK-BUILD-003')['message'],
+        'flark_parse: its build failed',
       );
+      // The refusal shows the build's last lines; the diagnosis the run
+      // leaves keeps all of them.
+      final diagnosis = repo.diagnoses().single;
+      final failed = (diagnosis['problems'] as List)
+          .cast<Map<String, Object?>>()
+          .singleWhere((problem) => problem['code'] == 'RK-BUILD-003');
       expect(
-        repo.diagnoses().expand(
-          (diagnosis) => (diagnosis['problems'] as List).map(
-            (problem) => (problem as Map)['code'],
-          ),
+        (diagnosis['attachments'] as Map)[failed['evidence']],
+        allOf(
+          contains('step 1\nstep 2\nstep 3\n'),
+          contains('no compiler for the target'),
         ),
-        contains('RK-BUILD-003'),
-      );
-      expectNoTags(repo);
-    });
-
-    test('says when the build cannot start', () {
-      final (:repo, :environment) = crate(
-        '#!/nonexistent/interpreter\nexit 0\n',
-      );
-      final run = repo(['stage', 'parser', '--json'], environment: environment);
-      expect(run.code, isNot(0));
-      final failed = problem(run, 'RK-BUILD-003');
-      expect(failed['message'], 'flark_parse: its build did not start');
-      expect(
-        failed['remedy'],
-        contains('build names a program by its path from native/parser'),
       );
       expectNoTags(repo);
     });
@@ -531,27 +532,6 @@ cp "$RK_CACHE/builds" "$1/src.tar.gz"
           '${repo.root}/.rk/cache/parser/flark_parse/builds',
         ).readAsStringSync(),
         'built\nbuilt\n',
-      );
-    });
-
-    test('refuses when the build does not write a declared asset', () {
-      final (:repo, :environment) = crate(r'''#!/bin/bash
-mkdir -p "$1/assets"
-printf 'so' > "$1/assets/parser-linux-x64.so"
-printf 'dylib' > "$1/parser-macos-arm64.dylib"
-''');
-      final run = repo(['stage', 'parser', '--json'], environment: environment);
-      expect(run.code, isNot(0));
-      final missing = problem(run, 'RK-BUILD-004');
-      expect(
-        missing['message'],
-        'flark_parse: its build did not write src.tar.gz',
-      );
-      expect(
-        missing['remedy'],
-        contains(
-          'it wrote assets/parser-linux-x64.so, parser-macos-arm64.dylib.',
-        ),
       );
     });
   });

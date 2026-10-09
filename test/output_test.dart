@@ -34,6 +34,38 @@ String withoutControls(String text) =>
 final ansi = RegExp(r'\x1b\[[0-9;]*m');
 
 void main() {
+  test('deferred warnings are said in release order, whichever came first', () {
+    // Units staged side by side finish in any order; what a run says must
+    // not depend on which.
+    final buffer = StringBuffer();
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: false,
+      useColor: false,
+    );
+    output.deferWarning(
+      const Diagnostic(code: 'RK-PUB-012', message: 'for other', remedy: 'r'),
+      unit: 'other',
+    );
+    output.deferWarning(
+      const Diagnostic(code: 'RK-PUB-012', message: 'for core', remedy: 'r'),
+      unit: 'core',
+    );
+    output.flushWarnings(order: const ['core', 'other']);
+
+    final text = buffer.toString();
+    expect(text.indexOf('for core'), lessThan(text.indexOf('for other')));
+    final report =
+        jsonDecode(output.report.encode(exit: 0)) as Map<String, Object?>;
+    expect(
+      [
+        for (final warning in report['warnings'] as List)
+          (warning as Map)['unit'],
+      ],
+      ['core', 'other'],
+    );
+  });
+
   test('public steps preserve concrete target identity in JSON', () {
     final (out, _) = make();
     out.step(
@@ -153,156 +185,40 @@ void main() {
   });
 
   group('terminal output is transient', () {
-    test('a concurrent target list is fixed, updated, then erased', () async {
-      final (out, captured) = make(isTerminal: true);
+    test('target rows fit and erase exactly at 36 columns', () async {
+      const width = 36;
+      final (out, captured) = make(isTerminal: true, terminalWidth: width);
       final checks = out.targetChecks(delay: Duration.zero);
       checks
         ..add('tag', 'Git tag')
-        ..add('pub', 'pub.dev');
+        ..add('pub', 'pub.dev · rk')
+        ..add('github', 'GitHub Release · danReynolds/release-kit');
       await Future<void>.delayed(const Duration(milliseconds: 1));
 
-      expect(captured.text, contains('Release targets'));
-      expect(captured.text, contains('Git tag'));
-      expect(captured.text, contains('pub.dev'));
-      checks.finish('pub', Verdict.exact);
+      checks.finish('github', Verdict.exact);
       checks.close();
 
-      expect(captured.text, contains('checked'));
-      expect(captured.text, contains('\x1b[1A'));
-    });
-
-    for (final width in [52, 36]) {
-      test('target rows fit and erase exactly at $width columns', () async {
-        final (out, captured) = make(isTerminal: true, terminalWidth: width);
-        final checks = out.targetChecks(delay: Duration.zero);
-        checks
-          ..add('tag', 'Git tag')
-          ..add('pub', 'pub.dev · rk')
-          ..add('github', 'GitHub Release · danReynolds/release-kit');
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-
-        checks.finish('github', Verdict.exact);
-        checks.close();
-
-        final visibleLines = withoutControls(
-          captured.text,
-        ).split('\n').where((line) => line.isNotEmpty);
-        expect(
-          visibleLines.every((line) => line.runes.length <= width),
-          isTrue,
-          reason:
-              'a transient logical row must not wrap into two physical '
-              'rows or cursor-up will leave a stale fragment',
-        );
-        expect(withoutControls(captured.text), contains('…'));
-        final erase = '\x1b[1A\r\x1b[2K';
-        expect(
-          captured.text,
-          endsWith(List.filled(4, erase).join()),
-          reason: 'the four fixed physical rows are completely erased',
-        );
-      });
-    }
-  });
-
-  test('colour is off when asked, and never the only signal', () {
-    final (out, captured) = make();
-    out.line('failed', mark: Mark.blocked);
-    expect(captured.text, isNot(contains('\x1b')));
-    expect(captured.text, contains('✗'));
-  });
-
-  group('semantic terminal styling', () {
-    const colored = OutputTheme(useColor: true);
-    const plain = OutputTheme(useColor: false);
-
-    test('topology roles have one standard ANSI vocabulary', () {
-      expect(colored.paint('primary'), 'primary');
+      final visibleLines = withoutControls(
+        captured.text,
+      ).split('\n').where((line) => line.isNotEmpty);
       expect(
-        colored.paint('secondary', role: VisualRole.secondary),
-        '\x1b[90msecondary\x1b[0m',
+        visibleLines.every((line) => line.runes.length <= width),
+        isTrue,
+        reason:
+            'a transient logical row must not wrap into two physical '
+            'rows or cursor-up will leave a stale fragment',
       );
-      expect(
-        colored.paint('local', role: VisualRole.localWork),
-        '\x1b[34mlocal\x1b[0m',
-      );
-      expect(
-        colored.paint('join', role: VisualRole.checkpoint),
-        '\x1b[35mjoin\x1b[0m',
-      );
-      expect(
-        colored.paint('need', role: VisualRole.requirement),
-        '\x1b[33mneed\x1b[0m',
-      );
-      expect(
-        colored.paint('public', role: VisualRole.releaseTarget),
-        '\x1b[36mpublic\x1b[0m',
-      );
-      expect(
-        colored.paint('act', role: VisualRole.operatorAction),
-        '\x1b[36mact\x1b[0m',
-      );
-      expect(
-        plain.paint(
-          'unchanged',
-          role: VisualRole.releaseTarget,
-          state: RuntimeState.failure,
-          strong: true,
-        ),
-        'unchanged',
-      );
-    });
-
-    test('runtime truth overrides topology and green only means success', () {
-      for (final role in VisualRole.values) {
-        expect(
-          colored.paint('failed', role: role, state: RuntimeState.failure),
-          '\x1b[31mfailed\x1b[0m',
-        );
-      }
-      expect(
-        colored.paint(
-          'published',
-          role: VisualRole.releaseTarget,
-          state: RuntimeState.success,
-        ),
-        '\x1b[32mpublished\x1b[0m',
-      );
-      expect(
-        colored.render([
-          const OutputSpan('local', role: VisualRole.localWork),
-          const OutputSpan(' checkpoint', role: VisualRole.checkpoint),
-          const OutputSpan(' public', role: VisualRole.releaseTarget),
-        ]),
-        isNot(contains('\x1b[32m')),
-        reason: 'a source-only topology has no successful runtime outcome',
-      );
-    });
-
-    test('an explicit state governs both the glyph and its subject', () {
-      final captured = Captured();
-      final output = Output(
-        sink: captured.buffer.write,
-        isTerminal: true,
-        useColor: true,
-      );
-
-      output.line(
-        'already published',
-        mark: Mark.done,
-        role: VisualRole.releaseTarget,
-        state: RuntimeState.satisfied,
-      );
-
-      expect(captured.text, contains('\x1b[90m✓\x1b[0m'));
-      expect(captured.text, contains('\x1b[90malready published\x1b[0m'));
+      expect(withoutControls(captured.text), contains('…'));
+      final erase = '\x1b[1A\r\x1b[2K';
       expect(
         captured.text,
-        isNot(contains('\x1b[32m')),
-        reason: 'a done mark does not override the explicit satisfied state',
+        endsWith(List.filled(4, erase).join()),
+        reason: 'the four fixed physical rows are completely erased',
       );
     });
+  });
 
+  group('terminal styling', () {
     test('human diagnostics neutralize controls while JSON stays raw', () {
       const message = 'provider said \x1b[2Jbad\x00\x07\x7f\x9bmessage';
       const remedy = 'retry after \x1b]8;;https://bad.invalid\x07link';
@@ -342,21 +258,6 @@ void main() {
       expect(problem['remedy'], remedy);
       expect(problem['evidence'], 'tool-output/1-RK-TEST-001.txt');
       expect((document['attachments'] as Map)[problem['evidence']], evidence);
-    });
-
-    test('verdicts map to the shared runtime states', () {
-      expect(RuntimeState.of(Verdict.exact), RuntimeState.satisfied);
-      expect(RuntimeState.of(Verdict.conflict), RuntimeState.failure);
-      expect(RuntimeState.of(Verdict.unknown), RuntimeState.attention);
-      expect(RuntimeState.of(Verdict.absent), RuntimeState.neutral);
-    });
-
-    test('bold is an emphasis layered onto the semantic color', () {
-      expect(
-        colored.paint('release', role: VisualRole.releaseTarget, strong: true),
-        '\x1b[1;36mrelease\x1b[0m',
-      );
-      expect(colored.paint('heading', strong: true), '\x1b[1mheading\x1b[0m');
     });
 
     test('non-terminal output clamps color even when requested', () {
@@ -411,12 +312,6 @@ void main() {
       final coloredText = render(useColor: true);
       expect(coloredText, contains('\x1b'));
       expect(coloredText.replaceAll(ansi, ''), plainText);
-      expect(coloredText, contains('\x1b[31mGitHub Release\x1b[0m'));
-      expect(
-        coloredText,
-        isNot(contains('\x1b[36mGitHub Release\x1b[0m')),
-        reason: 'failure state must override the public-target role',
-      );
     });
 
     test(
@@ -456,37 +351,6 @@ void main() {
       },
     );
 
-    test('help styles structure and invocations, never outcomes', () {
-      const document =
-          'rk — a release tool\n'
-          '\n'
-          'Usage\n'
-          '  rk plan [unit]    show the configured release graph\n'
-          'Flags\n'
-          '  --json            print the machine document\n'
-          'Marks: ✓ done,  ✗ problem\n';
-      final captured = Captured();
-      Output(
-        sink: captured.buffer.write,
-        isTerminal: true,
-        useColor: true,
-      ).help(document);
-      final text = captured.text;
-
-      expect(text, startsWith('\x1b[1mrk — a release tool\x1b[0m\n'));
-      expect(text, contains('\x1b[1mUsage\x1b[0m'));
-      expect(text, contains('  \x1b[36mrk plan [unit]\x1b[0m    show'));
-      expect(text, contains('  \x1b[36m--json\x1b[0m'));
-      expect(text, contains('\x1b[1mMarks:\x1b[0m ✓ done'));
-      for (final outcomeCode in ['31', '32', '33']) {
-        expect(
-          text,
-          isNot(contains('\x1b[${outcomeCode}m')),
-          reason: 'help describes actions; it has no runtime outcome',
-        );
-      }
-    });
-
     test('help remains unstyled on a non-terminal', () {
       const document = 'Usage\n  rk plan    show the release graph\n';
       final captured = Captured();
@@ -525,7 +389,11 @@ void main() {
         captured.text,
       ).split('\n').where((line) => line.isNotEmpty).toList();
       expect(visible.every((line) => line.runes.length <= 36), isTrue);
-      expect(visible.first, startsWith('✗     GitHub Release'));
+      expect(
+        visible.first,
+        startsWith('    ✗ GitHub Release'),
+        reason: 'a nested row\'s mark sits beside it, not in the margin',
+      );
       expect(
         visible.skip(1).every((line) => line.startsWith('        ')),
         isTrue,

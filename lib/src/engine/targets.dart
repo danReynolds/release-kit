@@ -24,27 +24,6 @@ class TargetPlan {
     this.permanenceNotice,
   }) : artifacts = List<String>.unmodifiable(artifacts);
 
-  /// Preserve destination identity while orchestration replaces graph edges.
-  TargetPlan withStep(Step step) {
-    if (step.id != this.step.id || step.target != this.step.target) {
-      throw ArgumentError('a target step cannot change destination identity');
-    }
-    return TargetPlan(
-      label: label,
-      coordinate: coordinate,
-      targetVersion: targetVersion,
-      step: step,
-      kindLabel: kindLabel,
-      identity: identity,
-      planNote: planNote,
-      artifacts: artifacts,
-      project: project,
-      packageProducer: packageProducer,
-      uses: uses,
-      permanenceNotice: permanenceNotice,
-    );
-  }
-
   PublishTarget get target => step.target!;
 
   /// Stable report spelling derived from the concrete destination, not its
@@ -120,6 +99,7 @@ class TargetObservation {
   final bool currentKnown;
   final String? currentDetail;
   final List<Diagnostic> historyProblems;
+
   final List<ArtifactObservation> artifacts;
 
   /// The kind of destination, without the thing it points at.

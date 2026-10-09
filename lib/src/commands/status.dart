@@ -5,13 +5,13 @@ import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
-import '../engine/stage_recovery.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/targets.dart';
+import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
@@ -27,24 +27,18 @@ class StatusCommand {
     required this.resolution,
     required this.tree,
     required this.git,
-    GitState? repositoryGit,
-    this.sourceWarning,
     required this.inspector,
     required this.output,
     this.stageFor,
     HostCapabilities? capabilities,
-  }) : repositoryGit = repositoryGit ?? git,
-       capabilities = capabilities ?? HostCapabilities.inspect();
+  }) : capabilities = capabilities ?? HostCapabilities.inspect();
 
   final Resolution resolution;
   final SourceTree tree;
 
-  /// The source identity used for staging and comparison.
+  /// The repository: the commit a stage is built from, and what it says
+  /// about the worktree around it.
   final GitState git;
-
-  /// The surrounding repository, even when dirty bytes use an unbound stage.
-  final GitState repositoryGit;
-  final Diagnostic? sourceWarning;
   final Inspector inspector;
   final Output output;
   final HostCapabilities capabilities;
@@ -79,15 +73,19 @@ class StatusCommand {
   /// Read once for the text and JSON reports. Progress uses the same publication
   /// interpretation as the completed snapshot, including release blockers.
   Future<StatusSnapshot> collect({String? only, TargetChecks? checking}) async {
+    // Units are shown in the order a repository release takes them,
+    // dependencies first. A circle has no order, and refuses the release.
+    final ordering = Diagnostics();
+    final ordered = resolution.dependencyPlan.units(ordering);
     final units = only == null
-        ? resolution.units
-        : resolution.units.where((u) => u.name == only).toList();
+        ? ordered
+        : ordered.where((u) => u.name == only).toList();
     if (units.isEmpty) throw ArgumentError('No release unit named $only');
     final repositoryProblems = Diagnostics();
     _checkRepositoryState(repositoryProblems, units);
 
     // Every public read is started before rendering. Future.wait preserves
-    // this configured order even when providers answer in another one.
+    // this order even when providers answer in another one.
     final List<StatusUnitSnapshot> snapshots;
     try {
       snapshots = await Future.wait([
@@ -100,6 +98,9 @@ class StatusCommand {
 
     final workRemains = snapshots.any(_workRemains);
     final issues = <StatusIssue>[
+      for (final diagnostic in ordering.found)
+        if (diagnostic.code == 'RK-DEP-004')
+          StatusIssue(diagnostic: diagnostic),
       for (final snapshot in snapshots) ...snapshot.issues,
       if (workRemains)
         for (final diagnostic in repositoryProblems.found)
@@ -110,27 +111,26 @@ class StatusCommand {
     final unfinished = snapshots.where(_workRemains).toList();
     bool readyToRelease(StatusUnitSnapshot snapshot) =>
         _isLocalOnlyOutput(snapshot) ||
-        !git.isBound ||
-        snapshot.stage?.reusable == true;
-    if (uniqueIssues.isEmpty && unfinished.length == 1) {
-      final snapshot = unfinished.single;
-      nextCommand = readyToRelease(snapshot)
-          ? 'rk release ${snapshot.unit.name}'
-          : 'rk stage ${snapshot.unit.name}';
-    } else if (uniqueIssues.isEmpty && unfinished.length > 1) {
-      // A repository release takes every unit, in dependency order.
-      nextCommand = unfinished.every(readyToRelease)
-          ? 'rk release'
-          : 'rk stage';
+        snapshot.stage?.reusable == true ||
+        snapshot.observed.recoversWithoutStage;
+    if (uniqueIssues.isEmpty && unfinished.isNotEmpty) {
+      // A repository release takes every unit, in dependency order — and is
+      // the only one that takes a unit with the sibling it releases after:
+      // that unit alone would wait for the sibling to be on pub.dev. Staging
+      // it alone works, taking the sibling from this source.
+      final verb = unfinished.every(readyToRelease) ? 'release' : 'stage';
+      final repositoryWide =
+          unfinished.length > 1 ||
+          (verb == 'release' &&
+              unfinished.single.observed.releasesAfterSibling);
+      nextCommand = repositoryWide
+          ? 'rk $verb'
+          : 'rk $verb ${unfinished.single.unit.name}';
     }
     return StatusSnapshot(
       units: snapshots,
       issues: uniqueIssues,
-      warning: workRemains ? sourceWarning : null,
       nextCommand: nextCommand,
-      nextUnit: unfinished.length == 1 && nextCommand != null
-          ? unfinished.single.unit.name
-          : null,
     );
   }
 
@@ -139,18 +139,18 @@ class StatusCommand {
     final uniqueIssues = snapshot.issues;
     output.repository(
       name: tree.description.split('/').last,
-      branch: repositoryGit.branch,
-      commit: repositoryGit.hasCommit ? repositoryGit.shortHead : null,
-      uncommitted: repositoryGit.uncommitted.length,
+      branch: git.branch,
+      commit: git.hasCommit ? git.shortHead : null,
+      uncommitted: git.uncommitted.length,
       head: git.hasCommit ? git.head : null,
-      remote: repositoryGit.originUrl,
-      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
-      sourceComparison: git.isBound ? 'exact' : 'unavailable',
+      remote: git.originUrl,
+      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
+      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
     );
-    if (!git.isBound) {
+    if (!git.hasCommit) {
       output.line(
         'Source',
-        note: 'unbound · comparison unavailable',
+        note: 'no commit yet · commit to stage or release',
         depth: 1,
         labelWidth: 18,
         noteState: RuntimeState.attention,
@@ -161,11 +161,16 @@ class StatusCommand {
       _renderUnit(snapshot);
     }
 
-    if (snapshot.warning != null) {
-      output.blank();
-      output.heading('Warnings');
-      output.warning(snapshot.warning!, depth: 1);
+    for (final unit in snapshots) {
+      // What the stage found, such as Pub's validation warnings, is what
+      // `rk release` will list before it asks: said here first.
+      if (_workRemains(unit)) {
+        for (final (:target, :warning) in _stageWarnings(unit)) {
+          output.deferWarning(warning, unit: unit.unit.name, target: target);
+        }
+      }
     }
+    output.flushWarnings();
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
     if (uniqueIssues.isNotEmpty) {
@@ -184,14 +189,44 @@ class StatusCommand {
     }
   }
 
+  /// The warnings [unit]'s reusable stage recorded, each with the target
+  /// that found it.
+  List<({String? target, Diagnostic warning})> _stageWarnings(
+    StatusUnitSnapshot unit,
+  ) {
+    final stage = unit.stage;
+    if (stage == null || !stage.reusable) return const [];
+    final stages = {
+      for (final targetStage in inspector.targets.stages(
+        unit: unit.unit,
+        targets: unit.observed.targets,
+      ))
+        targetStage.contract.name: targetStage.target.step.id,
+    };
+    return [
+      for (final step in stage.receipt!.steps)
+        for (final warning in recordedTargetStageWarnings(step))
+          (target: stages[step.name], warning: warning),
+    ];
+  }
+
   Future<StatusUnitSnapshot> _gather(
     ResolvedUnit unit,
     TargetChecks? checking, {
     required String? group,
   }) async {
+    final observed = UnitSnapshot.start(
+      unit,
+      resolution: resolution,
+      inspector: inspector,
+      repository: git.originUrl,
+      hasCommit: git.hasCommit,
+      stageFor: stageFor ?? inspector.stageFor,
+    );
+    final stageResult = _stageResult(observed);
+    final checklist = observed.checklist;
     final diagnostics = Diagnostics();
-    final stageResult = await _inspectStage(unit);
-    final checklist = Checklist.derive(unit, resolution, diagnostics);
+    observed.checklistProblems.forEach(diagnostics.report);
 
     for (final project in unit.projects) {
       Changelog.check(
@@ -203,64 +238,44 @@ class StatusCommand {
       );
     }
 
-    final reader = inspector;
-    final expectations = inspector.targets.derive(
-      unit,
-      checklist,
-      repository: git.originUrl,
-    );
+    final expectations = observed.targets;
     final artifactProblems = _artifactProductionProblems(unit, expectations);
     for (final expectation in expectations) {
       checking?.add(expectation.step.id, expectation.label, group: group);
     }
 
-    // Calling every async operation before awaiting one is intentional: the
-    // targets are independent network reads, and a slow forge must not delay
-    // asking pub.dev (or vice versa).
-    final targetFutures = [
+    // Each row settles as its own reads answer, in whatever order they do;
+    // the report keeps the configured order.
+    var targets = await Future.wait([
       for (final expectation in expectations)
-        _observeAndFinish(
-          expectation,
-          unit,
-          stageResult.inspection,
-          artifactProblems,
-          checking,
-          reader,
-        ),
-    ];
+        () async {
+          final target = _publicationObservation(
+            _observeTarget(
+              expectation,
+              await observed.reads[expectation.step.id]!,
+              await observed.historyReads[expectation.step.id]!,
+              stageResult.inspection,
+              artifactProblems,
+            ),
+          );
+          checking?.finish(expectation.step.id, target.inspection.verdict);
+          return target;
+        }(),
+    ]);
+    await observed.settle();
+    final releasedSource = _releasedSourceMismatch(targets);
     final prerequisiteSteps = checklist.steps
         .where((step) => step.kind == StepKind.prerequisite)
         .toList();
-    final prerequisiteFutures = [
-      for (final step in prerequisiteSteps) _inspectSafely(step, unit, reader),
-    ];
-    var targets = await Future.wait(targetFutures);
-    final prerequisites = await Future.wait(prerequisiteFutures);
-    final releasedSource = _releasedSourceMismatch(targets);
 
     final states = <String, Inspection>{
+      ...observed.states,
       for (final target in targets)
         target.expectation.step.id: target.inspection,
-      for (final (index, step) in prerequisiteSteps.indexed)
-        step.id: prerequisites[index],
     };
 
-    for (final step in checklist.steps) {
-      if (states.containsKey(step.id)) continue;
-      states[step.id] = step.kind == StepKind.completeStage
-          ? stageResult.state
-          : step.phase == StepPhase.stage
-          ? stageResult.inspection?.reusable == true
-                ? const Inspection.exact(
-                    detail: 'validated in the release stage',
-                  )
-                : const Inspection.unknown('local work, decided when it runs')
-          // Public targets and prerequisites were populated above.
-          : const Inspection.unknown('the target was not inspected');
-    }
-
     final tagGuardProblems = [
-      for (final diagnostic in inspector.tagGuards(unit, checklist, states))
+      for (final diagnostic in observed.tagProblems)
         if (!(releasedSource != null && diagnostic.code == 'RK-GIT-005'))
           diagnostic,
     ];
@@ -268,20 +283,11 @@ class StatusCommand {
       diagnostics.report(diagnostic);
     }
 
-    // A version an earlier commit released is public from that commit's
-    // stage, not from one this commit could have lost.
-    final partialReleaseWithoutStage =
-        stageResult.inspection?.reusable != true &&
-        !targets.any((target) => target.inspection.releasedFrom != null) &&
-        hasRecoveryCriticalPublicProgress(unit, [
-          for (final target in targets)
-            (target.expectation.step, target.inspection),
-        ]) &&
-        targets.any(
-          (target) =>
-              target.inspection.isAbsent ||
-              target.inspection.verdict == Verdict.unknown,
-        );
+    // The same answer `rk release` gives: a partial release needs its exact
+    // stage unless what it has left can finish from public inputs.
+    final partialReleaseWithoutStage = observed.needsLostStage(
+      recovering: true,
+    );
     if (partialReleaseWithoutStage) {
       targets = [
         for (final target in targets)
@@ -357,14 +363,17 @@ class StatusCommand {
             !(target.inspection.verdict == Verdict.conflict &&
                 target.historyProblems.isNotEmpty))
           _targetIssue(unit, target),
+      // As in `rk release`: a lane whose history was read and cannot say
+      // its version is an issue; a lane that keeps no history is not.
       for (final target in targets)
         if (!target.currentKnown &&
+            observed.histories[target.expectation.step.id] != null &&
             target.inspection.verdict != Verdict.unknown &&
             target.inspection.verdict != Verdict.conflict)
           _currentVersionIssue(unit, target),
       for (final step in prerequisiteSteps)
         if (Inspector.blocks(step, states[step.id]!) &&
-            _releasedFirst(step, states[step.id]!) == null)
+            observed.releasedFirstBy(step) == null)
           _prerequisiteIssue(unit, step, states[step.id]!),
       if (stageResult.issue != null &&
           !partialReleaseWithoutStage &&
@@ -372,20 +381,7 @@ class StatusCommand {
               localOutputPending))
         stageResult.issue!,
       if (partialReleaseWithoutStage)
-        StatusIssue(
-          unit: unit.name,
-          diagnostic: Diagnostic(
-            code: 'RK-STAGE-005',
-            message: unit.shipsBinaries
-                ? '${unit.name}: the partial binary release needs its exact stage'
-                : '${unit.name}: the partial release needs its exact stage',
-            remedy:
-                'restore ${stageResult.path ?? '.rk/work/stages/<stage-id>'} '
-                'from the machine that staged this release. '
-                '${unit.shipsBinaries ? 'Signed or notarized bytes' : 'Recorded archive bytes'} '
-                'cannot be recreated byte-for-byte after a public target has bound them.',
-          ),
-        ),
+        StatusIssue(unit: unit.name, diagnostic: observed.lostStageProblem),
       if (artifactProblems.isNotEmpty &&
           !partialReleaseWithoutStage &&
           stageResult.inspection?.reusable != true &&
@@ -395,11 +391,9 @@ class StatusCommand {
     ];
 
     return StatusUnitSnapshot(
-      unit: unit,
-      checklist: checklist,
+      observed: observed,
       states: states,
       targets: targets,
-      stage: stageResult.inspection,
       stageState: stageResult.state,
       issues: issues,
       sourceVersionAlreadyReleased: releasedSource != null,
@@ -424,21 +418,6 @@ class StatusCommand {
       releasedCommit: mismatch.releasedCommit,
       currentCommit: mismatch.currentCommit,
     );
-  }
-
-  Future<TargetObservation> _observeAndFinish(
-    TargetPlan expectation,
-    ResolvedUnit unit,
-    StageInspection? stage,
-    Map<String, String> artifactProblems,
-    TargetChecks? checking,
-    Inspector reader,
-  ) async {
-    final observed = _publicationObservation(
-      await _observeTarget(expectation, unit, stage, artifactProblems, reader),
-    );
-    checking?.finish(expectation.step.id, observed.inspection.verdict);
-    return observed;
   }
 
   TargetObservation _publicationObservation(TargetObservation target) {
@@ -467,86 +446,65 @@ class StatusCommand {
     );
   }
 
-  Future<_StageResult> _inspectStage(ResolvedUnit unit) async {
-    final factory = stageFor ?? inspector.stageFor;
-    if (factory == null ||
-        !_isFullObjectId(git.head) ||
-        !_isFullObjectId(git.headTree)) {
-      return const _StageResult(state: Inspection.absent(detail: 'not staged'));
-    }
-    try {
-      final stage = factory(unit);
-      final inspected = stage.inspect();
-      final ordinaryAbsence =
-          inspected.receipt?.complete != true &&
-          inspected.issues.every(
-            (issue) =>
-                issue.kind == StageIssueKind.missingReceipt ||
-                issue.kind == StageIssueKind.incompleteReceipt,
-          );
-      final state = inspected.asInspection;
+  /// The stage as status shows it: what it is, and the issue it raises
+  /// when it is there and cannot be used.
+  _StageResult _stageResult(UnitSnapshot observed) {
+    final unit = observed.unit;
+    if (observed.stageReadProblem case final problem?) {
       return _StageResult(
-        inspection: inspected,
-        candidate: stage,
-        state: state,
-        path: stage.directory.path,
-        issue: ordinaryAbsence || inspected.issues.isEmpty
-            ? null
-            : StatusIssue(
-                unit: unit.name,
-                diagnostic: Diagnostic(
-                  code: 'RK-STAGE-002',
-                  message: inspected.incomplete
-                      ? 'the incomplete release stage cannot be resumed safely'
-                      : inspected.claimsCompletion
-                      ? 'the reviewed release stage no longer validates'
-                      : 'the release stage receipt is invalid',
-                  remedy: inspected.incomplete
-                      ? 're-run rk stage ${unit.name}. rk keeps '
-                            'validated completed lanes when it can and replaces '
-                            'only incomplete work'
-                      : 'rebuild it explicitly: '
-                            'rk stage ${unit.name}',
-                ),
-                evidence: {
-                  for (final issue in inspected.issues)
-                    issue.path ?? issue.kind.name: issue.message,
-                },
-              ),
-      );
-    } on Object catch (error) {
-      return _StageResult(
-        state: Inspection.unknown(
-          'the release stage could not be read: $error',
-        ),
+        state: observed.stageState,
         issue: StatusIssue(
           unit: unit.name,
-          diagnostic: Diagnostic(
-            code: 'RK-STAGE-002',
-            message: 'the release stage could not be inspected',
-            remedy:
-                'fix the recorded stage read error, then rebuild it with '
-                'rk stage ${unit.name}',
-            evidence: '$error',
-          ),
-          evidence: {'Cause': '$error'},
+          diagnostic: problem,
+          evidence: {'Cause': '${observed.stageError}'},
         ),
       );
     }
+    final inspected = observed.stageInspection;
+    if (inspected == null) return _StageResult(state: observed.stageState);
+    final ordinaryAbsence =
+        inspected.receipt?.complete != true &&
+        inspected.issues.every(
+          (issue) =>
+              issue.kind == StageIssueKind.missingReceipt ||
+              issue.kind == StageIssueKind.incompleteReceipt,
+        );
+    return _StageResult(
+      inspection: inspected,
+      state: observed.stageState,
+      issue: ordinaryAbsence || inspected.issues.isEmpty
+          ? null
+          : StatusIssue(
+              unit: unit.name,
+              diagnostic: Diagnostic(
+                code: 'RK-STAGE-002',
+                message: inspected.incomplete
+                    ? 'the incomplete release stage cannot be resumed safely'
+                    : inspected.claimsCompletion
+                    ? 'the reviewed release stage no longer validates'
+                    : 'the release stage receipt is invalid',
+                remedy: inspected.incomplete
+                    ? 're-run rk stage ${unit.name}. rk keeps '
+                          'validated completed lanes when it can and replaces '
+                          'only incomplete work'
+                    : 'rebuild it explicitly: '
+                          'rk stage ${unit.name}',
+              ),
+              evidence: {
+                for (final issue in inspected.issues)
+                  issue.path ?? issue.kind.name: issue.message,
+              },
+            ),
+    );
   }
 
-  Future<TargetObservation> _observeTarget(
+  TargetObservation _observeTarget(
     TargetPlan expectation,
-    ResolvedUnit unit,
+    Inspection inspection,
+    TargetHistory? history,
     StageInspection? stage,
     Map<String, String> artifactProblems,
-    Inspector reader,
-  ) async {
-    final inspectionFuture = _inspectSafely(expectation.step, unit, reader);
-    final historyFuture = _inspectHistorySafely(expectation, unit, reader);
-
-    final inspection = await inspectionFuture;
-    final history = await historyFuture;
+  ) {
     // A direct read of the candidate coordinate answers whether this release
     // exists. It does not answer whether a newer release exists. For registry,
     // tag, and forge lanes, only the provider's history/listing can answer the
@@ -583,34 +541,6 @@ class StatusCommand {
           _observeArtifact(expectation, name, stage, artifactProblems[name]),
       ],
     );
-  }
-
-  Future<Inspection> _inspectSafely(
-    Step step,
-    ResolvedUnit unit,
-    Inspector reader,
-  ) async {
-    try {
-      return await reader.inspect(step, unit);
-    } on Object catch (error) {
-      return Inspection.unknown('the target read failed: $error');
-    }
-  }
-
-  Future<TargetHistory?> _inspectHistorySafely(
-    TargetPlan target,
-    ResolvedUnit unit,
-    Inspector reader,
-  ) async {
-    try {
-      return await reader.inspectHistory(target, unit);
-    } on Object catch (error) {
-      return TargetHistory(
-        inspection: Inspection.unknown(
-          'the current version read failed: $error',
-        ),
-      );
-    }
   }
 
   ArtifactObservation _observeArtifact(
@@ -720,14 +650,14 @@ class StatusCommand {
       unit: unit,
       targets: targets,
     )) {
-      final blockedInputs = stage.contract.step.inputs
+      final blockedInputs = stage.contract.inputs
           .where(problems.containsKey)
           .toList();
       if (blockedInputs.isEmpty) continue;
       final reason = blockedInputs
           .map((input) => '$input: ${problems[input]}')
           .join('; ');
-      for (final output in stage.contract.step.outputs.keys) {
+      for (final output in stage.contract.outputs.keys) {
         problems[output] = 'cannot be produced until $reason';
       }
     }
@@ -806,23 +736,6 @@ class StatusCommand {
     },
   );
 
-  /// The project in this repository that publishes [step]'s package at the
-  /// version it needs, or null for a package released elsewhere.
-  ResolvedProject? _declaring(Step step) {
-    for (final project in resolution.allProjects) {
-      if (step.coordinate == 'pub.dev/${project.name}/${project.version}') {
-        return project;
-      }
-    }
-    return null;
-  }
-
-  /// The project this repository releases before [step]'s unit, when the
-  /// package [step] needs is not on pub.dev yet. A repository release
-  /// publishes it first, so this orders the release rather than blocking it.
-  ResolvedProject? _releasedFirst(Step step, Inspection state) =>
-      state.isAbsent ? _declaring(step) : null;
-
   StatusIssue _prerequisiteIssue(
     ResolvedUnit unit,
     Step step,
@@ -875,9 +788,8 @@ class StatusCommand {
     );
     final first = {
       for (final step in snapshot.checklist.steps)
-        if (step.kind == StepKind.prerequisite)
-          if (_releasedFirst(step, snapshot.states[step.id]!) case final p?)
-            '${p.unitName} ${p.version}',
+        if (snapshot.observed.releasedFirstBy(step) case final project?)
+          '${project.unitName} ${project.version}',
     };
     if (first.isNotEmpty) {
       output.blank();
@@ -1035,7 +947,7 @@ class StatusCommand {
           if (target.expectation.kind == 'pubDev')
             (
               target,
-              '${target.identity} source',
+              '${target.identity} package archive',
               staged ? ArtifactStatus.staged : ArtifactStatus.notStaged,
             )
           else if (target.artifacts.isNotEmpty)
@@ -1082,7 +994,11 @@ class StatusCommand {
       for (final platform in [...localProject.binaryPlatforms]..sort()) {
         final problem = localBlocked[platform];
         output.line(
-          ReleaseAssets.archivePath(localProject, platform),
+          ReleaseAssets.archiveName(
+            localProject.executable!,
+            localProject.version.canonical,
+            platform,
+          ),
           mark: staged
               ? Mark.satisfied
               : problem == null
@@ -1103,6 +1019,15 @@ class StatusCommand {
               : problem == null
               ? RuntimeState.neutral
               : RuntimeState.failure,
+        );
+      }
+      // Where they are, once they are: a directory this repository holds.
+      if (staged && snapshot.observed.stage != null) {
+        output.line(
+          'in ${snapshot.observed.stage!.directory.repositoryRelativePath}/'
+          '${ReleaseAssets.producerRoot(localProject)}/archives',
+          depth: 3,
+          role: VisualRole.secondary,
         );
       }
     }
@@ -1153,8 +1078,6 @@ class StatusCommand {
       currentVersion: target.currentVersion,
       detail: state.detail,
       uses: target.expectation.uses,
-      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
-      sourceComparison: git.isBound ? 'exact' : 'unavailable',
       artifacts: [
         for (final artifact in target.artifacts)
           {
@@ -1252,9 +1175,6 @@ class StatusCommand {
   static String _detailSuffix(String? detail) =>
       detail == null || detail.isEmpty ? '' : ': $detail';
 
-  static bool _isFullObjectId(String value) =>
-      RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$').hasMatch(value);
-
   static String _shortObjectId(String value) =>
       value.length > 7 ? value.substring(0, 7) : value;
 
@@ -1276,16 +1196,15 @@ class StatusCommand {
     );
   }
 
+  /// What stops staging here, shown once work remains: the source must be a
+  /// clean commit, and a tag needs that commit on origin.
   void _checkRepositoryState(
     Diagnostics problems,
     Iterable<ResolvedUnit> units,
   ) {
-    if (sourceWarning == null) {
-      final uncommitted = repositoryGit.uncommittedProblem();
-      if (uncommitted != null) problems.report(uncommitted);
-    }
+    if (git.stagingProblem() case final problem?) problems.report(problem);
     if (units.any((unit) => unit.publish.contains(PublishTarget.gitTag))) {
-      final unpushed = repositoryGit.unpushedProblem();
+      final unpushed = git.unpushedProblem();
       if (unpushed != null) problems.report(unpushed);
     }
   }
@@ -1306,25 +1225,19 @@ class StatusSnapshot {
   StatusSnapshot({
     required Iterable<StatusUnitSnapshot> units,
     required Iterable<StatusIssue> issues,
-    this.warning,
     this.nextCommand,
-    this.nextUnit,
   }) : units = List.unmodifiable(units),
        issues = List.unmodifiable(issues);
   final List<StatusUnitSnapshot> units;
   final List<StatusIssue> issues;
-  final Diagnostic? warning;
   final String? nextCommand;
-  final String? nextUnit;
 }
 
 class StatusUnitSnapshot {
   StatusUnitSnapshot({
-    required this.unit,
-    required this.checklist,
+    required this.observed,
     required Map<String, Inspection> states,
     required Iterable<TargetObservation> targets,
-    required this.stage,
     required this.stageState,
     required Iterable<StatusIssue> issues,
     required this.sourceVersionAlreadyReleased,
@@ -1332,11 +1245,13 @@ class StatusUnitSnapshot {
        targets = List<TargetObservation>.unmodifiable(targets),
        issues = List<StatusIssue>.unmodifiable(issues);
 
-  final ResolvedUnit unit;
-  final Checklist checklist;
+  /// What was read, shared with `rk release`.
+  final UnitSnapshot observed;
+  ResolvedUnit get unit => observed.unit;
+  Checklist get checklist => observed.checklist;
+  StageInspection? get stage => observed.stageInspection;
   final Map<String, Inspection> states;
   final List<TargetObservation> targets;
-  final StageInspection? stage;
   final Inspection stageState;
   final List<StatusIssue> issues;
   final bool sourceVersionAlreadyReleased;
@@ -1386,19 +1301,11 @@ bool _localBinaryWorkRemains({
 }
 
 class _StageResult {
-  const _StageResult({
-    required this.state,
-    this.inspection,
-    this.issue,
-    this.path,
-    this.candidate,
-  });
+  const _StageResult({required this.state, this.inspection, this.issue});
 
   final StageInspection? inspection;
   final Inspection state;
   final StatusIssue? issue;
-  final String? path;
-  final ReleaseStage? candidate;
 }
 
 class _CurrentVersion {

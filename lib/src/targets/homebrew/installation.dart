@@ -14,11 +14,11 @@ class HomebrewInstallationProvider
   HomebrewInstallationProvider(
     this.tools,
     this.brew, {
-    this.fetch = fetchInstallationMetadata,
+    this.fetch = fetchHttps,
     String? platform,
   }) : platform = platform ?? HostCapabilities.inspect().hostPlatform;
   final String platform;
-  final MetadataFetch fetch;
+  final HttpsFetch fetch;
   final Tools tools;
   final String? brew;
   @override
@@ -32,6 +32,18 @@ class HomebrewInstallationProvider
     'HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK': '1',
   };
 
+  /// `brew --prefix`, asked once: it does not change during a run.
+  Future<String>? _prefix;
+  Future<String> _brewPrefix() => _prefix ??= () async {
+    final prefix = (await checked(tools, brew!, [
+      '--prefix',
+    ], environment: _environment)).stdout.trim();
+    if (!prefix.startsWith('/')) {
+      throw const InstallationFailure('Homebrew returned a relative prefix.');
+    }
+    return prefix;
+  }();
+
   @override
   Future<SourceInspection> inspect(ExecutableProject project) async {
     if (brew == null) {
@@ -39,90 +51,53 @@ class HomebrewInstallationProvider
         problem: 'Install Homebrew to use this source.',
       );
     }
-    // Read the small installed-name inventory before asking for one formula's
-    // metadata. `info --installed` evaluates every formula and cask on the host.
-    // The exact tap-qualified match also avoids querying an uninstalled tap.
-    final identity = project.formula;
-    final inventory = await checked(tools, brew!, [
-      'list',
-      '--formula',
-      '--full-name',
-      '-1',
-    ], environment: _environment);
-    if (!inventory.stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .contains(identity)) {
+    // Homebrew points opt/<name> at the installed keg, even with --skip-link,
+    // and moves it on upgrade, so launchers go through it. The keg's receipt
+    // names the tap that installed it: what `brew list --full-name` reads,
+    // without starting Homebrew's Ruby for each of `list` and `info` (about a
+    // second on every rk use).
+    final prefix = await _brewPrefix();
+    final name = project.formula.split('/').last;
+    final tap = project.formula.substring(0, project.formula.lastIndexOf('/'));
+    final opt = '$prefix/opt/$name';
+    if (FileSystemEntity.typeSync(opt, followLinks: false) ==
+        FileSystemEntityType.notFound) {
       return const SourceInspection();
     }
-    final result = await checked(tools, brew!, [
-      'info',
-      '--json=v2',
-      '--formula',
-      identity,
-    ], environment: _environment);
-    final formulae = (jsonDecode(result.stdout) as Map)['formulae'] as List;
-    final matches = formulae
-        .cast<Map>()
-        .where((f) => f['full_name'] == project.formula)
-        .toList();
-    if (matches.isEmpty) return const SourceInspection();
-    final formula = matches.single;
-    final installed = (formula['installed'] as List).cast<Map>();
-    if (installed.isEmpty) return const SourceInspection();
-    final linked = formula['linked_keg'];
-    final selected =
-        installed.where((i) => i['version'] == linked).firstOrNull ??
-        (installed.length == 1 ? installed.single : null);
-    if (selected == null) {
-      return const SourceInspection(
+    final receipt = File('$opt/INSTALL_RECEIPT.json');
+    if (!receipt.existsSync()) {
+      return SourceInspection(
         problem:
-            'Multiple unlinked Homebrew versions exist. Select one with brew link first.',
+            'The Homebrew installation is incomplete. Repair it with brew reinstall ${project.formula}.',
       );
     }
-    final version = selected['version'] as String;
-    if (!safeCommandName(version)) {
-      return const SourceInspection(
-        problem: 'Homebrew returned an unsupported version directory.',
-      );
+    final installedFrom =
+        ((jsonDecode(receipt.readAsStringSync()) as Map)['source']
+            as Map?)?['tap'];
+    if (installedFrom is! String || installedFrom.toLowerCase() != tap) {
+      // A formula of the same name from another tap is not this project.
+      return const SourceInspection();
     }
-    // The JSON already resolved the formula's canonical rack name. Asking
-    // `--cellar <formula>` would boot Homebrew's resolver a second time.
-    final rack = formula['name'];
-    if (rack is! String || !safeCommandName(rack)) {
-      return const SourceInspection(
-        problem: 'Homebrew returned an unsupported formula directory.',
-      );
-    }
-    final cellar = (await checked(tools, brew!, [
-      '--cellar',
-    ], environment: _environment)).stdout.trim();
-    if (!cellar.startsWith('/')) {
-      throw const InstallationFailure('Homebrew returned a relative cellar.');
-    }
-    final prefix = '$cellar/$rack/$version';
-    final globalPrefix = (await checked(tools, brew!, [
-      '--prefix',
-    ], environment: _environment)).stdout.trim();
     for (final command in project.commands) {
-      if (!File('$prefix/bin/$command').existsSync()) {
+      if (!File('$opt/bin/$command').existsSync()) {
         return SourceInspection(
           problem:
               'Homebrew is missing $command. Repair it with brew reinstall ${project.formula}.',
         );
       }
     }
+    final keg = Directory(opt).resolveSymbolicLinksSync();
     return SourceInspection(
       installation: Installation(
         source: source,
-        version: version,
-        location: prefix,
+        version: keg.split('/').last,
+        location: keg,
         exportedPaths: [
-          for (final command in project.commands) '$globalPrefix/bin/$command',
+          for (final command in project.commands) '$prefix/bin/$command',
         ],
         commands: {
           for (final command in project.commands)
-            command: LaunchCommand('$prefix/bin/$command'),
+            command: LaunchCommand('$opt/bin/$command'),
         },
       ),
     );
@@ -133,10 +108,6 @@ class HomebrewInstallationProvider
     ExecutableProject project, {
     InstallationCheck? check,
   }) async {
-    Future<List<int>> metadata(Uri uri, int max) =>
-        fetch == fetchInstallationMetadata
-        ? fetchInstallationMetadata(uri, max, check: check)
-        : fetch(uri, max);
     if (brew == null) {
       throw const InstallationFailure('Install Homebrew to use this source.');
     }
@@ -145,12 +116,13 @@ class HomebrewInstallationProvider
     final json =
         jsonDecode(
               utf8.decode(
-                await metadata(
+                await fetch(
                   Uri.https(
                     'api.github.com',
                     '/repos/$tap/contents/Formula/$token.rb',
                   ),
                   1024 * 1024,
+                  check: check,
                 ),
               ),
             )
@@ -189,7 +161,6 @@ class HomebrewInstallationProvider
     AvailableInstallation release,
     void Function(String) progress,
   ) async {
-    release.validate(project, source);
     if (release is! _BrewRelease || brew == null) {
       throw const InstallationFailure('Invalid Homebrew release.');
     }
@@ -223,17 +194,7 @@ class HomebrewInstallationProvider
     }
     progress('Installing ${project.name} ${release.version} with Homebrew…');
     final installed = (await inspect(project)).installation;
-    await checked(tools, brew!, [
-      installed == null ? 'install' : 'upgrade',
-      '--formula',
-      if (installed == null) '--skip-link',
-      project.formula,
-    ], environment: _environment);
-    final state = await inspect(project);
-    return state.installation ??
-        (throw InstallationFailure(
-          state.problem ?? 'Homebrew did not install the release.',
-        ));
+    return _brew(project, upgrade: installed != null);
   }
 
   @override
@@ -242,17 +203,22 @@ class HomebrewInstallationProvider
     void Function(String) progress,
   ) async {
     progress('Installing ${project.formula}…');
+    return _brew(project, upgrade: false);
+  }
+
+  /// Installs without linking into Homebrew's bin, or upgrades only this
+  /// formula; the launcher runs it through `opt/<name>`.
+  Future<Installation> _brew(
+    ExecutableProject project, {
+    required bool upgrade,
+  }) async {
     await checked(tools, brew!, [
-      'install',
+      upgrade ? 'upgrade' : 'install',
       '--formula',
-      '--skip-link',
+      if (!upgrade) '--skip-link',
       project.formula,
     ], environment: _environment);
-    final state = await inspect(project);
-    return state.installation ??
-        (throw InstallationFailure(
-          state.problem ?? 'Homebrew did not install ${project.formula}.',
-        ));
+    return inspectedAfterInstall(this, project);
   }
 
   @override

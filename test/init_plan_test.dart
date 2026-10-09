@@ -14,11 +14,7 @@ InitPlan discover(
 }) {
   final host =
       capabilities ??
-      HostCapabilities(
-        hostPlatform: 'macos-arm64',
-        containerRuntime: 'docker',
-        hasNativeAssets: false,
-      );
+      HostCapabilities(hostPlatform: 'macos-arm64', containerRuntime: 'docker');
   return InitPlan.discover(
     tree: MemorySourceTree(files),
     gitBound: gitBound,
@@ -98,7 +94,6 @@ executables:
       capabilities: HostCapabilities(
         hostPlatform: 'linux-x64',
         containerRuntime: null,
-        hasNativeAssets: false,
       ),
     );
 
@@ -127,7 +122,6 @@ executables:
       capabilities: HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
-        hasNativeAssets: false,
       ),
     );
 
@@ -141,29 +135,6 @@ executables:
       ),
     );
     expect(plan.binaryPlatformNotices, isEmpty);
-  });
-
-  test('native assets keep init on the host platform', () {
-    var plan = discover(
-      {
-        'pubspec.yaml': '''
-name: tool
-version: 1.2.3
-executables:
-  tool: tool
-''',
-      },
-      capabilities: HostCapabilities(
-        hostPlatform: 'linux-x64',
-        containerRuntime: 'docker',
-        hasNativeAssets: true,
-      ),
-    );
-
-    plan = plan.toggle(0, ReleaseChoice.binary).plan;
-
-    expect(plan.renderToml(), contains('binary_platforms = ["linux-x64"]'));
-    expect(plan.binaryPlatformNotices, hasLength(2));
   });
 
   test('GitHub Release does not imply a binary', () {
@@ -349,7 +320,6 @@ publish_to: https://token@packages.example.invalid
         HostCapabilities(
           hostPlatform: 'macos-arm64',
           containerRuntime: 'docker',
-          hasNativeAssets: false,
         ).resolve,
       ),
       ambientPubHostedUrl: 'https://token@packages.example.invalid',

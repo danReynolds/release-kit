@@ -8,12 +8,13 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
+import 'scripted_tools.dart';
+
 void main() {
   group('capability is discovered, not declared', () {
     final onAppleSilicon = HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: 'docker',
-      hasNativeAssets: false,
     );
 
     test('the host platform is native', () {
@@ -39,7 +40,6 @@ void main() {
       final noRuntime = HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
-        hasNativeAssets: false,
       );
       final resolved = noRuntime.resolve('linux-x64');
       expect(resolved.capability, Capability.buildableUnproven);
@@ -56,7 +56,6 @@ void main() {
       final noRuntime = HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
-        hasNativeAssets: false,
       );
       final resolved = noRuntime.resolve('macos-arm64');
       expect(
@@ -67,17 +66,6 @@ void main() {
             'catches the commonest failure — a stale artifact reporting '
             'the wrong version',
       );
-    });
-
-    test('native assets block cross-compilation, naming why', () {
-      final withNative = HostCapabilities(
-        hostPlatform: 'macos-arm64',
-        containerRuntime: 'docker',
-        hasNativeAssets: true,
-      );
-      final resolved = withNative.resolve('linux-x64');
-      expect(resolved.capability, Capability.blocked);
-      expect(resolved.reason, contains('C toolchain'));
     });
 
     test('an x64 macOS binary needs an x64 macOS host', () {
@@ -96,20 +84,16 @@ void main() {
               stdout: '',
               stderr: 'timed out',
             ),
-            'podman info': ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'not running',
-            ),
+            'podman info': failed('not running'),
           },
         );
 
-        final detected = await HostCapabilities.detect(
+        final detected = HostCapabilities.detect(
           tools: tools,
           runtimeProbeTimeout: const Duration(milliseconds: 125),
         );
 
-        expect(detected.containerRuntime, isNull);
+        expect(await detected.containerRuntime(), isNull);
         expect(tools.calls, ['docker info', 'podman info']);
         expect(tools.timeouts, everyElement(const Duration(milliseconds: 125)));
       },
@@ -118,20 +102,63 @@ void main() {
     test(
       'detection returns the optional runtime that actually answered',
       () async {
-        final detected = await HostCapabilities.detect(
+        final detected = HostCapabilities.detect(
           tools: RecordingTools(
             results: {
-              'docker info': ToolResult(
-                exitCode: 1,
-                stdout: '',
-                stderr: 'not running',
-              ),
-              'podman info': ToolResult(exitCode: 0, stdout: 'ok', stderr: ''),
+              'docker info': failed('not running'),
+              'podman info': ok('ok'),
             },
           ),
         );
 
-        expect(detected.containerRuntime, 'podman');
+        expect(await detected.containerRuntime(), 'podman');
+      },
+    );
+
+    test(
+      'a container runtime is asked for only when a smoke test needs one',
+      () async {
+        final tools = RecordingTools(
+          answers: (key) => key.contains('--version') ? ok('2.0.0') : null,
+        );
+        final host = HostCapabilities.detect(tools: tools);
+        final out = Directory.systemTemp.createTempSync('rk-lazy-probe-');
+        addTearDown(() => out.deleteSync(recursive: true));
+        Future<BuildOutcome> build(String platform) =>
+            DartCliBuilder(tools: tools, capabilities: host).build(
+              platform: platform,
+              entryPoint: 'bin/tool.dart',
+              output: '${out.path}/$platform/tool',
+              workingDirectory: '/repo',
+              expectedVersion: '2.0.0',
+            );
+
+        expect(host.resolve('linux-x64').canProduce, isTrue);
+        expect(tools.calls, isEmpty, reason: 'a reused stage builds nothing');
+
+        expect((await build(host.hostPlatform)).ok, isTrue);
+        expect(
+          tools.calls.where((call) => call.contains(' info')),
+          isEmpty,
+          reason: 'the host runs its own binary without a container',
+        );
+
+        final other = host.hostPlatform == 'linux-x64'
+            ? 'linux-arm64'
+            : 'linux-x64';
+        expect((await build(other)).ok, isTrue);
+        expect(
+          tools.calls.where((call) => call == 'docker info'),
+          hasLength(1),
+        );
+        expect(tools.calls.last, startsWith('docker run'));
+
+        await build(other);
+        expect(
+          tools.calls.where((call) => call == 'docker info'),
+          hasLength(1),
+          reason: 'one answer serves the whole run',
+        );
       },
     );
   });
@@ -174,6 +201,27 @@ void main() {
         isNull,
       );
     });
+
+    // Letter-leading team ids print bare (leaf[subject.OU] = Q6L2SF6YDW),
+    // digit-leading ones quoted (= "2DC432GLL2"). The leading quoted
+    // identifier is a decoy: only anchoring on subject.OU finds the team.
+    test('the team is read from a bare or a quoted OU', () {
+      expect(
+        BinaryChain.teamOf(
+          'designated => identifier "TOOL" and certificate '
+          'leaf[subject.OU] = Q6L2SF6YDW',
+        ),
+        'Q6L2SF6YDW',
+      );
+      expect(
+        BinaryChain.teamOf(
+          'designated => identifier rk and certificate '
+          'leaf[subject.OU] = "2DC432GLL2"',
+        ),
+        '2DC432GLL2',
+      );
+      expect(BinaryChain.teamOf('designated => identifier "TOOL"'), isNull);
+    });
   });
 
   group('builds', () {
@@ -183,24 +231,23 @@ void main() {
     final capabilities = HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: 'docker',
-      hasNativeAssets: false,
     );
 
     test('a native build passes the target flags nowhere', () async {
+      // A bundle carries the runtime and licence of the SDK that compiled
+      // it.
+      final sdk = Directory('${buildRoot.path}/sdk/bin')
+        ..createSync(recursive: true);
+      File('${sdk.path}/dartaotruntime').writeAsStringSync('RUNTIME');
+      File('${sdk.parent.path}/LICENSE').writeAsStringSync('LICENSE');
       final tools = _TimeoutRecordingTools(
-        results: {
-          '${buildRoot.path}/keybay --version': ToolResult(
-            exitCode: 0,
-            stdout: 'keybay 0.2.0\n',
-            stderr: '',
-          ),
-        },
+        results: {'${buildRoot.path}/keybay --version': ok('keybay 0.2.0\n')},
       );
       final outcome =
           await DartCliBuilder(
             tools: tools,
             capabilities: capabilities,
-            compilerExecutable: '/sdk/bin/dart',
+            compilerExecutable: '${sdk.path}/dart',
           ).build(
             platform: 'macos-arm64',
             entryPoint: 'bin/keybay.dart',
@@ -212,7 +259,11 @@ void main() {
       expect(outcome.ok, isTrue, reason: outcome.problem);
       expect(
         tools.calls.first,
-        startsWith('/sdk/bin/dart compile aot-snapshot'),
+        startsWith('${sdk.path}/dart compile aot-snapshot'),
+      );
+      expect(
+        File('${buildRoot.path}/lib/keybay/dartaotruntime').readAsStringSync(),
+        'RUNTIME',
       );
       expect(tools.calls.first, isNot(contains('--target-os')));
       expect(tools.timeouts.last, const Duration(minutes: 2));
@@ -224,10 +275,8 @@ void main() {
         final tools = _TimeoutRecordingTools(
           results: {
             'docker run --rm --platform linux/amd64 -v ${buildRoot.path}:/w:ro '
-                'debian:bookworm-slim /w/keybay --version': ToolResult(
-              exitCode: 0,
-              stdout: 'keybay 0.2.0\n',
-              stderr: '',
+                'debian:bookworm-slim /w/keybay --version': ok(
+              'keybay 0.2.0\n',
             ),
           },
         );
@@ -253,13 +302,7 @@ void main() {
 
     test('a binary reporting the wrong version is not accepted', () async {
       final tools = RecordingTools(
-        results: {
-          '${buildRoot.path}/keybay --version': ToolResult(
-            exitCode: 0,
-            stdout: 'keybay 0.1.0\n',
-            stderr: '',
-          ),
-        },
+        results: {'${buildRoot.path}/keybay --version': ok('keybay 0.1.0\n')},
       );
       final outcome =
           await DartCliBuilder(tools: tools, capabilities: capabilities).build(
@@ -273,21 +316,6 @@ void main() {
       expect(outcome.ok, isFalse);
       expect(outcome.problem, contains('0.1.0'));
     });
-
-    test(
-      'a platform this host cannot produce never reaches the builder',
-      () async {
-        // The guard lives at the caller, which refuses with RK-HOST-001 and a
-        // reason. The builder used to re-check and return a `blocked` outcome
-        // nothing read — two guards for one decision, the inner one
-        // unreachable.
-        expect(capabilities.resolve('macos-x64').canProduce, isFalse);
-        expect(
-          capabilities.resolve('macos-x64').reason,
-          contains('needs a macos-x64 host'),
-        );
-      },
-    );
   });
 
   group('archives are byte-reproducible', () {
@@ -361,9 +389,7 @@ void main() {
     // then failed the build on a command it does not have — a check that
     // passes where the act fails.
     final tools = RecordingTools(
-      answers: (key) => key.contains('--version')
-          ? ToolResult(exitCode: 0, stdout: '2.0.0', stderr: '')
-          : null,
+      answers: (key) => key.contains('--version') ? ok('2.0.0') : null,
     );
     final outcome =
         await DartCliBuilder(
@@ -371,7 +397,6 @@ void main() {
           capabilities: HostCapabilities(
             hostPlatform: 'macos-arm64',
             containerRuntime: 'podman',
-            hasNativeAssets: false,
           ),
         ).build(
           platform: 'linux-x64',
@@ -400,7 +425,6 @@ void main() {
             capabilities: HostCapabilities(
               hostPlatform: 'macos-arm64',
               containerRuntime: null,
-              hasNativeAssets: false,
             ),
           ).build(
             platform: 'linux-x64',

@@ -9,11 +9,11 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/timings.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/discovery.dart';
 import 'package:rk/src/installations/local.dart';
 import 'package:rk/src/installations/provider.dart';
-import 'package:rk/src/installations/recovery.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/shell_routing.dart';
@@ -22,9 +22,7 @@ import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
 import 'package:rk/src/targets/homebrew/installation.dart';
 import 'package:rk/src/targets/pub_dev/installation.dart';
-import 'package:rk/src/tui/installation_picker.dart';
 import 'package:rk/src/tui/use_picker.dart';
-import 'package:rk/src/version.dart';
 
 const installationUsage = '''
 rk use [source] [-p project]       install if needed, then select
@@ -88,6 +86,7 @@ Future<void> installationMain(List<String> args, String command) async {
   } finally {
     output.close();
   }
+  Timings.report(stderr);
   exitCode = code;
   if (json) stdout.write(output.report.encode(exit: code));
 }
@@ -160,7 +159,7 @@ Future<int> _run(
       Diagnostic(
         code: 'RK-CLI-005',
         message: usageError,
-        remedy: installationUsage,
+        remedy: 'rk help $command',
       ),
     );
     return ExitCodes.usage;
@@ -279,7 +278,8 @@ Future<int> _run(
       ),
     },
   );
-  final action = InstallationAction.values.byName(command);
+  final commandAction = InstallationAction.values.byName(command);
+  final action = commandAction;
   final outcomes = <String>[];
   Future<List<ProjectInstallations>> refresh() async {
     final states = [
@@ -294,38 +294,19 @@ Future<int> _run(
     return states;
   }
 
-  String? recoveryPath;
-  Future<void> preserveSelf(
-    ExecutableProject project,
-    void Function(String) progress,
-  ) async {
-    if (project.name == 'rk' && project.commands.contains('rk')) {
-      recoveryPath ??= await preserveManager(store, tools, progress);
-    }
-  }
-
-  String withRecovery(String message) => [
-    message,
-    if (recoveryPath != null)
-      'Reopen this manager from an rk project:\n${shellQuote(recoveryPath!)} use',
-  ].join('\n');
-
   Future<String> downloadLatest(
     ExecutableProject project,
     AvailableInstallation release,
     void Function(String) progress,
     InstallationCancellation cancellation,
   ) async {
-    await preserveSelf(project, progress);
     cancellation.check();
     output.report.acted = true;
-    final message = withRecovery(
-      await manager.download(
-        project,
-        release,
-        progress: progress,
-        cancellation: cancellation,
-      ),
+    final message = await manager.download(
+      project,
+      release,
+      progress: progress,
+      cancellation: cancellation,
     );
     outcomes.add(message);
     return message;
@@ -335,11 +316,10 @@ Future<int> _run(
     ExecutableProject project,
     InstallationSource source,
     void Function(String) progress,
-    InstallationCancellation cancellation,
-  ) async {
-    if (action != InstallationAction.install) {
-      await preserveSelf(project, progress);
-    }
+    InstallationCancellation cancellation, [
+    InstallationAction? override,
+  ]) async {
+    final action = override ?? commandAction;
     cancellation.check();
     output.report.acted = true;
     final result = await manager.act(
@@ -352,12 +332,7 @@ Future<int> _run(
     final routing = action == InstallationAction.use
         ? await ShellRouting(store, tools, environment).ensure(project)
         : null;
-    final message = [
-      result,
-      if (routing != null) routing,
-      if (recoveryPath != null)
-        'Reopen this manager from an rk project:\n${shellQuote(recoveryPath!)} use',
-    ].join('\n');
+    final message = [result, if (routing != null) routing].join('\n');
     outcomes.add(message);
     return message;
   }
@@ -379,17 +354,14 @@ Future<int> _run(
     void Function(String) progress,
     InstallationCancellation cancellation,
   ) async {
-    await preserveSelf(project, progress);
     cancellation.check();
     output.report.acted = true;
-    final message = withRecovery(
-      await manager.act(
-        project,
-        source,
-        InstallationAction.uninstall,
-        progress: progress,
-        cancellation: cancellation,
-      ),
+    final message = await manager.act(
+      project,
+      source,
+      InstallationAction.uninstall,
+      progress: progress,
+      cancellation: cancellation,
     );
     outcomes.add(message);
     return message;
@@ -402,25 +374,22 @@ Future<int> _run(
       environment['TERM'] != 'dumb';
   final states = await refresh();
   if (source == null && !list && interactive) {
-    final result = action == InstallationAction.use
-        ? await runUsePicker(
-            states: states,
-            refresh: refresh,
-            use: operate,
-            uninstall: remove,
-            sessionNote: projects.any((p) => p.name == 'rk')
-                ? 'Running manager: rk $rkVersion'
-                : null,
-            checkAvailable: (project, source, check) =>
-                manager.latest(project, source, check: check),
-            downloadAvailable: downloadLatest,
-          )
-        : await runInstallationPicker(
-            action: action,
-            states: states,
-            refresh: refresh,
-            operate: operate,
-          );
+    final result = await runUsePicker(
+      states: states,
+      refresh: refresh,
+      use: (project, source, progress, cancellation) => operate(
+        project,
+        source,
+        progress,
+        cancellation,
+        InstallationAction.use,
+      ),
+      uninstall: remove,
+      command: 'rk $command',
+      checkAvailable: (project, source, check) =>
+          manager.latest(project, source, check: check),
+      downloadAvailable: downloadLatest,
+    );
     // The picker refreshes after operations. Dismissing it is not another
     // inspection: a Homebrew subprocess here delayed even an idle Ctrl+C.
     for (final message in outcomes) {

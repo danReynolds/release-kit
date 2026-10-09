@@ -1,25 +1,32 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../engine/atomic_file.dart';
 import '../engine/tools.dart';
-import '../transforms/digest.dart';
 import 'model.dart';
 import 'provider.dart';
 
-/// Owned launchers and one atomic selection pointer per executable project.
-/// Provider packages and the user's checkout remain outside this routing layer.
+/// A launcher rk wrote, read back: the project it names, the source it runs
+/// and where that source is installed. [project] is null for a launcher an
+/// older rk wrote, which named the project by a hash of its origin.
+typedef Launcher = ({
+  String? project,
+  InstallationSource source,
+  String location,
+});
+
+/// The launchers rk writes into one directory on PATH. Each launcher names its
+/// project and source in a header, so the selection is read back from the
+/// launchers themselves; provider packages and checkouts stay where they are.
 class InstallationStore {
   InstallationStore(String root, this.tools)
     : root = Directory(root).absolute.path;
   final String root;
   final Tools tools;
   String get bin => '$root/bin';
-  String id(ExecutableProject project) => Sha256.hex(
-    utf8.encode('${project.repository ?? project.root}\u0000${project.name}'),
-  );
-  String projectRoot(ExecutableProject project) =>
-      '$root/projects/${id(project)}';
+
+  /// Where [project]'s GitHub downloads live, one directory per version.
+  String downloads(ExecutableProject project) =>
+      '$root/downloads/${project.name}';
 
   static String defaultRoot(Map<String, String> environment) {
     final data = environment['XDG_DATA_HOME'];
@@ -34,10 +41,8 @@ class InstallationStore {
   }
 
   RandomAccessFile lock() {
-    _directory(root);
-    final path = '$root/install.lock';
-    _regularOrAbsent(path);
-    final lock = File(path).openSync(mode: FileMode.append);
+    Directory(root).createSync(recursive: true);
+    final lock = File('$root/install.lock').openSync(mode: FileMode.append);
     try {
       lock.lockSync(FileLock.exclusive);
     } on FileSystemException {
@@ -50,55 +55,96 @@ class InstallationStore {
     return lock;
   }
 
-  Installation? selected(ExecutableProject project) {
-    final path = '${projectRoot(project)}/current';
-    _parents(path);
-    final type = FileSystemEntity.typeSync(path, followLinks: false);
-    if (type == FileSystemEntityType.notFound) return null;
-    if (type != FileSystemEntityType.link) {
-      throw const InstallationFailure(
-        'The selection pointer is not an rk link.',
-      );
-    }
-    final target = Link(path).targetSync();
-    if (!RegExp(r'^generations/[a-z0-9-]+$').hasMatch(target)) {
-      throw const InstallationFailure(
-        'The selection pointer leaves its project.',
-      );
-    }
-    return _read('${projectRoot(project)}/$target/installation.json');
+  /// `# rk-managed:<project>:<source>`, naming the project by its package.
+  /// Older launchers name it by a [_hash] of its origin: rk 0.1.14's carry no
+  /// source, and later development builds' do.
+  static final _header = RegExp(
+    r'^# rk-managed:([^:\s]+)(?::(\w+))?$',
+    multiLine: true,
+  );
+  static final _location = RegExp(r'^# rk-location:(.+)$', multiLine: true);
+  static final _hash = RegExp(r'^[0-9a-f]{64}$');
+
+  /// The launcher rk wrote for [command], or null when there is none or it
+  /// cannot be read.
+  Launcher? launcher(String command) {
+    final file = File('$bin/$command');
+    if (!file.existsSync()) return null;
+    final text = file.readAsStringSync();
+    final header = _header.firstMatch(text);
+    if (header == null) return null;
+    final owner = header[1]!;
+    final legacy = _hash.hasMatch(owner);
+    if (header[2] == null) return legacy ? _legacy(owner) : null;
+    final source = InstallationSource.named(header[2]!);
+    final location = _location.firstMatch(text)?[1];
+    if (source == null || location == null) return null;
+    return (project: legacy ? null : owner, source: source, location: location);
   }
 
-  Installation? recorded(ExecutableProject project, InstallationSource source) {
-    final installation = _read('${projectRoot(project)}/${source.name}.json');
-    if (installation != null && installation.source != source) {
-      throw const InstallationFailure(
-        'An installation receipt names a different source.',
-      );
-    }
-    return installation;
-  }
-
-  Installation? _read(String path) {
-    _regularOrAbsent(path);
-    if (!File(path).existsSync()) return null;
+  /// What a launcher rk 0.1.14 wrote runs: it forwards to its project's
+  /// current generation, whose installation.json records the source.
+  Launcher? _legacy(String hash) {
+    final record = File('$root/projects/$hash/current/installation.json');
+    if (!record.existsSync()) return null;
     try {
-      return Installation.fromJson(
-        jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>,
-      );
-    } on Object {
-      throw InstallationFailure(
-        'Installation receipt could not be read: $path',
-        'Keep this file for diagnosis; rk has not changed the selection.',
-      );
+      if (jsonDecode(record.readAsStringSync()) case {
+        'source': final String name,
+        'location': final String location,
+      }) {
+        if (InstallationSource.named(name) case final source?) {
+          return (project: null, source: source, location: location);
+        }
+      }
+    } on FormatException {
+      // Not a record 0.1.14 wrote; its launcher runs nothing rk can name.
+    }
+    return null;
+  }
+
+  /// What [project]'s commands run: each command whose launcher rk wrote for
+  /// this project, or before launchers named their project.
+  Map<String, Launcher> launchers(ExecutableProject project) => {
+    for (final command in project.commands)
+      if (launcher(command) case final launcher?
+          when (launcher.project ?? project.name) == project.name)
+        command: launcher,
+  };
+
+  /// The selected source and its location, read from the project's first
+  /// launcher.
+  Launcher? selected(ExecutableProject project) =>
+      launchers(project).values.firstOrNull;
+
+  /// A launcher rk wrote for this project may be replaced, and so may one
+  /// that names no project. A command rk did not write, or selected for
+  /// another project, is not this project's.
+  void checkOwnership(ExecutableProject project) {
+    for (final command in project.commands) {
+      final file = File('$bin/$command');
+      if (!file.existsSync()) continue;
+      final owner = _header.firstMatch(file.readAsStringSync())?[1];
+      if (owner == null) {
+        throw InstallationFailure(
+          '$command is already owned by another installation.',
+          'rk will not replace ${file.path}. Resolve the command collision first.',
+        );
+      }
+      if (owner != project.name && !_hash.hasMatch(owner)) {
+        throw InstallationFailure(
+          '$command is selected for $owner.',
+          'rk will not replace ${file.path} for ${project.name}. Resolve the command collision first.',
+        );
+      }
     }
   }
 
-  /// Prepare launchers separately; a later failure cannot damage current/bin.
-  Future<String> record(
+  /// Write every command's launcher; each replaces its predecessor atomically.
+  Future<void> activate(
     ExecutableProject project,
-    Installation installation,
-  ) async {
+    Installation installation, {
+    void Function()? beforeCommit,
+  }) async {
     if (!installation.commands.keys.toSet().containsAll(project.commands) ||
         installation.commands.length != project.commands.length) {
       throw InstallationFailure(
@@ -106,293 +152,102 @@ class InstallationStore {
         'Use a version whose complete executable set matches this project.',
       );
     }
-    final directory = projectRoot(project);
-    _directory('$root/projects');
-    _directory(directory);
-    _directory('$directory/generations');
-    final generation =
-        '${installation.source.name}-$pid-${DateTime.now().microsecondsSinceEpoch}';
-    final target = '$directory/generations/$generation';
-    _directory(target);
-    _directory('$target/bin');
-    try {
-      for (final entry in installation.commands.entries) {
-        if (!safeCommandName(entry.key)) {
-          throw const InstallationFailure('Invalid exported command name.');
-        }
-        final command = entry.value;
-        if ((command.workingDirectory != null &&
-                !command.workingDirectory!.startsWith('/')) ||
-            !command.executable.startsWith('/') ||
-            command.environment.keys.any(
-              (name) => !RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$').hasMatch(name),
-            )) {
-          throw const InstallationFailure(
-            'A provider returned an invalid launcher.',
-          );
-        }
-        final script = StringBuffer('#!/bin/sh\n');
-        for (final file in [command.executable, ...command.requiredFiles]) {
-          script.writeln('if [ ! -f ${shellQuote(file)} ]; then');
-          script.writeln(
-            '  printf "%s\\n" ${shellQuote('rk: ${project.name} ${installation.source.label} is no longer available. Run rk use in its checkout to repair the selection.')} >&2',
-          );
-          script.writeln('  exit 127\nfi');
-        }
-        final bootstrap = command.workingDirectory;
-        if (bootstrap != null) {
-          script.writeln('rk_caller_directory="\$PWD"');
-          script.writeln('cd -- ${shellQuote(bootstrap)} || exit 127');
-        }
-        script.writeln(
-          'exec ${[if (command.environment.isNotEmpty) '/usr/bin/env', for (final entry in command.environment.entries) '${entry.key}=${entry.value}', command.executable, ...command.arguments].map(shellQuote).join(' ')} ${bootstrap == null ? '' : '"\$rk_caller_directory" '}"\$@"',
-        );
-        final path = '$target/bin/${entry.key}';
-        File(path).writeAsStringSync(script.toString(), flush: true);
-        await checked(tools, '/bin/chmod', ['700', path]);
-      }
-      File(
-        '$target/installation.json',
-      ).writeAsStringSync(jsonEncode(installation.toJson()), flush: true);
-      _regularOrAbsent('$directory/${installation.source.name}.json');
-      AtomicFile.write(
-        '$directory/${installation.source.name}.json',
-        utf8.encode(jsonEncode(installation.toJson())),
-      );
-      return 'generations/$generation';
-    } on Object {
-      Directory(target).deleteSync(recursive: true);
-      rethrow;
-    }
-  }
-
-  /// Retain the manager outside all selectable installations. Runtime-backed
-  /// releases keep the VM and snapshot together, independently of the provider.
-  Future<String> retainManager(String executable, {String? program}) async {
-    final runtimeName = executable.split(Platform.pathSeparator).last;
-    if (program != null &&
-        !{'dart', 'dartvm', 'dartaotruntime'}.contains(runtimeName)) {
-      throw const InstallationFailure(
-        'Unrecognized Dart runtime for recovery.',
-      );
-    }
-    final vm = File('${File(executable).parent.path}/dartvm');
-    final files = <String, List<int>>{
-      program == null ? 'rk' : runtimeName: File(executable).readAsBytesSync(),
-      if (program != null) 'app.aot': File(program).readAsBytesSync(),
-      if (program != null && runtimeName == 'dart' && vm.existsSync())
-        'dartvm': vm.readAsBytesSync(),
-    };
-    final digest = Sha256.hex(
-      utf8.encode(
-        files.entries
-            .map((entry) => '${entry.key}:${Sha256.hex(entry.value)}')
-            .join('\n'),
-      ),
-    );
-    final lockFile = lock();
-    try {
-      final directory = '$root/managers/$digest';
-      _directory('$root/managers');
-      _directory(directory);
-      if (program != null) {
-        files['rk'] = utf8.encode(
-          '#!/bin/sh\nexec ${shellQuote('$directory/$runtimeName')} ${shellQuote('$directory/app.aot')} "\$@"\n',
-        );
-      }
-      for (final entry in files.entries) {
-        final path = '$directory/${entry.key}';
-        _regularOrAbsent(path);
-        if (!File(path).existsSync() ||
-            Sha256.hex(File(path).readAsBytesSync()) !=
-                Sha256.hex(entry.value)) {
-          AtomicFile.write(path, entry.value);
-        }
-        await checked(tools, '/bin/chmod', ['700', path]);
-      }
-      return '$directory/rk';
-    } finally {
-      lockFile.unlockSync();
-      lockFile.closeSync();
-    }
-  }
-
-  void checkOwnership(ExecutableProject project) {
-    for (final command in project.commands) {
-      final path = '$bin/$command';
-      _regularOrAbsent(path);
-      final expected = _shim(project, command);
-      if (File(path).existsSync() &&
-          (File(path).lengthSync() != utf8.encode(expected).length ||
-              utf8.decode(File(path).readAsBytesSync(), allowMalformed: true) !=
-                  expected)) {
-        throw InstallationFailure(
-          '$command is already owned by another installation.',
-          'rk will not replace $path. Resolve the command collision first.',
-        );
-      }
-    }
-  }
-
-  Future<void> activate(
-    ExecutableProject project,
-    String generation, {
-    void Function()? beforeCommit,
-  }) async {
-    if (!RegExp(r'^generations/[a-z0-9-]+$').hasMatch(generation) ||
-        _read('${projectRoot(project)}/$generation/installation.json') ==
-            null) {
-      throw const InstallationFailure('Invalid prepared installation.');
-    }
     checkOwnership(project);
-    _directory(bin);
-    final created = <File>[];
-    final pointer = '${projectRoot(project)}/current';
-    final temporary = Link('$pointer.next');
-    if (FileSystemEntity.typeSync(temporary.path, followLinks: false) !=
-        FileSystemEntityType.notFound) {
-      throw const InstallationFailure(
-        'A previous selection update left a temporary pointer.',
-      );
-    }
-    try {
-      for (final command in project.commands) {
-        final file = File('$bin/$command');
-        if (!file.existsSync()) {
-          file.createSync(exclusive: true);
-          created.add(file);
-          file.writeAsStringSync(_shim(project, command), flush: true);
-          await checked(tools, '/bin/chmod', ['700', file.path]);
-        }
-      }
-      // Validate an existing pointer before atomically replacing it.
-      selected(project);
-      beforeCommit?.call();
-      temporary.createSync(generation);
-      temporary.renameSync(pointer);
-    } on Object {
-      for (final file in created) {
-        if (file.existsSync()) file.deleteSync();
-      }
-      rethrow;
-    } finally {
-      if (FileSystemEntity.typeSync(temporary.path, followLinks: false) ==
-          FileSystemEntityType.link) {
-        temporary.deleteSync();
+    Directory(bin).createSync(recursive: true);
+    final scripts = {
+      for (final entry in installation.commands.entries)
+        entry.key: _launcher(project, installation, entry.value),
+    };
+    beforeCommit?.call();
+    for (final entry in scripts.entries) {
+      // Made executable beside the launcher, then renamed over it: a command
+      // started meanwhile runs the old launcher or the new one, never neither.
+      final temporary = File('$bin/.${entry.key}.$pid.tmp');
+      try {
+        temporary.writeAsStringSync(entry.value, flush: true);
+        await checked(tools, '/bin/chmod', ['700', temporary.path]);
+        temporary.renameSync('$bin/${entry.key}');
+      } finally {
+        if (temporary.existsSync()) temporary.deleteSync();
       }
     }
   }
 
-  String _shim(ExecutableProject project, String command) =>
-      '''#!/bin/sh
-# rk-managed:${id(project)}
-if [ ! -x ${shellQuote('${projectRoot(project)}/current/bin/$command')} ]; then
-  printf '%s\\n' ${shellQuote('rk: $command has no usable selection. Run rk use from its configured repository.')} >&2
-  exit 127
-fi
-exec ${shellQuote('${projectRoot(project)}/current/bin/$command')} "\$@"
-''';
-
-  void forget(ExecutableProject project, InstallationSource source) {
-    if (selected(project)?.source == source) {
-      throw InstallationFailure(
-        '${source.label} is selected for ${project.name}.',
-        'Choose another source with rk use first.',
+  String _launcher(
+    ExecutableProject project,
+    Installation installation,
+    LaunchCommand command,
+  ) {
+    final script = StringBuffer('#!/bin/sh\n')
+      ..writeln('# rk-managed:${project.name}:${installation.source.name}')
+      ..writeln('# rk-location:${installation.location}');
+    for (final file in [command.executable, ...command.requiredFiles]) {
+      script.writeln('if [ ! -f ${shellQuote(file)} ]; then');
+      script.writeln(
+        '  printf "%s\\n" ${shellQuote('rk: ${project.name} ${installation.source.label} is no longer available. Run rk use in its checkout to repair the selection.')} >&2',
       );
+      script.writeln('  exit 127\nfi');
     }
-    final directory = projectRoot(project);
-    final receipt = File('$directory/${source.name}.json');
-    _regularOrAbsent(receipt.path);
-    if (receipt.existsSync()) receipt.deleteSync();
-    final generations = Directory('$directory/generations');
-    if (!generations.existsSync()) return;
-    for (final entry in generations.listSync(followLinks: false)) {
-      if (entry is! Directory ||
-          !RegExp(
-            r'^[a-z]+-[0-9]+-[0-9]+$',
-          ).hasMatch(entry.uri.pathSegments.where((s) => s.isNotEmpty).last)) {
-        continue;
-      }
-      final installation = _read('${entry.path}/installation.json');
-      if (installation?.source == source) entry.deleteSync(recursive: true);
+    final bootstrap = command.workingDirectory;
+    if (bootstrap != null) {
+      script.writeln('rk_caller_directory="\$PWD"');
+      script.writeln('cd -- ${shellQuote(bootstrap)} || exit 127');
     }
+    script.writeln(
+      'exec ${[if (command.environment.isNotEmpty) '/usr/bin/env', for (final entry in command.environment.entries) '${entry.key}=${entry.value}', command.executable, ...command.arguments].map(shellQuote).join(' ')} ${bootstrap == null ? '' : '"\$rk_caller_directory" '}"\$@"',
+    );
+    return '$script';
   }
 
   List<String> routingProblems(
     ExecutableProject project,
     Map<String, String> environment,
   ) {
-    if (selected(project) == null) return const [];
+    final launchers = this.launchers(project);
+    final selected = launchers.values.firstOrNull;
     return [
       for (final command in project.commands)
-        if (findExecutable(command, environment) != '$bin/$command')
+        if (launcher(command)?.project case final owner?
+            when owner != project.name)
+          '$command is selected for $owner, not ${project.name}.'
+        else if (selected != null &&
+            launchers[command]?.source != selected.source)
+          '$command is not switched to ${selected.source.label}; run rk use ${selected.source.name} again.'
+        else if (selected != null && !routes(command, environment))
           '$command resolves to ${findExecutable(command, environment) ?? 'nothing'}; put $bin first in PATH.',
     ];
   }
 
-  /// Validate every owned parent, including reads, before touching state.
-  /// Ancestors of the configured store (for example /tmp) may be symlinks.
-  void _parents(String path) {
-    if (path != root && !path.startsWith('$root/')) {
-      throw const InstallationFailure(
-        'Installation path leaves the managed store.',
-      );
-    }
-    final suffix = path == root ? '' : path.substring(root.length + 1);
-    if (suffix.split('/').any((part) => part == '..' || part == '.')) {
-      throw const InstallationFailure('Invalid installation path.');
-    }
-    var current = root;
-    final parents = suffix.split('/');
-    for (var i = 0; i < parents.length; i++) {
-      final type = FileSystemEntity.typeSync(current, followLinks: false);
-      if (type != FileSystemEntityType.notFound &&
-          type != FileSystemEntityType.directory) {
-        throw InstallationFailure(
-          'Installation parent is not a real directory: $current',
-        );
+  /// Whether [command] on [environment]'s PATH is its launcher, however PATH
+  /// spells the directory: with a trailing slash, or through a link.
+  bool routes(String command, Map<String, String> environment) {
+    final found = findExecutable(command, environment);
+    return found != null && sameFile(found, '$bin/$command');
+  }
+
+  /// Once [kept] is installed and routed, removes what it replaced: rk's own
+  /// earlier downloads, and any an interrupted run left half unpacked. The
+  /// download the current launchers run is never removed.
+  void retire(ExecutableProject project, Installation kept) {
+    if (!kept.managed) return;
+    final parent = Directory(kept.location).parent;
+    if (parent.path != downloads(project)) return;
+    final inUse = selected(project)?.location;
+    for (final entry in parent.listSync(followLinks: false)) {
+      if (entry.path != kept.location && entry.path != inUse) {
+        entry.deleteSync(recursive: true);
       }
-      current = '$current/${parents[i]}';
     }
   }
+}
 
-  String managedDirectory(ExecutableProject project, String name) {
-    if (!safeCommandName(name)) {
-      throw const InstallationFailure('Invalid installation directory name.');
-    }
-    final directory = '${projectRoot(project)}/$name';
-    _directory(root);
-    _directory(directory);
-    return directory;
-  }
-
-  void validateManagedDirectory(String path) {
-    _parents('$path/entry');
-  }
-
-  void _directory(String path) {
-    _parents(path);
-    final type = FileSystemEntity.typeSync(path, followLinks: false);
-    if (type == FileSystemEntityType.notFound) {
-      Directory(path).createSync(recursive: true);
-      return;
-    }
-    if (type != FileSystemEntityType.directory) {
-      throw InstallationFailure(
-        'Installation directory is not a real directory: $path',
-      );
-    }
-  }
-
-  void _regularOrAbsent(String path) {
-    _parents(path);
-    final type = FileSystemEntity.typeSync(path, followLinks: false);
-    if (type != FileSystemEntityType.notFound &&
-        type != FileSystemEntityType.file) {
-      throw InstallationFailure(
-        'Refusing to replace an unowned filesystem entry: $path',
-      );
-    }
+/// Whether [a] and [b] are one file, once links and spelling are resolved.
+bool sameFile(String a, String b) {
+  try {
+    return File(a).resolveSymbolicLinksSync() ==
+        File(b).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    return false;
   }
 }
 

@@ -65,7 +65,10 @@ class Inspector {
     tools: tools,
     repository: repository,
     stageFor: stageFor,
+    shared: _shared,
   );
+
+  final _shared = <String, Future<Object?>>{};
 
   /// Whether this step's state lives somewhere rk can read without acting.
   ///
@@ -155,24 +158,16 @@ class Inspector {
     }
   }
 
-  static ({String name, String version})? _prerequisiteCoordinate(Step step) {
-    // The coordinate is carried by the step so nothing here has to know how an
-    // id is spelled: `pub.dev/<package>/<version>`.
-    final parts = step.coordinate?.split('/');
-    if (parts == null || parts.length < 3) return null;
-    return (name: parts[parts.length - 2], version: parts.last);
-  }
-
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Step step) async {
     if (registry == null) {
       return const Inspection.unknown('the registry reader is not configured');
     }
-    final coordinate = _prerequisiteCoordinate(step);
-    if (coordinate == null) {
+    final requires = step.requires;
+    if (requires == null) {
       return const Inspection.unknown('the prerequisite could not be read');
     }
-    final (:name, :version) = coordinate;
+    final (package: name, :version) = requires;
 
     final RegistryPackage? package;
     try {
@@ -193,50 +188,37 @@ class Inspector {
         : Inspection.absent(detail: '$name $version is not published yet');
   }
 
-  /// The release-only monotonicity gate against every configured public lane.
+  /// [target]'s public history; a read that throws is unknown, never absent.
   ///
-  /// Exact-coordinate inspection answers whether this version exists. It
-  /// cannot answer whether a newer version exists elsewhere in the same lane:
-  /// a shallow checkout can truthfully find `v1.0.0` absent while origin is
-  /// already at `v2.0.0`. Release calls this once, in the snapshot it takes
-  /// before staging.
-  ///
-  /// Targets decide whether their latest-version read is a meaningful guard.
-  /// Homebrew, for example, authenticates its public formula bytes during its
-  /// exact inspection and therefore declines a second, weaker version read.
-  Future<ReleaseHistoryCheck> releaseMonotonicity(
+  /// Exact-coordinate inspection answers whether this version exists, not
+  /// whether a newer one exists in the same lane: a shallow checkout can
+  /// find `v1.0.0` absent while origin is at `v2.0.0`. Targets decide whether
+  /// their latest-version read is a meaningful guard; Homebrew, whose exact
+  /// inspection reads the formula's version, declines this one.
+  Future<TargetHistory?> readHistory(
+    TargetPlan target,
     ResolvedUnit unit,
-    Iterable<TargetPlan> targets,
-    Diagnostics problems,
   ) async {
-    final candidates = <TargetPlan>[];
-    final seen = <String>{};
-    for (final target in targets) {
-      final key = '${target.kind}\u0000${target.coordinate}';
-      if (seen.add(key)) candidates.add(target);
+    try {
+      return await inspectHistory(target, unit);
+    } on Object catch (error) {
+      return TargetHistory(
+        inspection: Inspection.unknown(
+          'the latest public version could not be read: $error',
+        ),
+      );
     }
+  }
 
-    // Start every independent provider read before awaiting one. A slow
-    // forge must not postpone asking origin or pub.dev.
-    final reads = [
-      for (final target in candidates)
-        () async {
-          try {
-            return await inspectHistory(target, unit);
-          } on Object catch (error) {
-            return TargetHistory(
-              inspection: Inspection.unknown(
-                'the latest public version could not be read: $error',
-              ),
-            );
-          }
-        }(),
-    ];
-    final latest = await Future.wait(reads);
-
+  /// What a release learns from its lanes' histories: the names it claims
+  /// for the first time, and in [problems], every history that refuses it —
+  /// a version regression, or a history that could not be read.
+  static ReleaseHistoryCheck historyFindings(
+    Iterable<(TargetPlan, TargetHistory?)> histories,
+    Diagnostics problems,
+  ) {
     final claims = <TargetClaim>[];
-    for (final (index, target) in candidates.indexed) {
-      final history = latest[index];
+    for (final (target, history) in histories) {
       if (history == null) continue;
       claims.addAll(history.claims);
       history.problems.forEach(problems.report);
@@ -265,7 +247,6 @@ class Inspector {
               'restore a readable version listing for ${target.label} '
               'and re-run',
         );
-        continue;
       }
     }
     return ReleaseHistoryCheck(claims: claims);

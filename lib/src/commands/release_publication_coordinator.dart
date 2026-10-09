@@ -18,7 +18,6 @@ import 'release_progress.dart';
 
 enum ReleaseAction {
   notAttempted('not_attempted', 'not attempted'),
-  attempted('attempted', 'attempted; result unknown'),
   alreadyPublished('already_published', 'already published'),
   completed('completed', 'completed'),
   failed('failed', 'failed');
@@ -102,104 +101,12 @@ final class ReleasePublicationCoordinator {
   /// The native sessions already acquired this run, by provider.
   final Set<String> _sessions = {};
 
-  /// Gives eventually-consistent providers a bounded chance to become usable
-  /// through their consumer-facing path after exact publication read-back.
-  ///
-  /// This cannot change release success: every check runs only after the
-  /// public coordinate is already proven exact, and a pending result warns the
-  /// operator not to repeat the irreversible act.
-  Future<void> verifyAvailability({
-    required ResolvedUnit unit,
-    required List<TargetPlan> targets,
-  }) async {
-    if (targets.isEmpty) return;
-    final progress = output.progressBoard(
-      '${unit.name} ${unit.version} · checking availability',
-    );
-    final rows = {
-      for (final target in targets)
-        target.step.id: progress.addRow(
-          id: '${target.step.id}/availability',
-          label: target.kindLabel,
-          coordinate: target.identity,
-        ),
-    };
-    final warnings = await Future.wait([
-      for (final target in targets)
-        _verifyTargetAvailability(
-          unit: unit,
-          target: target,
-          row: rows[target.step.id]!,
-        ),
-    ]);
-    progress.discard();
-    final pending = warnings.nonNulls.toList();
-    if (pending.isEmpty) return;
-    output.blank();
-    output.heading('Availability warnings');
-    for (final warning in pending) {
-      output.warning(
-        warning.diagnostic,
-        unit: unit.name,
-        target: warning.target.step.id,
-        depth: 1,
-      );
-    }
-  }
-
-  Future<_AvailabilityWarning?> _verifyTargetAvailability({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-    required ProgressRowController row,
-  }) async {
-    final module = inspector.targets.moduleForTarget(target);
-    final context = TargetAvailabilityContext(tools: tools);
-    var waited = Duration.zero;
-    while (true) {
-      row.handle.begin(CommonProgressActivities.verifying);
-      final TargetAvailabilityOutcome? outcome;
-      try {
-        outcome = await module.checkAvailability(context, unit, target);
-      } on Object catch (error) {
-        final diagnostic = Diagnostic(
-          code: 'RK-REL-004',
-          message:
-              '${target.label}: consumer availability could not be '
-              'checked',
-          remedy:
-              'publication already reconciled exactly; restore the '
-              'consumer check and verify without repeating publication',
-          evidence: '$error',
-        );
-        row.fail(note: 'availability check failed');
-        return _AvailabilityWarning(target, diagnostic);
-      }
-      switch (outcome) {
-        case null:
-          row.notAttempted(note: 'no delayed availability check');
-          return null;
-        case TargetAvailable(:final note):
-          row.complete(note: note);
-          return null;
-        case TargetAvailabilityPending(:final diagnostic):
-          if (waited >= confirmDeadline) {
-            row.fail(note: 'still propagating');
-            return _AvailabilityWarning(target, diagnostic);
-          }
-      }
-      await wait(confirmInterval);
-      waited += confirmInterval;
-    }
-  }
-
   /// Proves every unfinished target can publish from this host, before any
   /// private work is spent on it.
   Future<bool> checkReadiness({
     required ResolvedUnit unit,
     required List<TargetPlan> targets,
     required Map<String, Inspection> states,
-    required Map<String, ReleaseAction> actions,
-    required bool stageOnly,
   }) async {
     final outstanding = targets
         .where((target) => !states[target.step.id]!.isExact)
@@ -236,7 +143,6 @@ final class ReleasePublicationCoordinator {
           ..settle();
         output.problem(diagnostic, unit: unit);
         output.halt(HaltKind.beforeActing);
-        if (!stageOnly) showActions(targets, actions);
         return false;
       }
       final note = (readiness as TargetReady).note;
@@ -260,7 +166,7 @@ final class ReleasePublicationCoordinator {
         ReleaseAction.completed => Mark.done,
         ReleaseAction.alreadyPublished => Mark.satisfied,
         ReleaseAction.failed => Mark.blocked,
-        ReleaseAction.notAttempted || ReleaseAction.attempted => Mark.none,
+        ReleaseAction.notAttempted => Mark.none,
       };
       output.line(
         target.label,
@@ -270,7 +176,6 @@ final class ReleasePublicationCoordinator {
         role: VisualRole.releaseTarget,
         state: switch (action) {
           ReleaseAction.notAttempted => RuntimeState.neutral,
-          ReleaseAction.attempted => RuntimeState.attention,
           ReleaseAction.alreadyPublished => RuntimeState.satisfied,
           ReleaseAction.completed => RuntimeState.success,
           ReleaseAction.failed => RuntimeState.failure,
@@ -279,39 +184,16 @@ final class ReleasePublicationCoordinator {
     }
   }
 
+  /// Stops before anything acts on [step], whose snapshot read refuses it.
   void haltForState(
     ResolvedUnit unit,
     Step step,
     Inspection state, {
     TargetPlan? target,
-    bool afterAct = false,
   }) {
-    // Targets own their recovery advice. The observed bytes remain in the
-    // step's JSON evidence, rather than taking the place of an action.
-    final diagnostic =
-        state.verdict == Verdict.conflict && target != null && !afterAct
-        ? inspector.targets
-              .moduleForTarget(target)
-              .diagnoseConflict(unit, target, state)
-        : Diagnostic(
-            code: afterAct ? 'RK-REL-003' : 'RK-REL-001',
-            message: '${step.summary}: ${state.detail ?? state.verdict.name}',
-            remedy: state.evidence.isEmpty
-                ? (state.verdict == Verdict.unknown
-                      ? 'the target could not be proven; fix the read and re-run'
-                      : null)
-                : state.evidence.entries
-                      .map((entry) => '${entry.key}: ${entry.value}')
-                      .join('\n'),
-          );
-    output.problem(diagnostic, unit: unit.name);
-    output.halt(
-      state.verdict == Verdict.conflict
-          ? (afterAct ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
-          : afterAct
-          ? HaltKind.lostTrack
-          : HaltKind.beforeActing,
-    );
+    final refusal = _refusal(step, target, unit, state, acted: false);
+    output.problem(refusal.diagnostics.single, unit: unit.name);
+    output.halt(refusal.halt);
   }
 
   /// Asks once, for every unit, whether to publish what the snapshot found
@@ -424,8 +306,6 @@ final class ReleasePublicationCoordinator {
       showActions(targets, publicActions);
       return ExitCodes.refused;
     }
-    output.say('Authorized in the reviewed repository plan.');
-
     final releaseProgress = TargetReleaseProgress(
       output,
       title: '${unit.name} ${unit.version} · releasing',
@@ -513,7 +393,6 @@ final class ReleasePublicationCoordinator {
     }
 
     releaseProgress.settle(released: true);
-    await verifyAvailability(unit: unit, targets: publishing);
     return ExitCodes.ok;
   }
 
@@ -599,7 +478,8 @@ final class ReleasePublicationCoordinator {
       final note = blockers.isNotEmpty
           ? 'waiting for ${blockers.join(', ')}'
           : activeTargets.contains(target.target)
-          ? 'waiting for ${target.kindLabel} lane'
+          // One publish at a time to a destination: another is under way.
+          ? 'waiting its turn at ${target.kindLabel}'
           : null;
       if (note != null) progress.waiting(target, note: note);
     }
@@ -641,10 +521,10 @@ final class ReleasePublicationCoordinator {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
-        _inspectionFailure(step, target, unit, state),
+        _refusal(step, target, unit, state, acted: output.report.actedPublicly),
       );
     }
-    final halt = output.report.acted
+    final halt = output.report.actedPublicly
         ? HaltKind.stoppedPartway
         : HaltKind.beforeActing;
     if (recoversWithoutStage && !module.recoversWithoutStage(state)) {
@@ -699,17 +579,10 @@ final class ReleasePublicationCoordinator {
       }
     }
 
-    final actedBefore = output.report.acted;
-    output.report.acted = true;
-    publicActions[step.id] = ReleaseAction.attempted;
-    output.step(
-      step,
-      verdict: state.verdict,
-      detail: state.detail,
-      evidence: state.evidence,
-      action: publicActions[step.id]!.wire,
-      show: false,
-    );
+    final actedBefore = output.report.actedPublicly;
+    output.report
+      ..acted = true
+      ..actedPublicly = true;
     final releaseContext = TargetReleaseContext(
       reads: inspector.targetReads,
       tools: tools,
@@ -737,11 +610,14 @@ final class ReleasePublicationCoordinator {
     final lastMutationActivity =
         releaseContext.progress.activity ?? mutationActivity;
 
-    // A process result is not public truth. Every started operation performs
-    // its destination read-back even if another concurrent lane has failed.
+    // A process result is not public truth unless the provider's answer is
+    // the read-back. Every started operation is read back even if another
+    // concurrent lane has failed.
     releaseProgress.begin(target, CommonProgressActivities.verifying);
     try {
-      state = await module.confirmPublication(releaseContext, unit, target);
+      state =
+          act.confirmed ??
+          await module.confirmPublication(releaseContext, unit, target, act);
     } on Object catch (error) {
       state = Inspection.unknown(
         '${target.kindLabel} verification threw: $error',
@@ -765,21 +641,17 @@ final class ReleasePublicationCoordinator {
       final note =
           '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
       releaseProgress.complete(target, note: note);
-      output.step(
-        step,
-        mark: Mark.done,
-        verdict: state.verdict,
-        detail: state.detail,
-        note: note,
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
       return _PublicTargetCompletion.completed(step);
     }
     if (!act.ok || !state.isExact) {
       releaseProgress.fail(
         target,
-        activity: !act.ok && state.isAbsent
+        // A refused act failed where it acted; one that may have landed
+        // failed where it was read back.
+        activity:
+            !act.ok &&
+                !act.mayHaveActed &&
+                (state.isAbsent || state.verdict == Verdict.conflict)
             ? lastMutationActivity
             : CommonProgressActivities.verifying,
       );
@@ -797,24 +669,11 @@ final class ReleasePublicationCoordinator {
       );
     }
 
-    final inspected = act.includeInspectionDetail && state.detail != null
-        ? ' · ${state.detail}'
-        : '';
-    releaseProgress.complete(
-      target,
-      note: '${act.successNote ?? 'published'}$inspected',
-    );
-    if (act.successNote != null) {
-      output.step(
-        step,
-        mark: Mark.done,
-        verdict: state.verdict,
-        detail: state.detail,
-        note: '${act.successNote}$inspected',
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
-    }
+    final note = [
+      ?act.successNote,
+      if (act.includeInspectionDetail) ?state.detail,
+    ].join(' · ');
+    releaseProgress.complete(target, note: note.isEmpty ? 'published' : note);
     return _PublicTargetCompletion.completed(step);
   }
 
@@ -837,20 +696,21 @@ final class ReleasePublicationCoordinator {
     );
   }
 
-  /// A target read right before its act found something other than the
-  /// release missing. A conflict carries the target's own advice, as it
-  /// does when the snapshot finds it.
-  _PublicationFailure _inspectionFailure(
+  /// A read that found something other than the release missing: a
+  /// conflict carries the target's own advice; anything else says what was
+  /// read. [acted] is whether this run has already changed something public.
+  _PublicationFailure _refusal(
     Step step,
-    TargetPlan target,
+    TargetPlan? target,
     ResolvedUnit unit,
-    Inspection state,
-  ) {
-    final acted = output.report.acted;
+    Inspection state, {
+    required bool acted,
+  }) {
+    final conflict = state.verdict == Verdict.conflict;
     return _PublicationFailure(
       step: step,
       diagnostics: [
-        if (state.verdict == Verdict.conflict)
+        if (conflict && target != null)
           inspector.targets
               .moduleForTarget(target)
               .diagnoseConflict(unit, target, state)
@@ -859,19 +719,17 @@ final class ReleasePublicationCoordinator {
             code: 'RK-REL-001',
             message: '${step.summary}: ${state.detail ?? state.verdict.name}',
             remedy: state.evidence.isEmpty
-                ? 'the target could not be proven; fix the read and re-run'
+                ? (state.verdict == Verdict.unknown
+                      ? 'the target could not be proven; fix the read and re-run'
+                      : null)
                 : state.evidence.entries
                       .map((entry) => '${entry.key}: ${entry.value}')
                       .join('\n'),
           ),
       ],
-      halt: state.verdict == Verdict.conflict
-          ? acted
-                ? HaltKind.actedAndUnfixable
-                : HaltKind.unfixableByRerun
-          : acted
-          ? HaltKind.stoppedPartway
-          : HaltKind.beforeActing,
+      halt: conflict
+          ? (acted ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
+          : (acted ? HaltKind.stoppedPartway : HaltKind.beforeActing),
     );
   }
 
@@ -887,16 +745,8 @@ final class ReleasePublicationCoordinator {
     output.halt(failures.map((failure) => failure.halt).reduce(_strongerHalt));
   }
 
-  HaltKind _strongerHalt(HaltKind left, HaltKind right) {
-    const severity = {
-      HaltKind.beforeActing: 0,
-      HaltKind.stoppedPartway: 1,
-      HaltKind.lostTrack: 2,
-      HaltKind.unfixableByRerun: 3,
-      HaltKind.actedAndUnfixable: 4,
-    };
-    return severity[left]! >= severity[right]! ? left : right;
-  }
+  HaltKind _strongerHalt(HaltKind left, HaltKind right) =>
+      left.index >= right.index ? left : right;
 
   List<({String platform, String reason})> _unprovable(ReleaseStage stage) {
     final unprovable = <({String platform, String reason})>[];
@@ -1116,13 +966,6 @@ final class _PublicTargetCompletion {
 
   final Step step;
   final _PublicationFailure? failure;
-}
-
-final class _AvailabilityWarning {
-  const _AvailabilityWarning(this.target, this.diagnostic);
-
-  final TargetPlan target;
-  final Diagnostic diagnostic;
 }
 
 final class _PublicationFailure {

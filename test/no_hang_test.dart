@@ -7,20 +7,103 @@ import 'package:test/test.dart';
 /// caller threw before settling would leave rk running with nothing left to do.
 ///
 /// That is worse than a crash: a crash exits and gets reported, while a hang in
-/// CI burns the job's whole timeout and in a terminal looks like work. This
-/// runs a real process, because "does it exit" is not a question a test in the
-/// same isolate can answer.
+/// CI burns the job's whole timeout and in a terminal looks like work. "Does
+/// it exit" is not a question a test in the same isolate can answer, so each
+/// case runs in an isolate of its own, which ends only once nothing left in
+/// it can run. They run in one process of their own, because the test's
+/// assertions are on and a release build's are off: `Output.close` asserts on
+/// a live board before it reaps it.
 void main() {
-  test('an abandoned step does not hold the process open', () async {
+  late Map<String, String> ended;
+
+  setUpAll(() async {
     final scratch = Directory('${Directory.current.path}/.dart_tool/rk-hang')
       ..createSync(recursive: true);
     addTearDown(() => scratch.deleteSync(recursive: true));
+    File('${scratch.path}/main.dart').writeAsStringSync(_cases);
 
-    File('${scratch.path}/main.dart').writeAsStringSync('''
+    // Started rather than run: a synchronous run cannot be interrupted, so a
+    // hang would wedge the test runner instead of reporting.
+    final process = await Process.start(Platform.resolvedExecutable, [
+      'run',
+      '${scratch.path}/main.dart',
+    ], workingDirectory: Directory.current.path);
+    final out = process.stdout.transform(utf8.decoder).join();
+    final code = await process.exitCode.timeout(
+      const Duration(seconds: 45),
+      onTimeout: () {
+        process.kill(ProcessSignal.sigkill);
+        return -1;
+      },
+    );
+    expect(code, 0, reason: await out);
+    ended = {
+      for (final line in const LineSplitter().convert(await out))
+        if (line.indexOf(': ') case final at when at > 0)
+          line.substring(0, at): line.substring(at + 2),
+    };
+  });
+
+  test('an abandoned step does not hold the process open', () {
+    expect(
+      ended['abandoned step'],
+      'ended',
+      reason: 'rk did not exit: an abandoned step is holding the isolate open',
+    );
+  });
+
+  test('an unsafe terminal width never starts a periodic renderer', () {
+    expect(
+      ended['unsafe width'],
+      'ended',
+      reason: 'an unsafe-width renderer kept running',
+    );
+  });
+}
+
+/// Each case in its own isolate, and what became of it: "ended" once the
+/// isolate has ended without an error, "held open" if it has not ended within
+/// the bound.
+const _cases = r'''
+import 'dart:async';
+import 'dart:isolate';
+
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/progress.dart';
 
-void main() {
+Future<void> main() async {
+  for (final (name, scenario) in [
+    ('abandoned step', abandonedStep),
+    ('unsafe width', unsafeWidth),
+  ]) {
+    print('$name: ${await runAlone(scenario)}');
+  }
+}
+
+Future<String> runAlone(void Function(Object?) scenario) async {
+  // An error arrives before the end, on the same port.
+  final port = ReceivePort();
+  final isolate = await Isolate.spawn(
+    scenario,
+    null,
+    onExit: port.sendPort,
+    onError: port.sendPort,
+  );
+  final first = await port.first.timeout(
+    const Duration(seconds: 10),
+    onTimeout: () {
+      isolate.kill(priority: Isolate.immediate);
+      return 'held open';
+    },
+  );
+  return switch (first) {
+    null => 'ended',
+    String held => held,
+    final error => 'failed: ${'$error'.replaceAll('\n', ' ')}',
+  };
+}
+
+void abandonedStep(Object? _) {
   final output = Output(
     sink: (_) {},
     isTerminal: true,
@@ -44,48 +127,9 @@ void main() {
   } finally {
     output.close();
   }
-  print('exited cleanly');
 }
-''');
 
-    // Started rather than run: a synchronous run cannot be interrupted, so
-    // the regression this guards against wedged the test runner instead of
-    // reporting. A guard that hangs CI is the failure it was written to
-    // prevent.
-    final process = await Process.start(Platform.resolvedExecutable, [
-      'run',
-      '${scratch.path}/main.dart',
-    ], workingDirectory: Directory.current.path);
-    final out = process.stdout.transform(utf8.decoder).join();
-
-    final code = await process.exitCode.timeout(
-      const Duration(seconds: 45),
-      onTimeout: () {
-        process.kill(ProcessSignal.sigkill);
-        return -1;
-      },
-    );
-
-    expect(
-      code,
-      isNot(-1),
-      reason: 'rk did not exit: an abandoned step is holding the isolate open',
-    );
-    expect(code, 0);
-    expect(await out, contains('exited cleanly'));
-  });
-
-  test('an unsafe terminal width never starts a periodic renderer', () async {
-    final scratch = Directory(
-      '${Directory.current.path}/.dart_tool/rk-unsafe-width',
-    )..createSync(recursive: true);
-    addTearDown(() => scratch.deleteSync(recursive: true));
-
-    File('${scratch.path}/main.dart').writeAsStringSync('''
-import 'package:rk/src/output/output.dart';
-import 'package:rk/src/output/progress.dart';
-
-void main() {
+void unsafeWidth(Object? _) {
   final output = Output(
     sink: (_) {},
     isTerminal: true,
@@ -97,25 +141,5 @@ void main() {
       .addRow(id: 'cli/build', label: 'Local binary')
       .handle
       .begin(CommonProgressActivities.checking);
-  print('exited cleanly');
 }
-''');
-
-    final process = await Process.start(Platform.resolvedExecutable, [
-      'run',
-      '${scratch.path}/main.dart',
-    ], workingDirectory: Directory.current.path);
-    final out = process.stdout.transform(utf8.decoder).join();
-    final code = await process.exitCode.timeout(
-      const Duration(seconds: 45),
-      onTimeout: () {
-        process.kill(ProcessSignal.sigkill);
-        return -1;
-      },
-    );
-
-    expect(code, isNot(-1), reason: 'an unsafe-width renderer kept running');
-    expect(code, 0);
-    expect(await out, contains('exited cleanly'));
-  });
-}
+''';

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
+import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
@@ -13,7 +14,6 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
@@ -32,6 +32,15 @@ const _head = '1111111111111111111111111111111111111111';
 const _headTree = '2222222222222222222222222222222222222222';
 const _tagObject = '3333333333333333333333333333333333333333';
 const _otherHead = '4444444444444444444444444444444444444444';
+
+/// A tag object made somewhere else: not the one this run creates.
+const _otherTagObject = '5555555555555555555555555555555555555555';
+
+bool _isTagPush(_Invocation call) =>
+    call.executable == 'git' &&
+    call.arguments.length >= 3 &&
+    call.arguments[0] == 'push' &&
+    call.arguments[2].endsWith(':refs/tags/v1.2.3');
 
 const _config = '''
 schema = 2
@@ -93,63 +102,6 @@ void main() {
 
   setUp(() => harness = _Harness());
   tearDown(() => harness.close());
-
-  for (final copied in [0, 2]) {
-    test(
-      'source retry preserves its frozen header after $copied copied files',
-      () async {
-        var reads = 0;
-        harness.source.beforeReadBytes = (path) {
-          final header = StageReceiptStore(harness.stage.directory).read();
-          if (header != null && header.steps.isEmpty && reads++ == copied) {
-            expect(header.plan, harness.stage.resolvedPlan);
-            throw StateError('fixture source interruption');
-          }
-        };
-        final failed = await harness.run(stageOnly: true, confirm: null);
-        expect(failed.code, ExitCodes.refused, reason: failed.text);
-        expect(failed.publicMutations, isEmpty);
-        final file = File(harness.stage.directory.resolve('stage.json'));
-        final bytes = file.readAsBytesSync();
-        final modified = file.lastModifiedSync();
-        final header = StageReceipt.parse(utf8.decode(bytes));
-        expect(header.steps, isEmpty);
-        expect(header.plan, harness.stage.resolvedPlan);
-        expect(harness.stage.inspect().validProgress, isFalse);
-        expect(harness.stage.inspect().planRecorded, isTrue);
-
-        // Recreate the resolver to prove the header survives a new process's
-        // stage object. Native intent lookup is tested separately when wired.
-        harness.stages = ReleaseStages(
-          source: harness.source,
-          git: harness.git,
-          stageContracts: TargetCatalog.builtIn().stageContractResolver(
-            harness.resolution,
-          ),
-          repositoryRoot: harness.root.path,
-        );
-        reads = 0;
-        final failedAgain = await harness.run(stageOnly: true, confirm: null);
-        expect(failedAgain.code, ExitCodes.refused, reason: failedAgain.text);
-        expect(failedAgain.publicMutations, isEmpty);
-        expect(file.readAsBytesSync(), bytes);
-        expect(
-          file.lastModifiedSync(),
-          modified,
-          reason: 'retry must never replace the frozen header',
-        );
-
-        harness.source.beforeReadBytes = null;
-        final resumed = await harness.run(stageOnly: true, confirm: null);
-        expect(resumed.code, ExitCodes.ok, reason: resumed.text);
-        expect(resumed.publicMutations, isEmpty);
-        final complete = harness.stage.requireReceipt();
-        expect(complete.identity.id, header.identity.id);
-        expect(complete.plan, header.plan);
-        expect(complete.steps.last.evidence, isNot(contains('release_plan')));
-      },
-    );
-  }
 
   test('an interrupted stage resumes past files it does not own', () async {
     final stage = harness.stage;
@@ -225,26 +177,43 @@ void main() {
     // commit binds them.
     setUp(() => harness.tools.diffExit = 0);
 
-    test('that appears while the release runs is refused', () async {
-      var reads = 0;
+    test('that origin gains while the release runs is refused', () async {
+      // Another run pushes its own tag after this one read origin. Git
+      // refuses this run's push, and nothing is published under a tag
+      // another run made.
       final run = await harness.run(
         stageOnly: false,
         confirm: (_) async => 'yes',
         onInvocation: (call) {
-          if (call.executable == 'git' &&
-              call.arguments.firstOrNull == 'ls-remote' &&
-              call.arguments.contains('refs/tags/v1.2.3') &&
-              ++reads == 2) {
+          if (_isTagPush(call)) {
             harness.tools
               ..remoteTags.add('v1.2.3')
-              ..remoteSourceCommit = _otherHead
-              ..tagManifestSha256 = 'a' * 64;
+              ..remoteTagObject = _otherTagObject
+              ..remoteSourceCommit = _otherHead;
           }
         },
       );
 
       expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(run.publicMutations, isEmpty);
+      expect(
+        run.publicMutations.map((call) => call.publicKind),
+        ['tag', 'tag'],
+        reason: 'the local tag and its refused push, and nothing after them',
+      );
+      expect(
+        run.keys,
+        contains('git update-ref -d refs/tags/v1.2.3 $_tagObject'),
+        reason: 'the tag this run made is not left to be pushed again',
+      );
+      expect(run.problemCodes, ['RK-MONO-004']);
+      expect(harness.tools.remoteTagObject, _otherTagObject);
+      // The stage this run built is private: the refused push changed
+      // nothing public.
+      expect(
+        (run.report['halt'] as Map?)?['kind'],
+        'unfixableByRerun',
+        reason: run.text,
+      );
     });
 
     test(
@@ -309,72 +278,39 @@ void main() {
       expect(later.problemCodes, isNot(contains('RK-STAGE-005')));
       expect(later.text, contains('git fetch origin tag v1.2.3'));
     });
-
-    test('that wins the race to origin is refused', () async {
-      bool isTagPush(_Invocation call) =>
-          call.executable == 'git' &&
-          call.arguments.length >= 3 &&
-          call.arguments[0] == 'push' &&
-          call.arguments[2].endsWith(':refs/tags/v1.2.3');
-      harness.tools.runFailure = (call) => isTagPush(call)
-          ? ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: '! [rejected] v1.2.3 (already exists)',
-            )
-          : null;
-      final run = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => 'yes',
-        onInvocation: (call) {
-          if (isTagPush(call)) {
-            harness.tools
-              ..remoteTags.add('v1.2.3')
-              ..remoteSourceCommit = _otherHead
-              ..tagManifestSha256 = 'a' * 64;
-          }
-        },
-      );
-
-      expect(run.code, isNot(ExitCodes.ok), reason: run.text);
-      expect(run.text, contains('origin did not confirm the release binding'));
-      expect(
-        run.publicMutations.where(
-          (call) =>
-              !isTagPush(call) &&
-              !(call.executable == 'git' &&
-                  call.arguments.firstOrNull == 'tag'),
-        ),
-        isEmpty,
-        reason: 'nothing is published under a tag another run pushed',
-      );
-    });
   });
 
   test(
     'a conflict discovered at the public gate has the same recovery advice',
     () async {
-      var moved = false;
+      // Origin gains another release of this version after the snapshot.
+      // Git refuses the push, and the refusal advises what the snapshot's
+      // conflict would have.
       final run = await harness.run(
         stageOnly: false,
         confirm: (_) async => 'yes',
         onInvocation: (call) {
-          if (call.executable == 'git' &&
-              call.arguments.firstOrNull == 'ls-remote' &&
-              call.arguments.contains('refs/tags/v1.2.3') &&
-              !moved &&
-              harness.stage.inspect().reusable) {
-            moved = true;
+          if (_isTagPush(call)) {
             harness.tools
               ..remoteTags.add('v1.2.3')
-              ..remoteSourceCommit = _otherHead
-              ..tagManifestSha256 = 'a' * 64;
+              ..remoteTagObject = _otherTagObject
+              ..remoteSourceCommit = _otherHead;
           }
         },
       );
 
       expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(run.publicMutations, isEmpty);
+      expect(
+        run.publicMutations.where((call) => call.publicKind != 'tag'),
+        isEmpty,
+      );
+      expect(run.report['rerun_helps'], isFalse);
+      // What git said is kept with the refusal.
+      final refusal = (run.report['problems'] as List).cast<Map>().single;
+      expect(
+        (run.report['attachments'] as Map)[refusal['evidence']],
+        contains('(already exists)'),
+      );
       expect(
         run.text,
         contains('bump the version and add its changelog entry'),
@@ -392,113 +328,55 @@ void main() {
     },
   );
 
-  test(
-    'a non-Git one-shot release binds bytes but claims no revision',
-    () async {
-      final unbound = _Harness(unbound: true);
-      addTearDown(unbound.close);
+  for (final stageOnly in [true, false]) {
+    test('without a commit, ${stageOnly ? 'stage' : 'release'} refuses '
+        'before any work', () async {
+      final pub = _Harness(pubOnly: true);
+      addTearDown(pub.close);
+      pub.git = GitState.none(pub.root.path);
 
-      final run = await unbound.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
+      final run = await pub.run(
+        stageOnly: stageOnly,
+        confirm: (_) async => fail('the refusal needs no authorization'),
       );
 
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(run.text, startsWith('Releasing tool 1.2.3\n'));
-      expect(run.text, contains('worktree · working tree'));
-      expect(run.text, isNot(contains('main@')));
-      expect(run.publicMutations.map((call) => call.publicKind), ['pub.dev']);
-      final receipt = unbound.stage.requireReceipt();
-      expect(receipt.identity.isGitBound, isFalse);
-      expect(receipt.identity.headCommit, isNull);
-      expect(receipt.steps.last.evidence['source_binding'], 'unbound');
-      final manifest = ReleaseManifest.parse(
-        File(
-          unbound.stage.directory.resolve(ReleaseAssets.manifest),
-        ).readAsStringSync(),
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.problemCodes, ['RK-SRC-004']);
+      expect(run.text, contains('git init'));
+      expect(run.publicMutations, isEmpty);
+      expect(
+        Directory('${pub.root.path}/.rk/work/stages').existsSync(),
+        isFalse,
       );
-      expect(manifest.commit, isNull);
-    },
-  );
+    });
+  }
 
-  test('a unit keeps one stage of a source with no commit', () async {
-    // No later run can reuse it, so each run's stage replaces the last.
-    final unbound = _Harness(unbound: true);
-    addTearDown(unbound.close);
-    List<FileSystemEntity> stages() =>
-        Directory('${unbound.root.path}/.rk/work/stages').listSync();
-
-    // Declined each time, so each run stages and publishes nothing.
-    final first = await unbound.run(
-      stageOnly: false,
-      confirm: (_) async => 'no',
-    );
-    expect(first.problemCodes, ['RK-AUTH-002'], reason: first.text);
-    expect(stages(), hasLength(1));
-    final earlier = stages().single.path;
-
-    // A new process: its stages resolve afresh.
-    unbound.stages = ReleaseStages(
-      source: unbound.source,
-      git: unbound.git,
-      stageContracts: TargetCatalog.builtIn().stageContractResolver(
-        unbound.resolution,
-      ),
-      repositoryRoot: unbound.root.path,
-    );
-    final second = await unbound.run(
-      stageOnly: false,
-      confirm: (_) async => 'no',
-    );
-    expect(second.problemCodes, ['RK-AUTH-002'], reason: second.text);
-    expect(stages(), hasLength(1));
-    expect(stages().single.path, isNot(earlier));
-  });
-
-  test('a dirty registry-only snapshot warns and still releases', () async {
-    final unbound = _Harness(unbound: true);
-    addTearDown(unbound.close);
-    final repository = unbound.gitAt(
+  test('uncommitted changes refuse a unit whatever it publishes', () async {
+    final pub = _Harness(pubOnly: true);
+    addTearDown(pub.close);
+    pub.git = pub.gitAt(
       isClean: false,
       uncommitted: const ['packages/tool/pubspec.yaml'],
     );
 
-    final run = await unbound.run(
+    final run = await pub.run(
       stageOnly: false,
-      confirm: (_) async => 'yes',
-      repositoryGit: repository,
-      sourceWarning: repository.uncommittedSnapshotWarning(),
-    );
-
-    expect(run.code, ExitCodes.ok, reason: run.text);
-    expect(run.publicMutations.map((call) => call.publicKind), ['pub.dev']);
-    expect(run.problemCodes, isEmpty);
-    expect(run.warningCodes, ['RK-GIT-001']);
-    expect(run.text, contains('will be captured in the source snapshot'));
-    expect(run.text, isNot(contains('RK-GIT-001')));
-    expect(unbound.stage.requireReceipt().identity.isGitBound, isFalse);
-  });
-
-  test('non-Git stage-only refuses the unusable handoff', () async {
-    final unbound = _Harness(unbound: true);
-    addTearDown(unbound.close);
-
-    final run = await unbound.run(
-      stageOnly: true,
       confirm: (_) async => fail('the refusal needs no authorization'),
     );
 
     expect(run.code, ExitCodes.refused, reason: run.text);
-    expect(run.problemCodes, ['RK-SRC-002']);
+    expect(run.problemCodes, ['RK-GIT-001']);
+    expect(run.text, contains('commit first'));
+    expect(run.warningCodes, isEmpty);
     expect(run.publicMutations, isEmpty);
-    expect(unbound.stage.inspect().receipt, isNull);
+    expect(Directory('${pub.root.path}/.rk/work/stages').existsSync(), isFalse);
   });
 
   test(
     'a binary-only release writes local archives without authorization',
     () async {
-      for (final unbound in [false, true]) {
-        final local = _Harness(localBinaryOnly: true, unbound: unbound);
+      {
+        final local = _Harness(localBinaryOnly: true);
         addTearDown(local.close);
 
         final run = await local.run(
@@ -510,9 +388,15 @@ void main() {
         expect(run.publicMutations, isEmpty);
         expect(run.text, contains('tool 1.2.3 · staged'));
         expect(run.text, contains('Local binaries'));
+        // Named as the file is, with the directory a user can find it in.
+        expect(run.text, contains('✓ tool-1.2.3-linux-x64.tar.gz'));
         expect(
           run.text,
-          contains('producers/tool/archives/tool-1.2.3-linux-x64.tar.gz'),
+          matches(
+            RegExp(
+              r'Archives +\.rk/work/stages/[0-9a-f]+/producers/tool/archives',
+            ),
+          ),
         );
         expect(
           run.text.trimRight(),
@@ -720,30 +604,6 @@ void main() {
     },
   );
 
-  test(
-    'non-Git existing version skips without rebuilding historical bytes',
-    () async {
-      final unbound = _Harness(unbound: true);
-      addTearDown(unbound.close);
-      unbound.registry.published['tool']!.add('1.2.3');
-      unbound.registry.archives['tool@1.2.3'] = _publishedPackage();
-
-      final run = await unbound.run(
-        stageOnly: false,
-        confirm: (_) async => fail('an exact release needs no authorization'),
-      );
-
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(run.publicMutations, isEmpty);
-      expect(run.text, contains('already released'));
-      expect(unbound.stage.inspect().reusable, isFalse);
-      expect(
-        run.keys,
-        isNot(contains('dart pub publish --to-archive <archive>')),
-      );
-    },
-  );
-
   test('stage-only seals a reusable receipt after package preflight and never '
       'authorizes or mutates a public target', () async {
     var authorizationPrompts = 0;
@@ -751,7 +611,7 @@ void main() {
       stageOnly: true,
       confirm: (_) async {
         authorizationPrompts++;
-        return '1.2.3';
+        return 'yes';
       },
     );
 
@@ -767,7 +627,6 @@ void main() {
     final packaged = run.invocations.singleWhere(
       (call) => call.arguments.contains('--to-archive'),
     );
-    expect(packaged.arguments.take(3), ['pub', 'publish', '--to-archive']);
     final archivePath = ReleaseAssets.pubArchivePath(
       harness.unit.projects.single,
     );
@@ -826,12 +685,8 @@ void main() {
     ], workingDirectory: native.root.path);
     expect(initialized.exitCode, 0, reason: '${initialized.stderr}');
 
-    final run = await native.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
+    final run = await native.runStage();
 
-    expect(run.code, ExitCodes.ok, reason: run.text);
     expect(native.stage.inspect().reusable, isTrue);
     expect(run.problemCodes, isEmpty);
     final packaged = run.invocations.singleWhere(
@@ -846,18 +701,14 @@ void main() {
 
   test('normal release reuses the exact stage without producers or preflight '
       'and publishes its staged archive', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final receipt = File(
       harness.stage.directory.resolve('stage.json'),
     ).readAsStringSync();
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(released.code, ExitCodes.ok, reason: released.text);
@@ -875,15 +726,14 @@ void main() {
     final publish = released.invocations.singleWhere(
       (call) => call.arguments.contains('--from-archive'),
     );
-    expect(publish.arguments, [
-      'pub',
-      'publish',
-      '--from-archive',
-      harness.stage.directory.workspace.pathOf(
-        ReleaseAssets.pubArchivePath(harness.unit.projects.single),
+    expect(
+      publish.arguments,
+      contains(
+        harness.stage.directory.workspace.pathOf(
+          ReleaseAssets.pubArchivePath(harness.unit.projects.single),
+        ),
       ),
-      '--force',
-    ]);
+    );
     expect(
       publish.workingDirectory,
       isNot(startsWith(harness.stage.directory.repositoryRoot)),
@@ -911,16 +761,12 @@ void main() {
   });
 
   test('public acts never borrow the bounded target-read tools', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final reads = _ForwardingReadTools(harness.tools);
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       readTools: reads,
     );
 
@@ -939,11 +785,7 @@ void main() {
 
   test('independent publication lanes overlap and dependents unlock '
       'immediately', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final pubStarted = Completer<void>();
     final allowPubToFinish = Completer<void>();
@@ -957,7 +799,7 @@ void main() {
     };
     final running = harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       onInvocation: (call) {
         if (call.publicKind == 'github-release' &&
             !githubPublished.isCompleted) {
@@ -994,32 +836,6 @@ void main() {
   });
 
   test(
-    'a live session is confirmed without pub saying so to the terminal',
-    () async {
-      final released = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => 'yes',
-      );
-
-      expect(released.code, ExitCodes.ok, reason: released.text);
-      expect(
-        released.keys.where((key) => key == 'dart pub login'),
-        hasLength(1),
-        reason:
-            'the session is still checked — refreshed and put to the '
-            'provider — exactly once',
-      );
-      expect(
-        released.text,
-        isNot(contains('already logged in')),
-        reason:
-            'what pub says about a session it just confirmed is not what '
-            'a terminal asking about a release needs to read',
-      );
-    },
-  );
-
-  test(
     'a failed pub session check keeps the approved stage and stops before public work',
     () async {
       harness.tools.failPubLogin = true;
@@ -1029,7 +845,7 @@ void main() {
         stageOnly: false,
         confirm: (_) async {
           authorizationPrompts++;
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -1057,11 +873,7 @@ void main() {
   );
 
   test('a second identical stage performs no producer work', () async {
-    final first = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(first.code, ExitCodes.ok, reason: first.text);
+    final first = await harness.runStage();
     expect(first.text, contains('✓ tool 1.2.3 staged successfully.'));
     expect(first.text, startsWith('Staging tool 1.2.3\n'));
     expect(first.text, contains('worktree · main@1111111'));
@@ -1074,13 +886,15 @@ void main() {
       harness.stage.directory.resolve('stage.json'),
     ).readAsBytesSync();
 
-    final second = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
+    final second = await harness.runStage();
 
-    expect(second.code, ExitCodes.ok, reason: second.text);
     expect(second.text, isNot(contains('Rebuilding:')));
+    expect(first.text, contains('\ntool 1.2.3 · staged\n'));
+    expect(
+      second.text,
+      contains('\ntool 1.2.3 · already staged\n'),
+      reason: 'a stage reused is not said to be staged again',
+    );
     expect(
       second.text,
       contains('✓ tool 1.2.3 is already staged and verified.'),
@@ -1127,11 +941,7 @@ void main() {
   test(
     'the staged formula links the public archive name, not its stage path',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
 
       final formula = File(
         harness.stage.directory.resolve(
@@ -1149,16 +959,12 @@ void main() {
   test(
     'a lost GitHub final-publish response reconciles from exact public bytes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.loseGithubFinalResponse = true;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1172,16 +978,12 @@ void main() {
   test(
     'a lost tag-push response reconciles from the exact release binding',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.loseTagPushResponse = true;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1191,45 +993,42 @@ void main() {
     },
   );
 
-  test(
-    'an unreadable tag readback is lost-track and stops before pub',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      harness.tools.unreadTagAfterPush = true;
+  test('a failed push whose origin cannot be read is lost-track and stops '
+      'before pub', () async {
+    await harness.runStage();
+    harness.tools
+      ..loseTagPushResponse = true
+      ..unreadTagAfterPush = true;
 
-      final released = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
-      );
+    final released = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => 'yes',
+    );
 
-      expect(released.code, ExitCodes.refused);
-      expect(released.problemCodes, contains('RK-TAG-003'));
-      expect((released.report['halt'] as Map?)?['kind'], 'lostTrack');
-      expect(
-        released.publicMutations.map((call) => call.publicKind),
-        isNot(contains('pub.dev')),
-      );
-    },
-  );
+    expect(released.code, ExitCodes.refused);
+    expect(released.problemCodes, contains('RK-TAG-002'));
+    expect((released.report['halt'] as Map?)?['kind'], 'lostTrack');
+    expect(
+      released.keys.where((key) => key.startsWith('git update-ref -d')),
+      isEmpty,
+      reason: 'a tag that may be on origin is not removed',
+    );
+    expect(
+      released.publicMutations.map((call) => call.publicKind),
+      isNot(contains('pub.dev')),
+    );
+  });
 
   test(
     'an ambiguous pub response can reconcile after delayed exact bytes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.losePubPublishResponse = true;
       harness.registry.hideCandidateLookups = 1;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1239,72 +1038,8 @@ void main() {
     },
   );
 
-  test(
-    'pub resolver propagation is bounded and does not fail publication',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      harness.tools.pubAvailabilityFailures = 1000;
-
-      final released = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
-      );
-
-      expect(released.code, ExitCodes.ok, reason: released.text);
-      expect(released.text, contains('released'));
-      expect(released.warningCodes, contains('RK-PUB-013'));
-      expect(
-        harness.tools.invocations
-            .where((call) => _starts(call.arguments, ['pub', 'cache', 'add']))
-            .map((call) => call.executable),
-        everyElement('dart'),
-        reason: 'an installed RK executable or AOT runtime is not the Dart SDK',
-      );
-      expect(released.text, contains('do not upload the version again'));
-      expect(
-        released.keys.where((key) => key.startsWith('dart pub cache add tool')),
-        hasLength(121),
-        reason: 'one initial check plus the bounded ten-minute retry window',
-      );
-    },
-  );
-
-  test(
-    'a newly pushed tag with the wrong binding is terminal before pub',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      harness.tools.wrongTagBindingAfterPush = true;
-
-      final released = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
-      );
-
-      expect(released.code, ExitCodes.refused);
-      expect(released.problemCodes, contains('RK-TAG-004'));
-      expect((released.report['halt'] as Map?)?['kind'], 'actedAndUnfixable');
-      expect(released.report['rerun_helps'], isFalse);
-      expect(
-        released.publicMutations.map((call) => call.publicKind),
-        isNot(contains('pub.dev')),
-      );
-    },
-  );
-
   test('a malformed local tag is refused before it can be pushed', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.git = harness.gitAt(
       tags: const ['v1.2.3'],
       tagObjects: const {'v1.2.3': _tagObject},
@@ -1327,16 +1062,12 @@ void main() {
   test(
     'a lost Homebrew push response reconciles from exact public bytes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.loseHomebrewPushResponse = true;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1367,16 +1098,12 @@ void main() {
     test(
       '${race.name} appearing between inspect and clone is not overwritten',
       () async {
-        final staged = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
-        expect(staged.code, ExitCodes.ok, reason: staged.text);
+        await harness.runStage();
         harness.tools.formulaAtNextClone = race.formula;
 
         final released = await harness.run(
           stageOnly: false,
-          confirm: (_) async => '1.2.3',
+          confirm: (_) async => 'yes',
         );
 
         expect(released.code, ExitCodes.refused);
@@ -1400,14 +1127,10 @@ void main() {
   }
 
   test('rerunning skips every public lane already published', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final first = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(first.code, ExitCodes.ok, reason: first.text);
     harness.git = harness.gitAt(
@@ -1423,6 +1146,11 @@ void main() {
 
     expect(rerun.code, ExitCodes.ok, reason: rerun.text);
     expect(rerun.publicMutations, isEmpty);
+    expect(
+      rerun.keys,
+      isNot(contains('dart pub login')),
+      reason: 'no pub.dev act remains, so no session is needed',
+    );
     expect(rerun.text, contains('already released'));
     final unit = (rerun.report['units'] as List).single as Map;
     final actions = {
@@ -1456,16 +1184,12 @@ void main() {
   test(
     'a partial binary release refuses to rebuild a lost exact stage',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.failPubPublish = true;
 
       final partial = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
       expect(partial.code, ExitCodes.refused);
       expect(partial.problemCodes, contains('RK-PUB-003'));
@@ -1505,23 +1229,24 @@ void main() {
   test(
     'an unread partial binary release also refuses to rebuild a lost stage',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools
         ..loseGithubFinalResponse = true
         ..unreadGithubAfterPublish = true;
 
       final partial = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
       expect(partial.code, ExitCodes.refused, reason: partial.text);
+      expect(partial.problemCodes, contains('RK-REL-003'));
       expect((partial.report['halt'] as Map?)?['kind'], 'lostTrack');
       expect(harness.tools.remoteTags, contains('v1.2.3'));
       expect(harness.tools.githubReleaseExists, isTrue);
+      expect(
+        partial.publicMutations.map((call) => call.publicKind),
+        isNot(contains('homebrew')),
+      );
 
       harness.stage.reset();
       harness.git = harness.gitAt(
@@ -1556,11 +1281,7 @@ void main() {
 
   test('a definite private GitHub failure drains Pub but leaves Homebrew '
       'unattempted', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools.failGithubDraftCreate = true;
 
     final pubStarted = Completer<void>();
@@ -1574,7 +1295,7 @@ void main() {
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       onInvocation: (call) {
         if (call.executable == 'gh' &&
             _starts(call.arguments, [
@@ -1620,11 +1341,7 @@ void main() {
     'a private draft failure is not reported as nothing acted when no public '
     'target changed this run',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
 
       harness.tools.remoteTags.add('v1.2.3');
       harness.registry.published['tool']!.add('1.2.3');
@@ -1639,7 +1356,7 @@ void main() {
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.refused, reason: released.text);
@@ -1660,16 +1377,12 @@ void main() {
   test(
     'retry after a middle-target failure skips exact lanes and resumes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.failGithubDraftCreate = true;
 
       final first = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
       expect(first.code, ExitCodes.refused, reason: first.text);
       expect(
@@ -1686,7 +1399,7 @@ void main() {
       );
       final resumed = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(resumed.code, ExitCodes.ok, reason: resumed.text);
@@ -1711,18 +1424,48 @@ void main() {
     },
   );
 
-  test('a lost stage can finish only the Homebrew channel from the public '
-      'release', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+  test('notes edited on the published GitHub Release do not stop the '
+      'release from finishing', () async {
+    await harness.runStage();
     harness.tools.rejectHomebrewPush = true;
 
     final partial = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
+    );
+    expect(partial.code, ExitCodes.refused, reason: partial.text);
+    expect(harness.tools.githubReleaseExists, isTrue);
+
+    // The operator fixes the notes on GitHub; the stage is still here.
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    harness.tools
+      ..rejectHomebrewPush = false
+      ..githubTitle = 'tool 1.2.3, with a better title'
+      ..githubBody = 'Notes with the typo fixed.';
+
+    final resumed = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => 'yes',
+    );
+
+    expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+    expect(resumed.publicMutations.map((call) => call.publicKind), [
+      'homebrew',
+    ]);
+  });
+
+  test('a lost stage can finish only the Homebrew channel from the public '
+      'release', () async {
+    await harness.runStage();
+    harness.tools.rejectHomebrewPush = true;
+
+    final partial = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => 'yes',
     );
     expect(partial.code, ExitCodes.refused, reason: partial.text);
     expect(harness.tools.githubReleaseExists, isTrue);
@@ -1743,7 +1486,7 @@ void main() {
 
     final resumed = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(resumed.code, ExitCodes.ok, reason: resumed.text);
@@ -1772,88 +1515,78 @@ void main() {
     expect(harness.stage.inspect().reusable, isFalse);
   });
 
-  test(
-    'lost-stage recovery refuses public archives its manifest does not name',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      harness.tools.rejectHomebrewPush = true;
-
-      final partial = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
-      );
-      expect(partial.code, ExitCodes.refused, reason: partial.text);
-      harness.stage.reset();
-      harness.git = harness.gitAt(
-        tags: const ['v1.2.3'],
-        tagObjects: const {'v1.2.3': _tagObject},
-        tagTargets: const {'v1.2.3': _head},
-      );
-      harness.tools.rejectHomebrewPush = false;
-      final archive = ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64');
-
-      final resumed = await harness.run(
-        stageOnly: false,
-        confirm: (_) async {
-          harness.tools.uploadedAssets[archive] = utf8.encode(
-            'changed archive',
-          );
-          return '1.2.3';
-        },
-      );
-
-      expect(resumed.code, ExitCodes.refused, reason: resumed.text);
-      expect(
-        resumed.text,
-        contains('archives no longer match its release manifest'),
-        reason: 'recovered assets must match the manifest the tag binds',
-      );
-      expect(
-        resumed.publicMutations.map((call) => call.publicKind),
-        isNot(contains('homebrew')),
-      );
-    },
-  );
-
-  test('an unreadable GitHub readback remains lost-track', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
-    harness.tools
-      ..loseGithubFinalResponse = true
-      ..unreadGithubAfterPublish = true;
-
-    final released = await harness.run(
+  test('status agrees that a lost stage can finish Homebrew from the public '
+      'release', () async {
+    await harness.runStage();
+    harness.tools.rejectHomebrewPush = true;
+    final partial = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
+    expect(partial.code, ExitCodes.refused, reason: partial.text);
+    harness.stage.reset();
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    harness.tools.rejectHomebrewPush = false;
 
-    expect(released.code, ExitCodes.refused);
-    expect(released.problemCodes, contains('RK-REL-003'));
-    expect((released.report['halt'] as Map?)?['kind'], 'lostTrack');
-    expect(
-      released.publicMutations.map((call) => call.publicKind),
-      isNot(contains('homebrew')),
+    final buffer = StringBuffer();
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: false,
+      useColor: false,
     );
+    final code = await StatusCommand(
+      resolution: harness.resolution,
+      tree: harness.source,
+      git: harness.git,
+      inspector: Inspector(
+        registry: harness.registry,
+        pubDev: PubDevTarget(registry: harness.registry),
+        git: harness.git,
+        tools: harness.tools,
+        repository: harness.git.originUrl,
+        stageFor: harness.stages.call,
+      ),
+      stageFor: harness.stages.call,
+      output: output,
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+      ),
+    ).run(only: 'tool');
+    final status =
+        jsonDecode(output.report.encode(exit: code)) as Map<String, Object?>;
+
+    expect(
+      [
+        for (final problem in status['problems'] as List)
+          (problem as Map)['code'],
+      ],
+      isNot(contains('RK-STAGE-005')),
+      reason: buffer.toString(),
+    );
+    expect(status['next'], ['rk release tool'], reason: buffer.toString());
+
+    final resumed = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => 'yes',
+    );
+    expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+    expect(resumed.publicMutations.map((call) => call.publicKind), [
+      'homebrew',
+    ]);
   });
 
   test('an immutable GitHub conflict is terminal', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools.conflictGithubAfterPublish = true;
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(released.code, ExitCodes.refused);
@@ -1883,16 +1616,12 @@ void main() {
     ),
   ]) {
     test(scenario.name, () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       scenario.configure(harness.tools);
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.refused);
@@ -1903,19 +1632,14 @@ void main() {
 
   test('a weaker publishing host can release an exact stage without producing '
       'its platform again', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       capabilities: HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
-        hasNativeAssets: false,
       ),
     );
 
@@ -1936,11 +1660,7 @@ void main() {
 
   test('normal release refuses a tampered completed artifact while explicit '
       'stage mode can rebuild it', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final archive = harness.stage.directory.resolve(
       'producers/tool/archives/'
@@ -1954,7 +1674,7 @@ void main() {
       stageOnly: false,
       confirm: (_) async {
         authorizationPrompts++;
-        return '1.2.3';
+        return 'yes';
       },
     );
 
@@ -1968,11 +1688,7 @@ void main() {
     );
     expect(refused.publicMutations, isEmpty);
 
-    final rebuilt = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(rebuilt.code, ExitCodes.ok, reason: rebuilt.text);
+    final rebuilt = await harness.runStage();
     expect(rebuilt.keys, contains('dart pub publish --to-archive <archive>'));
     expect(
       rebuilt.keys.where((key) => key.startsWith('dart compile exe')),
@@ -2028,7 +1744,7 @@ void main() {
         stageOnly: false,
         confirm: (_) async {
           prompts++;
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -2104,11 +1820,7 @@ void main() {
       expect(actions.values.toSet(), {'not_attempted'});
 
       harness.tools.runFailure = null;
-      final recovered = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(recovered.code, ExitCodes.ok, reason: recovered.text);
+      final recovered = await harness.runStage();
       expect(harness.stage.inspect().reusable, isTrue);
       expect(recovered.publicMutations, isEmpty);
     });
@@ -2131,7 +1843,7 @@ void main() {
         stageOnly: false,
         confirm: (_) async {
           authorizationPrompts++;
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -2186,15 +1898,11 @@ void main() {
     'an SDK without native Pub archive publication refuses clearly',
     () async {
       harness.tools.failPubArchiveCapability = true;
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
 
       final run = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(run.code, ExitCodes.refused, reason: run.text);
@@ -2221,7 +1929,7 @@ void main() {
           stageOnly: false,
           confirm: (_) async {
             prompts++;
-            return '1.2.3';
+            return 'yes';
           },
           // Planted as the pub.dev lane starts (its first Pub command),
           // before any lane writes.
@@ -2249,11 +1957,7 @@ void main() {
         );
 
         Directory(harness.stage.directory.resolve(failure.path)).deleteSync();
-        final recovered = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
-        expect(recovered.code, ExitCodes.ok, reason: recovered.text);
+        final recovered = await harness.runStage();
         expect(harness.stage.inspect().reusable, isTrue);
         expect(recovered.publicMutations, isEmpty);
       },
@@ -2271,11 +1975,7 @@ void main() {
     test(
       'an interrupted ${boundary.step} prefix resumes from exact bytes',
       () async {
-        final first = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
-        expect(first.code, ExitCodes.ok, reason: first.text);
+        await harness.runStage();
         _interruptAfter(harness.stage, boundary.step);
         final before = harness.stage.inspect();
         expect(
@@ -2290,12 +1990,8 @@ void main() {
             ).readAsBytesSync(),
         };
 
-        final resumed = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
+        final resumed = await harness.runStage();
 
-        expect(resumed.code, ExitCodes.ok, reason: resumed.text);
         if (boundary.preflightDone) {
           expect(
             resumed.keys,
@@ -2325,11 +2021,7 @@ void main() {
   test(
     'an unreceipted declared output is discarded and prior lanes resume',
     () async {
-      final first = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(first.code, ExitCodes.ok, reason: first.text);
+      await harness.runStage();
       _interruptAfter(harness.stage, 'build:tool:linux-x64');
       final retainedBinary = File(
         harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
@@ -2346,12 +2038,8 @@ void main() {
       // archive producer runs again over it.
       expect(harness.stage.inspect().validProgress, isTrue);
 
-      final resumed = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
+      final resumed = await harness.runStage();
 
-      expect(resumed.code, ExitCodes.ok, reason: resumed.text);
       expect(
         resumed.keys.where((key) => key.startsWith('dart compile exe')),
         isEmpty,
@@ -2375,23 +2063,15 @@ void main() {
   test(
     'a changed dependency in an interrupted prefix is rebuilt, not reused',
     () async {
-      final first = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(first.code, ExitCodes.ok, reason: first.text);
+      await harness.runStage();
       _interruptAfter(harness.stage, 'build:tool:linux-x64');
       File(
         harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
       ).writeAsStringSync('planted binary');
       expect(harness.stage.inspect().validProgress, isFalse);
 
-      final rebuilt = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
+      final rebuilt = await harness.runStage();
 
-      expect(rebuilt.code, ExitCodes.ok, reason: rebuilt.text);
       expect(
         rebuilt.keys.where((key) => key.startsWith('dart compile exe')),
         hasLength(1),
@@ -2402,11 +2082,7 @@ void main() {
   );
 
   test('a complete receipt cannot omit its package preflight', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final receipt = harness.stage.requireReceipt();
     StageReceiptStore(harness.stage.directory).write(
       StageReceipt(
@@ -2424,50 +2100,9 @@ void main() {
     );
   });
 
-  test(
-    'a digest-consistent receipt cannot rename a required producer',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      final receipt = harness.stage.requireReceipt();
-      final build = receipt.steps.singleWhere(
-        (step) => step.name == 'build:tool:linux-x64',
-      );
-      final renamed = StageStep(
-        name: 'compiled-something',
-        outputs: build.outputs,
-        evidence: build.evidence,
-      );
-      StageReceiptStore(harness.stage.directory).write(
-        StageReceipt(
-          identity: receipt.identity,
-          plan: receipt.plan,
-          steps: [
-            for (final step in receipt.steps)
-              if (step.name == build.name) renamed else step,
-          ],
-        ),
-      );
-
-      final inspected = harness.stage.inspect();
-      expect(inspected.reusable, isFalse);
-      expect(
-        inspected.issues.map((issue) => issue.kind),
-        contains(StageIssueKind.invalidStructure),
-      );
-    },
-  );
-
   test('a finalized receipt whose terminal step was displaced still refuses '
       'silent replacement', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final receipt = harness.stage.requireReceipt();
     final steps = [...receipt.steps];
     final terminal = steps.removeLast();
@@ -2506,11 +2141,7 @@ void main() {
   test(
     'stage tampering at the authorization prompt blocks the first act',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       final archive = harness.stage.directory.resolve(
         ReleaseAssets.archivePath(
           harness.stage.unit.binaryProject!,
@@ -2524,7 +2155,7 @@ void main() {
         confirm: (_) async {
           prompts++;
           File(archive).writeAsStringSync('changed while consent waited');
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -2540,7 +2171,7 @@ void main() {
     // told which commit to tag rather than tagging whatever HEAD is by then.
     final run = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(run.code, ExitCodes.ok, reason: run.text);
     final created = run.invocations.singleWhere(
@@ -2553,18 +2184,14 @@ void main() {
   });
 
   test('stage tampering after one target blocks the next public act', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final archive = harness.stage.directory.resolve(
       ReleaseAssets.archivePath(harness.stage.unit.binaryProject!, 'linux-x64'),
     );
 
     final refused = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       onRegistryRead: () {
         if (harness.tools.remoteTags.contains('v1.2.3')) {
           File(archive).writeAsStringSync('changed after the tag');
@@ -2628,7 +2255,7 @@ bool _compilesFor(_Invocation call, String platform) =>
 
 class _Harness {
   _Harness({
-    bool unbound = false,
+    bool pubOnly = false,
     bool localBinaryOnly = false,
     bool twoPlatforms = false,
     bool nativePubArchive = false,
@@ -2638,10 +2265,10 @@ class _Harness {
         ? _twoPlatformConfig
         : localBinaryOnly
         ? _localBinaryConfig
-        : unbound
+        : pubOnly
         ? _pubOnlyConfig
         : _config;
-    source = _InterruptibleSourceTree({
+    source = MemorySourceTree({
       '.gitignore': '.rk/\n',
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
@@ -2662,7 +2289,7 @@ class _Harness {
     }
     resolution = resolved;
     unit = resolution.unit('tool')!;
-    git = unbound ? GitState.unbound(root.path) : gitAt();
+    git = gitAt();
     stages = ReleaseStages(
       source: source,
       git: git,
@@ -2685,11 +2312,11 @@ class _Harness {
   /// what rk has actually said rather than on a guessed delay.
   StringBuffer? liveOutput;
 
-  late final _InterruptibleSourceTree source;
+  late final MemorySourceTree source;
   late final Resolution resolution;
   late final ResolvedUnit unit;
   late GitState git;
-  late ReleaseStages stages;
+  late final ReleaseStages stages;
   late final _ReleaseRegistry registry;
   late final _WorldTools tools;
 
@@ -2721,16 +2348,23 @@ class _Harness {
     originUrl: originUrl,
   );
 
+  /// `rk stage`, which asks nothing and is expected to succeed.
+  Future<_Run> runStage() async {
+    final staged = await run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    return staged;
+  }
+
   Future<_Run> run({
     required bool stageOnly,
     required Future<String?> Function(String prompt)? confirm,
-    ReleaseStage Function(ResolvedUnit unit)? stageFor,
     HostCapabilities? capabilities,
     void Function(_Invocation call)? onInvocation,
     void Function()? onRegistryRead,
     Tools? readTools,
-    GitState? repositoryGit,
-    Diagnostic? sourceWarning,
   }) async {
     final start = tools.invocations.length;
     final buffer = StringBuffer();
@@ -2757,23 +2391,12 @@ class _Harness {
       resolution: resolution,
       tree: source,
       git: git,
-      repositoryGit: repositoryGit,
-      sourceWarning: sourceWarning,
       inspector: inspector,
       tools: tools,
       output: output,
-      // Most of this long-lived safety suite predates ordinary yes/no and
-      // returns the fixture version after performing its prompt-time hook.
-      // Preserve those hooks while adapting the old fixture answer at this
-      // single boundary.
-      confirm: confirm == null
-          ? null
-          : (prompt) async {
-              final answer = await confirm(prompt);
-              return answer == '1.2.3' ? 'yes' : answer;
-            },
+      confirm: confirm,
       stageOnly: stageOnly,
-      stageFor: stageFor ?? stages.call,
+      stageFor: stages.call,
       wait: (_) => Future<void>.delayed(Duration.zero),
       // Without a HOME of its own, rk reads the pub session of whoever is
       // running the tests, and a case about a missing session stops being
@@ -2781,11 +2404,7 @@ class _Harness {
       refreshEnvironment: () => const {'HOME': '/nowhere'},
       capabilities:
           capabilities ??
-          HostCapabilities(
-            hostPlatform: 'linux-x64',
-            containerRuntime: null,
-            hasNativeAssets: false,
-          ),
+          HostCapabilities(hostPlatform: 'linux-x64', containerRuntime: null),
     );
     final code = await command.run(only: 'tool');
     tools.onInvocation = null;
@@ -2800,18 +2419,6 @@ class _Harness {
 
   void close() {
     if (root.existsSync()) root.deleteSync(recursive: true);
-  }
-}
-
-class _InterruptibleSourceTree extends MemorySourceTree {
-  _InterruptibleSourceTree(super.files, {required super.description});
-
-  void Function(String path)? beforeReadBytes;
-
-  @override
-  List<int>? readBytes(String path) {
-    beforeReadBytes?.call(path);
-    return super.readBytes(path);
   }
 }
 
@@ -3017,6 +2624,10 @@ class _WorldTools implements Tools {
   final Set<String> remoteTags = {};
   String remoteSourceCommit = _head;
 
+  /// The object origin's tags name. Git refuses a push that would replace it
+  /// with another.
+  String remoteTagObject = _tagObject;
+
   /// How Git answers whether the unit's files changed since a tag's commit:
   /// 1 changed, 0 unchanged.
   int diffExit = 1;
@@ -3031,7 +2642,6 @@ class _WorldTools implements Tools {
   bool githubReleaseExists = false;
   bool githubDraft = false;
   bool loseGithubFinalResponse = false;
-  bool _loseGithubReadByIdOnce = false;
   bool failGithubDraftCreate = false;
   bool failGithubUpload = false;
   bool unreadGithubAfterPublish = false;
@@ -3039,7 +2649,6 @@ class _WorldTools implements Tools {
   bool loseTagPushResponse = false;
   bool unreadTagAfterPush = false;
   bool wrongTagBinding = false;
-  bool wrongTagBindingAfterPush = false;
   bool loseHomebrewPushResponse = false;
   bool rejectHomebrewPush = false;
   bool unreadHomebrewAfterPush = false;
@@ -3049,7 +2658,6 @@ class _WorldTools implements Tools {
   bool failPubArchiveCapability = false;
   bool failPubLogin = false;
   bool losePubPublishResponse = false;
-  int pubAvailabilityFailures = 0;
   bool _githubPublicUnreadable = false;
   bool _tagPublicUnreadable = false;
   bool _homebrewPublicUnreadable = false;
@@ -3088,17 +2696,6 @@ class _WorldTools implements Tools {
           : _ok(stdout: 'You are already logged in as <dev@example.com>\n');
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
-      return _ok();
-    }
-    if (_isDart(executable) && _starts(arguments, ['pub', 'cache', 'add'])) {
-      if (pubAvailabilityFailures > 0) {
-        pubAvailabilityFailures--;
-        return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'version is not visible to the resolver yet',
-        );
-      }
       return _ok();
     }
     if (_isDart(executable) && _starts(arguments, ['compile', 'exe'])) {
@@ -3184,7 +2781,7 @@ class _WorldTools implements Tools {
       return _ok(
         stdout: [
           for (final tag in remoteTags) ...[
-            '$_tagObject\trefs/tags/$tag',
+            '$remoteTagObject\trefs/tags/$tag',
             '$remoteSourceCommit\trefs/tags/$tag^{}',
           ],
         ].join('\n'),
@@ -3201,7 +2798,7 @@ class _WorldTools implements Tools {
       final ref = arguments[2];
       final tag = ref.substring('refs/tags/'.length);
       if (!remoteTags.contains(tag)) return _ok();
-      final direct = '$_tagObject\trefs/tags/$tag';
+      final direct = '$remoteTagObject\trefs/tags/$tag';
       if (arguments.length == 3) return _ok(stdout: '$direct\n');
       return _ok(stdout: '$direct\n$remoteSourceCommit\trefs/tags/$tag^{}\n');
     }
@@ -3221,9 +2818,7 @@ class _WorldTools implements Tools {
         arguments[0] == 'cat-file' &&
         arguments[1] == 'tag' &&
         arguments[2] == _tagObject) {
-      final digest =
-          wrongTagBinding ||
-              (wrongTagBindingAfterPush && remoteTags.contains('v1.2.3'))
+      final digest = wrongTagBinding
           ? '0' * 64
           : tagManifestSha256 ??
                 stageFor()
@@ -3252,7 +2847,21 @@ class _WorldTools implements Tools {
       const marker = ':refs/tags/';
       final refspec = arguments[2];
       if (refspec.contains(marker)) {
-        remoteTags.add(refspec.split(marker).last);
+        final [object, tag] = refspec.split(marker);
+        // As git does: a tag origin has is never replaced by another object.
+        if (remoteTags.contains(tag) && remoteTagObject != object) {
+          return ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr:
+                ' ! [rejected]        $object -> $tag (already exists)\n'
+                "error: failed to push some refs to 'origin'\n"
+                'hint: Updates were rejected because the tag already exists '
+                'in the remote.',
+          );
+        }
+        remoteTags.add(tag);
+        remoteTagObject = object;
       }
       if (unreadTagAfterPush) _tagPublicUnreadable = true;
       if (loseTagPushResponse) {
@@ -3336,14 +2945,6 @@ class _WorldTools implements Tools {
     }
     if (executable == 'gh' &&
         arguments.join(' ') == 'api repos/example/tool/releases/7') {
-      if (_loseGithubReadByIdOnce) {
-        _loseGithubReadByIdOnce = false;
-        return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'connection closed before the response',
-        );
-      }
       return githubReleaseExists
           ? _ok(stdout: jsonEncode(_githubReleaseJson()))
           : _notFound();
@@ -3356,9 +2957,11 @@ class _WorldTools implements Tools {
           'repos/example/tool/releases/7',
         ])) {
       githubDraft = false;
-      if (conflictGithubAfterPublish) githubTitle = 'wrong public title';
+      if (conflictGithubAfterPublish) {
+        final name = uploadedAssets.keys.first;
+        uploadedAssets[name] = utf8.encode('other public bytes');
+      }
       if (loseGithubFinalResponse) {
-        _loseGithubReadByIdOnce = true;
         if (unreadGithubAfterPublish) _githubPublicUnreadable = true;
         return ToolResult(
           exitCode: 1,

@@ -20,11 +20,9 @@ TargetStage githubReleaseNotesStage({
 }) {
   // The notes are extracted from the commit the stage names; their bytes are
   // recorded and verified like any other output.
-  const contract = StageContributionContract(
-    step: StageStepContract(
-      'release-notes',
-      outputs: {'release-notes.md': 'notes'},
-    ),
+  const contract = StageStepContract(
+    'release-notes',
+    outputs: {'release-notes.md': 'notes'},
   );
   return TargetStage(
     target: target,
@@ -37,7 +35,7 @@ TargetStage githubReleaseNotesStage({
 Future<TargetStageOutcome> _prepareReleaseNotes(
   TargetStageContext context,
 ) async {
-  final receiptName = context.contract.step.name;
+  final receiptName = context.contract.name;
   final notes = _releaseNotes(context.stage.unit, context.source);
   if (notes == null) {
     return TargetStageFailure(

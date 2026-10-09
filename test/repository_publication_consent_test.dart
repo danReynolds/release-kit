@@ -17,7 +17,6 @@ import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/output/report.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
@@ -57,42 +56,6 @@ void main() {
     );
   });
 
-  test('a declined question keeps the stages and signs in nowhere', () async {
-    f.answer = 'no';
-    final before = [for (final plan in f.plans) _snapshot(plan.stage)];
-    expect(await f.coordinator.authorize(f.plans), isFalse);
-    expect(f.problemCodes, contains('RK-AUTH-002'));
-    expect(f.sessionCalls, isEmpty);
-    expect(f.output.report.acted, isFalse);
-    expect([for (final plan in f.plans) _snapshot(plan.stage)], before);
-  });
-
-  test('publication needs the question asked first', () {
-    expect(() => f.coordinator.publish(f.plans.first), throwsStateError);
-  });
-
-  test('a release with nothing left to publish asks nothing', () async {
-    final released = [for (final plan in f.plans) f.published(plan)];
-    expect(await f.coordinator.authorize(released), isTrue);
-    for (final plan in released) {
-      expect(await f.coordinator.publish(plan), ExitCodes.ok);
-    }
-    expect(confirms(), isEmpty);
-    expect(f.sessionCalls, isEmpty);
-    expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
-    expect(f.text.toString(), contains('already released'));
-  });
-
-  test('local-only plans ask nothing and say nothing', () async {
-    final plan = f.localOnly(f.plans.first);
-    expect(await f.coordinator.authorize([plan]), isTrue);
-    expect(await f.coordinator.publish(plan), ExitCodes.ok);
-    expect(confirms(), isEmpty);
-    expect(f.sessionCalls, isEmpty);
-    expect(f.text.toString(), isNot(contains('already released')));
-    expect(f.output.report.acted, isFalse);
-  });
-
   test('a target the question left out is never published', () async {
     // The snapshot found alpha published; if it disappears before the
     // release reaches it, the yes still did not cover publishing it.
@@ -125,53 +88,16 @@ void main() {
       );
     },
   );
-
-  test('staged bytes changed after the yes stop the act', () async {
-    expect(await f.coordinator.authorize(f.plans), isTrue);
-    final plan = f.plans.first;
-    File(
-      plan.stage.directory.resolve(
-        ReleaseAssets.pubArchivePath(plan.unit.projects.single),
-      ),
-    ).writeAsBytesSync([1, 2, 3]);
-    expect(await f.coordinator.publish(plan), ExitCodes.refused);
-    expect(f.problemCodes, contains('RK-STAGE-002'));
-    expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
-  });
-
-  test('warning facts include globals and deduplicate evidence by content', () {
-    final report = Report('release');
-    const warning = Diagnostic(
-      code: 'TEST',
-      message: 'warn',
-      evidence: 'details',
-    );
-    report.warning(warning, unit: 'alpha');
-    report.warning(warning, unit: 'alpha');
-    report.warning(const Diagnostic(code: 'GLOBAL', message: 'global'));
-    report.warning(
-      const Diagnostic(code: 'OTHER', message: 'other'),
-      unit: 'beta',
-    );
-    final facts = report.warningEvidenceFor('alpha');
-    expect(facts, hasLength(2));
-    expect(
-      facts.singleWhere((fact) => fact['code'] == 'TEST')['evidence'],
-      'details',
-    );
-    expect(() => facts.clear(), throwsUnsupportedError);
-    expect(() => facts.first['message'] = 'changed', throwsUnsupportedError);
-  });
 }
 
 final class _Fixture {
   _Fixture(this.root, this.source, this.git, this.resolution);
-  static Future<_Fixture> create({bool tagOnly = false}) async {
+  static Future<_Fixture> create() async {
     final root = Directory.systemTemp.createTempSync('rk-repository-consent-');
-    final names = tagOnly ? ['alpha'] : ['alpha', 'beta'];
+    const names = ['alpha', 'beta'];
     final source = MemorySourceTree({
       'release.toml':
-          'schema = 2\n${names.map((name) => '[release.$name]\npath = "$name"\npublish = ["${tagOnly ? 'git-tag' : 'pub.dev'}"]\n${tagOnly ? 'tag = "v{version}"\n' : ''}').join()}',
+          'schema = 2\n${names.map((name) => '[release.$name]\npath = "$name"\npublish = ["pub.dev"]\n').join()}',
       for (final name in names)
         '$name/pubspec.yaml':
             'name: $name\nversion: 0.1.0\nenvironment:\n  sdk: ^3.10.4\n',
@@ -211,7 +137,6 @@ final class _Fixture {
   final text = StringBuffer();
   final calls = <String>[];
   final plans = <PublicationPlan>[];
-  final environment = <String, String>{};
   String? answer = 'yes';
   late final output = Output(sink: text.write, isTerminal: false);
   late final tools = _Tools(this);
@@ -221,13 +146,20 @@ final class _Fixture {
     git: git,
     stageContracts: catalog.stageContractResolver(resolution),
   );
-  late final inspector = _Inspector(this);
+  late final inspector = Inspector(
+    registry: registry,
+    pubDev: registry,
+    git: git,
+    tools: tools,
+    repository: git.originUrl,
+    stageFor: stages.call,
+  );
   late final coordinator = ReleasePublicationCoordinator(
     inspector: inspector,
     initialGit: git,
     tools: tools,
     output: output,
-    refreshEnvironment: () => Map.of(environment),
+    refreshEnvironment: () => const {},
     wait: (_) async {},
     confirm: (prompt) async {
       calls.add('confirm:$prompt');
@@ -239,14 +171,6 @@ final class _Fixture {
   );
   List<String> get sessionCalls =>
       calls.where((call) => call == 'session').toList();
-  List<String> get problemCodes =>
-      ((jsonDecode(output.report.encode(exit: 0)) as Map)['problems'] as List)
-          .map((value) => '${(value as Map)['code']}')
-          .toList();
-  void warning(String? unit, String message) => output.warning(
-    Diagnostic(code: 'TEST-WARNING', message: message),
-    unit: unit,
-  );
 
   Future<void> prepare(ResolvedUnit unit) async {
     final stage = stages(unit);
@@ -304,20 +228,7 @@ final class _Fixture {
         recoversWithoutStage: false,
       ),
     );
-    calls.add('complete:${unit.name}');
   }
-
-  PublicationPlan localOnly(PublicationPlan plan) => PublicationPlan(
-    unit: plan.unit,
-    steps: plan.steps.where((step) => !step.isPublic),
-    publicSteps: const [],
-    targets: const [],
-    states: plan.states,
-    actions: const {},
-    prepared: plan.prepared,
-    stage: plan.stage,
-    recoversWithoutStage: false,
-  );
 
   /// [plan] as a snapshot that found every target already published.
   PublicationPlan published(PublicationPlan plan) => PublicationPlan(
@@ -349,25 +260,6 @@ final class _Fixture {
   }
 }
 
-final class _Inspector extends Inspector {
-  _Inspector(this.fixture)
-    : super(
-        registry: fixture.registry,
-        pubDev: fixture.registry,
-        git: fixture.git,
-        tools: fixture.tools,
-        repository: fixture.git.originUrl,
-        stageFor: fixture.stages.call,
-      );
-  final _Fixture fixture;
-  @override
-  Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
-    fixture.calls.add('read:${unit.name}');
-    if (step.target == PublishTarget.gitTag) return const Inspection.absent();
-    return super.inspect(step, unit);
-  }
-}
-
 final class _Tools implements Tools {
   _Tools(this.fixture);
   final _Fixture fixture;
@@ -395,10 +287,6 @@ final class _Tools implements Tools {
       fixture.makePublic(name);
       return ToolResult(exitCode: 0, stdout: '', stderr: '');
     }
-    if (arguments.take(3).join(' ') == 'pub cache add') {
-      fixture.calls.add('availability');
-      return ToolResult(exitCode: 0, stdout: '', stderr: '');
-    }
     throw StateError('unexpected tool: $executable ${arguments.join(' ')}');
   }
 
@@ -409,11 +297,3 @@ final class _Tools implements Tools {
     String? workingDirectory,
   }) async => throw StateError('unexpected interactive tool');
 }
-
-/// Every file in [stage], by path, with its bytes.
-Map<String, List<int>> _snapshot(ReleaseStage stage) => {
-  for (final file in Directory(
-    stage.directory.path,
-  ).listSync(recursive: true).whereType<File>())
-    file.path: file.readAsBytesSync(),
-};

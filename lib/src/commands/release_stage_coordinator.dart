@@ -14,7 +14,6 @@ import '../engine/producers.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage_contract.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
@@ -117,9 +116,9 @@ final class ReleaseStageCoordinator {
       inspected,
       staging.outputsByProducer.values.expand((outputs) => outputs).toSet(),
     );
-    final inputs = await _prepareStageInputs(unit, inspected);
-    if (inputs == null) return null;
-    return staging.._signing = inputs.signing;
+    final signing = await _prepareStageInputs(unit, inspected);
+    if (signing == null) return null;
+    return staging.._signing = signing.value;
   }
 
   /// Produces or reuses the exact receipt-backed private stage [staging]
@@ -154,7 +153,7 @@ final class ReleaseStageCoordinator {
     if (inspected.reusable) {
       stageProgress
         ..restore(inspected.receipt!.steps)
-        ..settle(title: '${unit.name} ${unit.version} · staged');
+        ..settle(title: '${unit.name} ${unit.version} · already staged');
       _showStageWarnings(
         unit,
         _recordedStageWarnings(inspected.receipt!.steps, targetStagesByName),
@@ -168,7 +167,6 @@ final class ReleaseStageCoordinator {
           publishedRequirement: signature['published_requirement'] as String?,
           firstIdentity: signature['first_identity']! as bool,
           certificateName: signature['certificate']! as String,
-          certificateSha256: signature['certificate_sha256']! as String,
           designatedRequirement: signature['designated_requirement'] as String?,
           codeId: signature['code_id']! as String,
         );
@@ -194,26 +192,8 @@ final class ReleaseStageCoordinator {
       return PreparedRelease(claims: claims, signing: recoveredSigning);
     }
 
-    final stageProblem = preparationProblem(
-      unit,
-      inspected,
-      mayReplaceReviewed: stageOnly,
-    );
-    if (stageProblem != null) {
-      stageProgress.discard();
-      output.problem(stageProblem, unit: unit.name);
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-
     if (inspected.validProgress || inspected.planRecorded) {
       output.say('Resuming interrupted staging.', role: VisualRole.secondary);
-    } else if (!stage.directory.identity.isGitBound) {
-      output.say(
-        'Staging a temporary source snapshot; each run starts a new stage.',
-        role: VisualRole.secondary,
-      );
-      stage.discardEarlierUnboundStages();
     } else if (inspected.claimsCompletion) {
       output.say(
         'Rebuilding: the recorded stage no longer verifies.',
@@ -303,9 +283,7 @@ final class ReleaseStageCoordinator {
       try {
         final result = await targetStage.prepare(
           TargetStageContext(
-            contract: StageContributionContract(
-              step: stage.producerContract(receiptName),
-            ),
+            contract: stage.producerContract(receiptName),
             tools: tools,
             git: initialGit,
             attach: output.report.attach,
@@ -343,10 +321,9 @@ final class ReleaseStageCoordinator {
       } on Object catch (error) {
         _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
-        _stageOperationProblem('${target.label} stage preparation', error);
         return _StageWorkCompletion.failed(
           receiptName,
-          HaltKind.stoppedPartway,
+          _stageOperationProblem('${target.label} stage preparation', error),
         );
       }
     }
@@ -362,7 +339,10 @@ final class ReleaseStageCoordinator {
       try {
         final laneSource = laneSources.putIfAbsent(
           laneName,
-          () => ProducerLaneSource.export(source),
+          () => ProducerLaneSource.export(
+            source,
+            project: unit.project(step.project!),
+          ),
         );
         final chain = laneChains.putIfAbsent(
           laneName,
@@ -410,10 +390,9 @@ final class ReleaseStageCoordinator {
       } on Object catch (error) {
         _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
-        _stageOperationProblem('the ${unit.name} stage', error);
         return _StageWorkCompletion.failed(
           receiptName,
-          HaltKind.stoppedPartway,
+          _stageOperationProblem('the ${unit.name} stage', error),
         );
       }
     }
@@ -485,11 +464,8 @@ final class ReleaseStageCoordinator {
         releaseAssets: ReleaseAssets.bundleFor(unit),
         evidence: {
           'requested_mode': stageOnly ? 'stage' : 'one-shot',
-          if (stage.directory.identity.isGitBound)
-            'source_commit': stage.directory.identity.headCommit,
-          if (stage.directory.identity.isGitBound)
-            'source_tree': stage.directory.identity.headTree,
-          if (!stage.directory.identity.isGitBound) 'source_binding': 'unbound',
+          'source_commit': stage.directory.identity.headCommit,
+          'source_tree': stage.directory.identity.headTree,
         },
       );
     } on Object catch (error) {
@@ -573,25 +549,20 @@ final class ReleaseStageCoordinator {
     return warnings;
   }
 
+  /// Says [found] with the run's other warnings, once every unit is staged.
   void _showStageWarnings(ResolvedUnit unit, Iterable<_StageWarning> found) {
     final seen = <String>{};
-    final warnings = [
-      for (final warning in found)
-        if (seen.add(
-          '${warning.diagnostic.code}\u0000'
-          '${warning.diagnostic.message}',
-        ))
-          warning,
-    ];
-    if (warnings.isEmpty) return;
-    output.blank();
-    output.heading('Warnings');
-    for (final warning in warnings) {
-      output.warning(
+    for (final warning in found) {
+      if (!seen.add(
+        '${warning.diagnostic.code}\u0000'
+        '${warning.diagnostic.message}',
+      )) {
+        continue;
+      }
+      output.deferWarning(
         warning.diagnostic,
         unit: unit.name,
         target: warning.target,
-        depth: 1,
       );
     }
   }
@@ -609,7 +580,14 @@ final class ReleaseStageCoordinator {
     );
   }
 
-  void _stageOperationProblem(String operation, Object error) {
+  /// Reports [error] from [operation], and says how the stage stopped.
+  HaltKind _stageOperationProblem(String operation, Object error) {
+    // The source cannot be staged as committed, which is known before any
+    // of it is built, and says why itself.
+    if (error is StageSourceRefusal) {
+      output.problem(error.diagnostic);
+      return HaltKind.beforeActing;
+    }
     output.problem(
       Diagnostic(
         code: 'RK-STAGE-003',
@@ -620,6 +598,7 @@ final class ReleaseStageCoordinator {
         evidence: '$error',
       ),
     );
+    return HaltKind.stoppedPartway;
   }
 
   StageStep _captureProducerStep(
@@ -643,7 +622,7 @@ final class ReleaseStageCoordinator {
   }
 
   /// Resolves unit-scoped claims and signing identity before producers run.
-  Future<_StageInputs?> _prepareStageInputs(
+  Future<({ReleaseSigningContext? value})?> _prepareStageInputs(
     ResolvedUnit unit,
     StageInspection inspected,
   ) async {
@@ -725,18 +704,19 @@ final class ReleaseStageCoordinator {
           certificateName: keychain.identity!.name,
           codeId: codeId,
           identity: keychain.identity,
-          certificateSha256: keychain.certificateSha256,
         );
       }
     }
 
     row.complete(note: 'checked');
     live.discard();
-    return _StageInputs(signing: signing);
+    return (value: signing);
   }
 
-  Future<({bool ok, SigningIdentity? identity, String? certificateSha256})>
-  _signingCertificate(ResolvedUnit unit, String? publishedRequirement) async {
+  Future<({bool ok, SigningIdentity? identity})> _signingCertificate(
+    ResolvedUnit unit,
+    String? publishedRequirement,
+  ) async {
     final signer = MacOsSigner(tools: tools);
     final certificates = await signer.availableIdentities();
     Diagnostic? refusal;
@@ -760,10 +740,10 @@ final class ReleaseStageCoordinator {
       );
     } else if (publishedRequirement != null &&
         BinaryChain.teamOf(publishedRequirement) == null) {
-      // The sign step also refuses this as RK-SIGN-001. The requirement is in
-      // hand here, so the question "can rk tell which certificate reproduces
-      // this?" is answerable before stage work begins and does not change by
-      // waiting.
+      // The requirement is in hand here, so the question "can rk tell which
+      // certificate reproduces this?" is answerable before stage work begins
+      // and does not change by waiting. The sign step signs with the
+      // certificate chosen here.
       refusal = Diagnostic(
         code: 'RK-SIGN-001',
         message: 'the published release names no team rk can read',
@@ -777,10 +757,9 @@ final class ReleaseStageCoordinator {
             .where((c) => c.team == BinaryChain.teamOf(publishedRequirement))
             .isEmpty) {
       // The likeliest signing failure of all — a machine that has a
-      // certificate, just not the one the published release names — and the
-      // last one this preflight learned to catch. `MacOsSigner.sign` also
-      // refuses it, but checking here avoids spending time producing a stage
-      // whose signing identity can never match the published baseline.
+      // certificate, just not the one the published release names — caught
+      // before any time goes into a stage whose signing identity can never
+      // match the published baseline.
       refusal = Diagnostic(
         code: 'RK-SIGN-010',
         message: 'no certificate for the team the published release names',
@@ -827,7 +806,7 @@ final class ReleaseStageCoordinator {
     if (refusal != null) {
       output.problem(refusal, unit: unit.name);
       output.halt(HaltKind.beforeActing);
-      return (ok: false, identity: null, certificateSha256: null);
+      return (ok: false, identity: null);
     }
     final selected = publishedRequirement == null
         ? certificates!.single
@@ -835,26 +814,7 @@ final class ReleaseStageCoordinator {
             (certificate) =>
                 certificate.team == BinaryChain.teamOf(publishedRequirement),
           );
-    final fingerprint = await signer.certificateSha256(selected);
-    if (fingerprint == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-SIGN-012',
-          message:
-              'the selected signing certificate fingerprint could not '
-              'be read',
-          remedy:
-              '`security find-certificate -a -c '
-              '"${selected.name}" -Z` must report the SHA-256 and SHA-1 '
-              'hashes for the exact identity selected by '
-              '`security find-identity`.',
-        ),
-        unit: unit.name,
-      );
-      output.halt(HaltKind.beforeActing);
-      return (ok: false, identity: null, certificateSha256: null);
-    }
-    return (ok: true, identity: selected, certificateSha256: fingerprint);
+    return (ok: true, identity: selected);
   }
 
   /// The designated requirement of the newest already-published release,
@@ -910,7 +870,6 @@ final class ReleaseStageCoordinator {
         tag: tag,
         executable: project.executable!,
         into: '${scratch.path}/published-identity',
-        expectedPublished: true,
       );
       try {
         scratch.deleteSync(recursive: true);
@@ -975,8 +934,7 @@ final class ReleaseStageCoordinator {
               ? MacSigning(
                   publishedRequirement: signing!.publishedRequirement,
                   codeId: signing.codeId,
-                  identity: signing.identity,
-                  certificateSha256: signing.certificateSha256,
+                  identity: signing.identity!,
                 )
               : null,
         );
@@ -1004,8 +962,7 @@ final class ReleaseStageCoordinator {
           project,
           progress: progress,
           environment: {
-            if (stage.identity.headCommit case final commit?)
-              'RK_SOURCE_COMMIT': commit,
+            'RK_SOURCE_COMMIT': stage.identity.headCommit,
             if (initialGit.originUrl case final repository?)
               'RK_REPOSITORY': repository,
             'RK_VERSION': project.version.canonical,
@@ -1060,12 +1017,6 @@ final class _StageWarning {
   final String? target;
 }
 
-class _StageInputs {
-  const _StageInputs({required this.signing});
-
-  final ReleaseSigningContext? signing;
-}
-
 /// One unit's staging, settled up to its producers: see
 /// [ReleaseStageCoordinator.begin].
 final class UnitStaging {
@@ -1107,14 +1058,14 @@ final class UnitStaging {
 
   late final Map<String, TargetStage> targetStagesByName = {
     for (final targetStage in targetStages)
-      targetStage.contract.step.name: targetStage,
+      targetStage.contract.name: targetStage,
   };
 
   late final Map<String, Set<String>> outputsByProducer = {
     for (final step in producerSteps)
       receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
     for (final entry in targetStagesByName.entries)
-      entry.key: entry.value.contract.step.outputs.keys.toSet(),
+      entry.key: entry.value.contract.outputs.keys.toSet(),
   };
 }
 

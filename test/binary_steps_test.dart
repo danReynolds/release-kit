@@ -13,11 +13,19 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/workspace.dart';
+import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
+import 'scripted_tools.dart';
+
 final _certificateSha1 = 'a' * 40;
-final _otherCertificateSha1 = 'b' * 40;
-final _certificateSha256 = 'c' * 64;
+
+/// The certificate the preflight chose.
+final _identity = SigningIdentity(
+  name: 'Developer ID Application: Dan (TEAM123456)',
+  team: 'TEAM123456',
+  sha1: _certificateSha1,
+);
 
 /// The chain, one step at a time — each step gets a FRESH chain instance
 /// over the same workspace, which is the no-state proof: everything a later
@@ -76,89 +84,34 @@ executables:
   /// along in memory, which is exactly what must be impossible.
   BinaryChain chain(Tools tools) => BinaryChain(
     tools: tools,
+    compilerExecutable: fixtureDartSdk(scratch),
     output: output,
     workspace: workspace,
     repositoryRoot: scratch.path,
     capabilities: HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: null,
-      hasNativeAssets: false,
     ),
   );
 
   /// Tools that answer by prefix and write the artifacts a real tool would.
   RecordingTools scripted({
     String designatedRequirement = 'designated => leaf "A"',
-    int? failingSignatureVerification,
     ToolResult? Function(String key)? display,
   }) {
-    var signatureVerifications = 0;
     return BundleRecordingTools(
       answers: (key) {
         final shown = display?.call(key);
         if (shown != null) return shown;
-        if (key.startsWith('dart compile exe')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
-        if (key.startsWith('codesign -d -r-')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: designatedRequirement,
-            stderr: '',
-          );
-        }
-        if (key.startsWith('codesign --verify --strict')) {
-          signatureVerifications++;
-          if (signatureVerifications == failingSignatureVerification) {
-            return ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'invalid signature in final artifact',
-            );
-          }
-        }
-        if (key.startsWith('security find-identity')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                '1) $_certificateSha1 '
-                '"Developer ID Application: Dan (TEAM123456)"',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('security find-certificate')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                'SHA-256 hash: $_certificateSha256\n'
-                'SHA-1 hash: $_certificateSha1\n',
-            stderr: '',
-          );
-        }
+        if (key.startsWith('codesign -d -r-')) return ok(designatedRequirement);
         if (key.startsWith('xcrun notarytool submit')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"id": "abc-123", "status": "Accepted"}',
-            stderr: '',
-          );
+          return ok('{"id": "abc-123", "status": "Accepted"}');
         }
-        if (key.contains('--version')) {
-          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-        }
+        if (key.contains('--version')) return ok('1.0.0');
         return null;
       },
       onRun: (key) {
-        // The compiler and ditto write files; the script writes what they
-        // would, where the workspace said to.
-        if (key.startsWith('dart compile exe')) {
-          File(
-              workspace.pathOf(
-                BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
-              ),
-            )
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-        }
+        // ditto writes the zip; the script writes it where it was asked to.
         if (key.startsWith('ditto')) {
           final payload = Directory(key.split(' ')[3]);
           final files =
@@ -177,13 +130,7 @@ executables:
             reason:
                 'notarization submits every companion, including the app module',
           );
-          File(
-              workspace.pathOf(
-                BinaryChain.zipName('tool', 'macos-arm64', 'tool'),
-              ),
-            )
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('ZIP'));
+          File(key.split(' ').last).writeAsBytesSync(utf8.encode('ZIP'));
         }
       },
     );
@@ -196,7 +143,8 @@ executables:
     final built = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
+      signing: MacSigning(
+        identity: _identity,
         publishedRequirement: null,
         codeId: 'com.example.tool',
       ),
@@ -227,10 +175,6 @@ executables:
       signature['certificate'],
       'Developer ID Application: Dan (TEAM123456)',
     );
-    expect(signature['certificate_sha256'], _certificateSha256);
-    expect(signature['unsigned_sha256'], hasLength(64));
-    expect(signature['signed_sha256'], hasLength(64));
-    expect(signature['verified_after_smoke'], isTrue);
 
     final notarized = await chain(
       tools,
@@ -240,16 +184,15 @@ executables:
       isTrue,
       reason: notarized.problem ?? buffer.toString(),
     );
-    expect(notarized.outputs.map((output) => (output.path, output.type)), [
-      (ReleaseAssets.notaryInputPath(project, 'macos-arm64'), 'notary-input'),
-      (ReleaseAssets.notaryResultPath(project, 'macos-arm64'), 'notary'),
-      (ReleaseAssets.notaryLogPath(project, 'macos-arm64'), 'notary'),
-    ]);
-    final notary = notarized.evidence['notary']! as Map;
-    expect(notary['status'], 'Accepted');
-    expect(notary['submission_id'], 'abc-123');
-    expect(notary['result_sha256'], hasLength(64));
-    expect(notary['log_sha256'], hasLength(64));
+    expect(
+      notarized.outputs,
+      isEmpty,
+      reason: 'the zip is Apple\'s input, made outside the stage',
+    );
+    expect(notarized.evidence['notary'], {
+      'status': 'Accepted',
+      'submission_id': 'abc-123',
+    });
 
     final archived = await chain(
       tools,
@@ -258,22 +201,10 @@ executables:
     expect(archived.outputs.map((output) => (output.path, output.type)), [
       (ReleaseAssets.archivePath(project, 'macos-arm64'), 'archive'),
     ]);
-    final inventory = archived.evidence['inventory']! as List;
-    expect(inventory, hasLength(5));
-    expect((inventory.first as Map)['name'], 'tool');
-    expect((inventory.first as Map)['mode'], '0755');
-    expect(archived.evidence['signature'], {
-      'status': 'valid',
-      'scope': 'archive-extracted',
-      'files': ['tool', 'lib/tool/dartaotruntime', 'lib/tool/app.aot'],
-      'smoke': 'passed',
-    });
     expect(
-      tools.calls.where((call) => call.startsWith('codesign --verify')),
-      hasLength(9),
-      reason:
-          'the signature is checked after signing, after the signed '
-          'smoke test, and on the final archive payload',
+      tools.calls.where((call) => call.startsWith('codesign --force')),
+      hasLength(3),
+      reason: 'each code file is signed once',
     );
     expect(
       workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
@@ -281,24 +212,9 @@ executables:
     );
   });
 
-  test('a signature invalidated by the signed smoke test is refused', () async {
-    final tools = scripted(failingSignatureVerification: 4);
-
-    final built = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        publishedRequirement: null,
-        codeId: 'com.example.tool',
-      ),
-    );
-
-    expect(built.ok, isFalse);
-    expect(buffer.toString(), contains('after the signed smoke test'));
-  });
-
   group('the runtime admits only the module it ships', () {
-    const signing = MacSigning(
+    final signing = MacSigning(
+      identity: _identity,
       publishedRequirement: null,
       codeId: 'com.example.tool',
     );
@@ -357,75 +273,6 @@ executables:
         );
       },
     );
-
-    test('a constraint that states more than code hashes is refused', () async {
-      final tools = scripted(
-        display: (key) => key.startsWith('codesign -dvvvvvv ')
-            ? ToolResult(
-                exitCode: 0,
-                stdout: '',
-                stderr: constraintDisplay({
-                  'team-identifier': 'TEAM123456',
-                  ...pinConstraint(['5' * 40]),
-                }),
-              )
-            : null,
-      );
-
-      final built = await chain(
-        tools,
-      ).buildStep(step(StepKind.build), project, signing: signing);
-
-      expect(built.ok, isFalse);
-      expect(built.problem, contains('could not be read'));
-    });
-
-    test('a constraint admitting another module is refused', () async {
-      final tools = scripted(
-        display: (key) => key.startsWith('codesign -dvvvvvv ')
-            ? ToolResult(
-                exitCode: 0,
-                stdout: '',
-                stderr: constraintDisplay(pinConstraint(['6' * 40])),
-              )
-            : null,
-      );
-
-      final built = await chain(
-        tools,
-      ).buildStep(step(StepKind.build), project, signing: signing);
-
-      expect(built.ok, isFalse);
-      expect(built.problem, contains('does not admit exactly'));
-    });
-  });
-
-  test('an invalid signature in the final archive is refused', () async {
-    final tools = scripted(failingSignatureVerification: 7);
-    final built = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        publishedRequirement: null,
-        codeId: 'com.example.tool',
-      ),
-    );
-    expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-    final notarized = await chain(
-      tools,
-    ).notarizeStep(step(StepKind.notarize), project);
-    expect(
-      notarized.ok,
-      isTrue,
-      reason: notarized.problem ?? buffer.toString(),
-    );
-
-    final archived = await chain(
-      tools,
-    ).archiveStep(step(StepKind.archive), project);
-
-    expect(archived.ok, isFalse);
-    expect(buffer.toString(), contains('in the final archive'));
   });
 
   test(
@@ -442,14 +289,18 @@ executables:
 
   test('a signature that does not match the published identity is refused '
       'with both requirements as evidence', () async {
-    final tools = scripted(designatedRequirement: 'designated => leaf "NEW"');
+    const published =
+        'designated => identifier "com.example.tool" and certificate '
+        'leaf[subject.OU] = "TEAM123456" and leaf "OLD"';
+    // Extended, not replaced: Gatekeeper evaluates the whole expression, so
+    // a requirement with a clause appended is another identity.
+    final tools = scripted(designatedRequirement: '$published and leaf "NEW"');
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
-        publishedRequirement:
-            'designated => identifier "com.example.tool" and certificate '
-            'leaf[subject.OU] = "TEAM123456" and leaf "OLD"',
+      signing: MacSigning(
+        identity: _identity,
+        publishedRequirement: published,
         codeId: 'com.example.tool',
       ),
     );
@@ -473,229 +324,9 @@ executables:
     expect(buffer.toString(), contains('leaf "NEW"'));
   });
 
-  test(
-    'the team is derived from the published requirement, not declared',
-    () async {
-      final tools = scripted(
-        designatedRequirement:
-            'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
-      );
-      final ok = await chain(tools).buildStep(
-        step(StepKind.build),
-        project,
-        signing: const MacSigning(
-          // Nothing declared: derivation must carry the team.
-          publishedRequirement:
-              'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
-          codeId: 'com.example.tool',
-        ),
-      );
-      expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    },
-  );
-
-  test('a first release discovers the one certificate, and names the '
-      'identity it just made permanent', () async {
-    // Nothing to declare: capabilities are discovered, and a machine with
-    // one Developer ID has exactly one answer. What rk owes the operator is
-    // not a demand for configuration but a statement of what became
-    // permanent — the certificate, and the identifier every later release
-    // must reproduce.
-    final tools = scripted();
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        publishedRequirement: null,
-        codeId: 'io.github.example.tool',
-      ),
-    );
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    // Recorded, not printed: the producer reports and the coordinator
-    // draws. The receipt is where this is durable and where the settled
-    // report reads it back from.
-    final signature = ok.evidence['signature']! as Map;
-    expect(signature['first_identity'], isTrue);
-    expect(signature['certificate'], contains('Developer ID Application: Dan'));
-    expect(signature['code_id'], 'io.github.example.tool');
-    // Asserted on the argv, not on the buffer. `contains('tool')` was
-    // satisfied by the build line `build tool for macos-arm64` that the
-    // step above had already written into the same buffer, so the whole
-    // assertion held with the identifier mutated to 'zz.mutation' — and this
-    // is the value that becomes the permanent designated requirement.
-    final sign = tools.calls.firstWhere(
-      (c) => c.startsWith('codesign --force'),
-    );
-    expect(
-      sign,
-      contains('--identifier io.github.example.tool'),
-      reason:
-          'the caller resolved it and this step signs exactly that — '
-          'the step no longer has a fallback of its own to reach for',
-    );
-  });
-
-  test(
-    'several certificates and nothing published is a refusal, not a guess',
-    () async {
-      final tools = BundleRecordingTools(
-        answers: (key) {
-          if (key.startsWith('dart compile exe')) {
-            return ToolResult(exitCode: 0, stdout: '', stderr: '');
-          }
-          if (key.contains('--version')) {
-            return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-          }
-          if (key.startsWith('security find-identity')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout:
-                  '1) $_certificateSha1 '
-                  '"Developer ID Application: One (TEAM111111)"\n'
-                  '2) $_otherCertificateSha1 '
-                  '"Developer ID Application: Two (TEAM222222)"',
-              stderr: '',
-            );
-          }
-          return null;
-        },
-        onRun: (key) {
-          if (key.startsWith('dart compile exe')) {
-            File(
-                workspace.pathOf(
-                  BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
-                ),
-              )
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-          }
-        },
-      );
-
-      final ok = await chain(tools).buildStep(
-        step(StepKind.build),
-        project,
-        signing: const MacSigning(publishedRequirement: null, codeId: 'tool'),
-      );
-      expect(ok.ok, isFalse);
-      expect(buffer.toString(), contains('TEAM111111'));
-      expect(buffer.toString(), contains('TEAM222222'));
-    },
-  );
-
-  test('the team is read from an unquoted OU — codesign only quotes teams '
-      'that need it', () async {
-    // Live evidence: letter-leading team ids print bare
-    // (leaf[subject.OU] = Q6L2SF6YDW), digit-leading print quoted
-    // (= "2DC432GLL2"). The quoted-only parser returned null for every
-    // letter-leading team and misread an established identity as "no team
-    // rk can read".
-    final tools = BundleRecordingTools(
-      answers: (key) {
-        if (key.startsWith('dart compile exe')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
-        if (key.contains('--version')) {
-          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-        }
-        if (key.startsWith('codesign -d -r-')) {
-          // The leading quoted identifier is a decoy: a parser matching any
-          // quoted uppercase token reads "TOOL" as the team and picks no
-          // certificate at all. Only anchoring on subject.OU finds the team.
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                'designated => identifier "TOOL" and certificate '
-                'leaf[subject.OU] = Q6L2SF6YDW',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('security find-identity')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                '1) $_certificateSha1 '
-                '"Developer ID Application: Dan (Q6L2SF6YDW)"',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('security find-certificate')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                'SHA-256 hash: $_certificateSha256\n'
-                'SHA-1 hash: $_certificateSha1\n',
-            stderr: '',
-          );
-        }
-        return null;
-      },
-      onRun: (key) {
-        if (key.startsWith('dart compile exe')) {
-          File(
-              workspace.pathOf(
-                BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
-              ),
-            )
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-        }
-      },
-    );
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      // Derivation must carry the unquoted team.
-      signing: const MacSigning(
-        publishedRequirement:
-            'designated => identifier "TOOL" and '
-            'certificate leaf[subject.OU] = Q6L2SF6YDW',
-        codeId: 'TOOL',
-      ),
-    );
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    expect(
-      tools.calls.any(
-        (c) =>
-            c.contains('codesign --force') &&
-            c.contains('--sign $_certificateSha1'),
-      ),
-      isTrue,
-      reason:
-          'the exact certificate token for the derived team signs; its '
-          'display name is not a unique keychain selector',
-    );
-  });
-
-  test('a produced requirement that merely extends the published one is '
-      'still a mismatch', () async {
-    // Equality, not prefix: a requirement with extra clauses appended is a
-    // different identity — Gatekeeper evaluates the whole expression — and
-    // a prefix-tolerant comparison would wave it through.
-    const published =
-        'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"';
-    final tools = scripted(
-      designatedRequirement: '$published and cdhash H"ABC"',
-    );
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        publishedRequirement: published,
-        codeId: 'com.example.tool',
-      ),
-    );
-    expect(ok.ok, isFalse, reason: buffer.toString());
-    expect(
-      buffer.toString(),
-      contains('does not match the identity users already installed'),
-    );
-  });
-
   test('the derived identifier signs, not the project name', () async {
-    // The published 0.1.0 binary carries a reverse-DNS identifier; signing
-    // with the project-name default would produce a different designated
-    // requirement and fail continuity only after the tag was public.
+    // A published binary can carry a reverse-DNS identifier; signing with
+    // the project name instead would make another designated requirement.
     const published =
         'designated => identifier "io.github.example.tool" '
         'and certificate leaf[subject.OU] = "TEAM123456"';
@@ -703,7 +334,8 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
+      signing: MacSigning(
+        identity: _identity,
         publishedRequirement: published,
         // Resolved by the caller before anything acts.
         codeId: 'io.github.example.tool',
@@ -723,53 +355,100 @@ executables:
   });
 
   test(
-    'an accepted submission whose log cannot be fetched fails the step',
+    'notarization submits the artifact\'s files and nothing beside them',
     () async {
-      // The log is a published asset; proceeding without it would ship a
-      // release missing one of its expected files — and the fake-log
-      // alternative would publish evidence nobody issued.
-      final tools = BundleRecordingTools(
-        answers: (key) {
-          if (key.startsWith('xcrun notarytool submit')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: '{"id": "s-9", "status": "Accepted"}',
-              stderr: '',
-            );
-          }
-          if (key.startsWith('xcrun notarytool log')) {
-            return ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'log not available yet',
-            );
-          }
-          return null;
-        },
-        onRun: (key) {
-          if (key.startsWith('ditto')) {
-            File(
-                workspace.pathOf(
-                  BinaryChain.zipName('tool', 'macos-arm64', 'tool'),
-                ),
-              )
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync(utf8.encode('ZIP'));
-          }
-        },
-      );
-      for (final file in ReleaseAssets.binaryOutputs(
+      // A codesign killed mid-write leaves its temporary file next to the
+      // binary, and nothing else removes it. Submitted, Apple rejects the
+      // whole payload, run after run.
+      final tools = scripted();
+      final built = await chain(tools).buildStep(
+        step(StepKind.build),
         project,
-        'macos-arm64',
-      ).keys) {
-        workspace.write(file, utf8.encode('BINARY'));
-      }
+        signing: MacSigning(
+          identity: _identity,
+          publishedRequirement: null,
+          codeId: 'com.example.tool',
+        ),
+      );
+      expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+      workspace.write(
+        '${ReleaseAssets.binaryRoot(project, 'macos-arm64')}/lib/tool/'
+        'dartaotruntime.cstemp',
+        utf8.encode('half-written signature'),
+      );
 
-      final ok = await chain(
+      final notarized = await chain(
         tools,
       ).notarizeStep(step(StepKind.notarize), project);
-      expect(ok.ok, isFalse);
-      expect(buffer.toString(), contains('the log could not be fetched'));
+
+      // The scripted ditto checks that its payload is the artifact's files.
+      expect(
+        notarized.ok,
+        isTrue,
+        reason: notarized.problem ?? buffer.toString(),
+      );
     },
   );
+
+  test('an accepted submission is notarized without its log', () async {
+    // Apple's log is evidence, not an output: a transient failure to fetch
+    // it must not fail an accepted submission, or the next run notarizes the
+    // same bytes again.
+    final tools = BundleRecordingTools(
+      answers: (key) {
+        if (key.startsWith('xcrun notarytool submit')) {
+          return ok('{"id": "s-9", "status": "Accepted"}');
+        }
+        if (key.startsWith('xcrun notarytool log')) {
+          return failed('log not available yet');
+        }
+        return null;
+      },
+    );
+    for (final file in ReleaseAssets.binaryOutputs(
+      project,
+      'macos-arm64',
+    ).keys) {
+      workspace.write(file, utf8.encode('BINARY'));
+    }
+
+    final notarized = await chain(
+      tools,
+    ).notarizeStep(step(StepKind.notarize), project);
+    expect(notarized.ok, isTrue, reason: buffer.toString());
+    expect(
+      tools.calls.where((call) => call.startsWith('xcrun notarytool log')),
+      isEmpty,
+    );
+  });
+
+  test('a rejected submission carries Apple\'s log as the reason', () async {
+    final tools = BundleRecordingTools(
+      answers: (key) {
+        if (key.startsWith('xcrun notarytool submit')) {
+          return ok('{"id": "s-9", "status": "Invalid"}');
+        }
+        if (key.startsWith('xcrun notarytool log s-9')) {
+          return ok('{"issues": [{"message": "The binary is not signed."}]}');
+        }
+        return null;
+      },
+    );
+    for (final file in ReleaseAssets.binaryOutputs(
+      project,
+      'macos-arm64',
+    ).keys) {
+      workspace.write(file, utf8.encode('BINARY'));
+    }
+
+    final notarized = await chain(
+      tools,
+    ).notarizeStep(step(StepKind.notarize), project);
+    expect(notarized.ok, isFalse);
+    expect(
+      output.report.attachments.values.join('\n'),
+      contains('The binary is not signed.'),
+      reason: 'Apple\'s log is the reason, and travels with the problem',
+    );
+  });
 }

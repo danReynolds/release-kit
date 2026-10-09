@@ -182,7 +182,8 @@ final class OutputTheme {
 /// step expands and a finished one collapses; and a pipe sees the same words
 /// the terminal ends up showing, with no cursor movement. The one exception
 /// is time: a terminal's settled rows keep how long they ran, and a pipe's
-/// transcript does not, so it reads the same from one run to the next.
+/// transcript does not. A pipe hears of a step still running after ten
+/// seconds once, without a time or a count, and warnings in release order.
 class Output {
   Output({
     required this.sink,
@@ -279,6 +280,7 @@ class Output {
   LiveProgress progressBoard(
     String title, {
     Duration delay = const Duration(milliseconds: 80),
+    Duration pipeDelay = const Duration(seconds: 10),
     bool emitSlowToNonTerminal = false,
     bool showElapsed = true,
   }) {
@@ -296,6 +298,7 @@ class Output {
       this,
       title,
       delay,
+      pipeDelay: pipeDelay,
       emitSlowToNonTerminal: emitSlowToNonTerminal,
       showElapsed: showElapsed,
     );
@@ -447,7 +450,6 @@ class Output {
     Verdict verdict = Verdict.unknown,
     String? detail,
     Map<String, String> evidence = const {},
-    Duration? took,
     String? action,
     int depth = 1,
     bool show = true,
@@ -464,7 +466,6 @@ class Output {
       permanent: step.isPermanent,
       public: step.isPublic,
       needs: step.needs,
-      took: took,
       action: action,
     );
     if (!show) return;
@@ -516,6 +517,7 @@ class Output {
       assert(false, 'a live progress board was never resolved by its owner');
       board.discard();
     }
+    flushWarnings();
     _yieldToProse();
   }
 
@@ -554,19 +556,24 @@ class Output {
     final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
     final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark, effectiveState);
 
-    // The indent is part of what is padded, so the note column stays put as
-    // the tree deepens rather than drifting right with it.
-    final indented = '${'  ' * depth}$label';
+    // The mark sits beside its row, at the row's indent: a nested row's mark
+    // reads as its bullet, not as a stray in the left margin. The text
+    // columns are where they would be without it, and the indent is part of
+    // what is padded, so the note column stays put as the tree deepens
+    // rather than drifting right with it.
+    final indent = '  ' * depth;
+    final indented = '$indent$label';
     final indentedWidth = displayWidth(indented);
+    final pad = labelWidth - displayWidth(indent);
     final plain = note == null
-        ? '$plainGlyph $indented'
+        ? '$indent$plainGlyph $label'
         : indentedWidth >= labelWidth
-        ? '$plainGlyph $indented $note'
-        : '$plainGlyph ${_padToWidth(indented, labelWidth)} $note';
+        ? '$indent$plainGlyph $label $note'
+        : '$indent$plainGlyph ${_padToWidth(label, pad)} $note';
     final width = terminalWidth;
     if (width != null && displayWidth(plain) > width) {
-      final firstPrefix = '$plainGlyph ${'  ' * depth}';
-      final paintedFirstPrefix = '$paintedGlyph ${'  ' * depth}';
+      final firstPrefix = '$indent$plainGlyph ';
+      final paintedFirstPrefix = '$indent$paintedGlyph ';
       final continuationPrefix = '${' ' * firstPrefix.runes.length}  ';
       _writeSettled(
         label,
@@ -590,11 +597,11 @@ class Output {
       return;
     }
 
-    final glyph = paintedGlyph;
+    final glyph = '$indent$paintedGlyph';
     if (note == null) {
       sink(
         '$glyph '
-        '${_style(indented, role: role, state: effectiveState, strong: strong)}\n',
+        '${_style(label, role: role, state: effectiveState, strong: strong)}\n',
       );
       return;
     }
@@ -605,12 +612,12 @@ class Output {
       // "permanent" out of column.
       sink(
         '$glyph '
-        '${_style(indented, role: role, state: effectiveState, strong: strong)} '
+        '${_style(label, role: role, state: effectiveState, strong: strong)} '
         '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
       );
       return;
     }
-    final padded = _padToWidth(indented, labelWidth);
+    final padded = _padToWidth(label, pad);
     sink(
       '$glyph '
       '${_style(padded, role: role, state: effectiveState, strong: strong)} '
@@ -825,6 +832,7 @@ class Output {
       if (held == null || kind.index > held.index) _heldHalt = kind;
       return;
     }
+    flushWarnings();
     // A later unit can fail before its own first act after an earlier unit in
     // the same repository command already published. The report is for the
     // whole invocation, so "nothing changed" would be false.
@@ -870,6 +878,7 @@ class Output {
     String? target,
     int depth = 0,
   }) {
+    flushWarnings();
     report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
@@ -878,20 +887,66 @@ class Output {
       depth: depth,
       state: RuntimeState.failure,
     );
-    if (diagnostic.remedy != null) {
-      if (diagnostic.code.startsWith('RK-CLI-') &&
-          diagnostic.remedy!.contains('\nUsage\n')) {
-        help(diagnostic.remedy!, depth: depth + 1);
-      } else {
-        say(diagnostic.remedy!, depth: depth + 1);
-      }
-    }
+    if (diagnostic.remedy != null) say(diagnostic.remedy!, depth: depth + 1);
   }
 
   /// Every problem in one pass, so a fix cycle is one edit round.
   void problems(List<Diagnostic> found) {
     for (final diagnostic in found) {
       problem(diagnostic);
+    }
+  }
+
+  /// Warnings recorded but not yet shown: see [deferWarning].
+  final List<({Diagnostic diagnostic, String? unit, String? target})>
+  _deferredWarnings = [];
+
+  /// Records a nonblocking diagnostic now, and shows it later with the run's
+  /// other warnings, in one section: before the run's next problem, halt or
+  /// next move, or at [flushWarnings]. Units staged side by side each find
+  /// their own; said as they arrive, they made a section per unit and
+  /// repeated the remedy they share under every one.
+  void deferWarning(Diagnostic diagnostic, {String? unit, String? target}) {
+    _deferredWarnings.add((diagnostic: diagnostic, unit: unit, target: target));
+  }
+
+  /// Shows every deferred warning under one heading, and records it in the
+  /// report. Warnings that share a remedy are listed together, and the remedy
+  /// is said once, after them. [order] names units in the order their
+  /// warnings are said: units staged side by side finish in any order, and
+  /// the run reads the same either way.
+  void flushWarnings({List<String> order = const []}) {
+    if (_deferredWarnings.isEmpty) return;
+    final rank = {for (final (index, unit) in order.indexed) unit: index};
+    final deferred = [..._deferredWarnings.indexed]
+      ..sort((a, b) {
+        final byUnit = (rank[a.$2.unit] ?? order.length).compareTo(
+          rank[b.$2.unit] ?? order.length,
+        );
+        return byUnit != 0 ? byUnit : a.$1.compareTo(b.$1);
+      });
+    _deferredWarnings.clear();
+    final seen = <String>{};
+    final byRemedy = <String?, List<Diagnostic>>{};
+    for (final (_, (:diagnostic, :unit, :target)) in deferred) {
+      final key = '$unit\u0000${diagnostic.code}\u0000${diagnostic.message}';
+      if (!seen.add(key)) continue;
+      report.warning(diagnostic, unit: unit, target: target);
+      byRemedy.putIfAbsent(diagnostic.remedy, () => []).add(diagnostic);
+    }
+    blank();
+    heading('Warnings');
+    for (final MapEntry(key: remedy, value: warnings) in byRemedy.entries) {
+      for (final diagnostic in warnings) {
+        final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
+        line(
+          '$where${diagnostic.message}',
+          mark: Mark.warning,
+          depth: 1,
+          state: RuntimeState.attention,
+        );
+      }
+      if (remedy != null) say(remedy, depth: 2);
     }
   }
 
@@ -917,6 +972,7 @@ class Output {
 
   /// The next command, which is what a reader wants after being told to act.
   void next(String command, {int depth = 0}) {
+    flushWarnings();
     report.next(command);
     // Marked by position, not by content: two identical lines are two lines,
     // and only the first is the reader's next move.
@@ -954,9 +1010,10 @@ final class LiveProgress {
     this._output,
     String title,
     this._delayDuration, {
+    required Duration pipeDelay,
     required this.emitSlowToNonTerminal,
     required this.showElapsed,
-  }) {
+  }) : _pipeDelay = pipeDelay {
     model = ProgressModel(
       title: title,
       clock: _output._clock,
@@ -969,6 +1026,12 @@ final class LiveProgress {
 
   final Output _output;
   final Duration _delayDuration;
+
+  /// How long a row runs before a pipe is told about it. Only a wait a
+  /// reader would wonder about, such as a long build or a sign-in, is
+  /// worth a line: shorter ones made the transcript differ from one run to
+  /// the next with how fast a read happened to answer.
+  final Duration _pipeDelay;
   final bool emitSlowToNonTerminal;
   final bool showElapsed;
   late final ProgressModel model;
@@ -1033,7 +1096,7 @@ final class LiveProgress {
     }
     _nonTerminalDelays.remove(row.id)?.cancel();
     _nonTerminalScheduled[row.id] = activity;
-    _nonTerminalDelays[row.id] = Timer(_delayDuration, () {
+    _nonTerminalDelays[row.id] = Timer(_pipeDelay, () {
       if (_closed ||
           row.state != ProgressRowState.active ||
           row.activity != activity) {
@@ -1043,7 +1106,7 @@ final class LiveProgress {
       _nonTerminalPrinted[row.id] = activity;
       final attached = identical(_output._progressBoard, this);
       if (attached) _output._progressBoard = null;
-      _writeDurableRow(row, active: true);
+      _writeDurableRow(row, active: true, inPipe: true);
       if (attached && !_closed) _output._progressBoard = this;
     });
   }
@@ -1179,6 +1242,7 @@ final class LiveProgress {
   (String, String, RuntimeState, RuntimeState) _rowPresentation(
     ProgressRow row, {
     required bool active,
+    bool inPipe = false,
   }) {
     return switch (row.state) {
       ProgressRowState.pending => (
@@ -1191,7 +1255,9 @@ final class LiveProgress {
         active ? _frames[_spin % _frames.length] : '…',
         [
           row.activity!.running,
-          if (row.detail != null) row.detail!,
+          // A count such as `2/6` is wherever the step had got to when the
+          // row was written: a pipe gets the step, not the moment.
+          if (row.detail != null && !inPipe) row.detail!,
           if (active && showElapsed) formatDuration(row.elapsed),
         ].join(' · '),
         RuntimeState.active,
@@ -1286,7 +1352,7 @@ final class LiveProgress {
       _output._progressBoard = null;
     }
     for (final row in printedRows) {
-      _writeDurableRow(row);
+      _writeDurableRow(row, inPipe: true);
     }
   }
 
@@ -1359,10 +1425,18 @@ final class LiveProgress {
         took: took,
       );
 
-  void _writeDurableRow(ProgressRow row, {int depth = 1, bool active = false}) {
+  /// [inPipe] is a row a pipe is told about on its own, outside the
+  /// board's snapshot: it names what it belongs to, and carries no time.
+  void _writeDurableRow(
+    ProgressRow row, {
+    int depth = 1,
+    bool active = false,
+    bool inPipe = false,
+  }) {
     var (glyph, status, glyphState, textState) = _rowPresentation(
       row,
-      active: active,
+      active: active && !inPipe,
+      inPipe: inPipe,
     );
     // A finished row that ran long enough for its counter to tick keeps its
     // total, on a terminal. A pipe's transcript stays the same every run.
@@ -1379,7 +1453,9 @@ final class LiveProgress {
       '✗' => Mark.blocked,
       _ => Mark.none,
     };
-    final subject = row.subject;
+    final subject = inPipe
+        ? '${row.group ?? model.title} · ${row.subject}'
+        : row.subject;
     final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
     _output.line(
       label,

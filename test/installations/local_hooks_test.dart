@@ -12,7 +12,7 @@ import 'fixtures.dart';
 
 void main() {
   test(
-    'local hooks preserve cwd, entrypoint, arguments, stdin and source edits',
+    'local launch with build hooks preserves cwd, entrypoint, arguments, stdin, stderr and exit status',
     () async {
       final scratch = Directory.systemTemp.createTempSync('rk hooks dollar\$ ');
       addTearDown(() => scratch.deleteSync(recursive: true));
@@ -39,8 +39,9 @@ void main() {
         '${pubspec.readAsStringSync()}\ndependencies:\n'
         '  local_native:\n    path: ${native.path}\n',
       );
-      final source = File('${native.path}/probe.c')
-        ..writeAsStringSync('int probe(void) { return 41; }');
+      File(
+        '${native.path}/probe.c',
+      ).writeAsStringSync('int probe(void) { return 41; }');
       File('${native.path}/hook/build.dart')
         ..createSync(recursive: true)
         ..writeAsStringSync(r'''
@@ -65,9 +66,9 @@ import 'dart:io';
 @Native<Int32 Function()>(assetId: 'package:local_native/probe')
 external int probe();
 Future<void> main(List<String> args) async {
-  if (args.contains('crash')) throw StateError('expected app failure');
   final input = await stdin.transform(utf8.decoder).join();
   print(jsonEncode({'cwd': Directory.current.path, 'script': Platform.script.toFilePath(), 'args': args, 'input': input, 'native': probe(), 'identity': const String.fromEnvironment('probe.identity')}));
+  stderr.writeln('app stderr');
   exitCode = args.contains('nonzero') ? 7 : 0;
 }
 ''');
@@ -82,8 +83,7 @@ Future<void> main(List<String> args) async {
       );
       final installed = await provider.install(project, (_) {});
       expect(installed.commands['orbit']!.workingDirectory, root.path);
-      final generation = await store.record(project, installed);
-      await store.activate(project, generation);
+      await store.activate(project, installed);
       final caller = Directory('${scratch.path}/caller')..createSync();
       // An unrelated, invalid package config must not influence the selected app.
       File('${caller.path}/.dart_tool/package_config.json')
@@ -117,13 +117,7 @@ Future<void> main(List<String> args) async {
       expect(result['input'], 'caller stdin\n');
       expect(result['native'], 41);
       expect(result['identity'], r'identity $literal');
-      source.writeAsStringSync('int probe(void) { return 42; }');
-      final edited = await invoke([]);
-      expect(edited.$1, 0, reason: edited.$3);
-      expect((jsonDecode(edited.$2) as Map)['native'], 42);
-      final failed = await invoke(['crash']);
-      expect(failed.$1, 255);
-      expect(failed.$3, contains('expected app failure'));
+      expect(first.$3, contains('app stderr'));
     },
     skip: Platform.isWindows,
     timeout: const Timeout(Duration(minutes: 3)),

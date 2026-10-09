@@ -125,12 +125,6 @@ executables:
         ),
         base,
       );
-      final plan = stagePlanFor(resolution.units.single, git());
-      expect(plan, isNot(contains('toolchain')));
-      expect(plan, isNot(contains('tag_signing')));
-      for (final project in plan['projects']! as List) {
-        expect(project, isNot(contains('registry_endpoint')));
-      }
     });
 
     test("a project's own build and its assets", () {

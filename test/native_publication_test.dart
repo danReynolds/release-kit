@@ -36,7 +36,13 @@ void main() {
       printOnFailure(
         events.skip(events.length > 100 ? events.length - 100 : 0).join('\n'),
       );
+      final outside = [...fixture.connections];
       await fixture.close();
+      expect(
+        outside,
+        isEmpty,
+        reason: 'only the loopback registry may be reached',
+      );
     });
   });
 
@@ -221,43 +227,21 @@ void main() {
     },
   );
 
-  test('an archive propagation wait recovers without reupload', () async {
+  test('an archive pub.dev does not serve yet delays nothing, and nothing is '
+      'uploaded twice', () async {
     final staged = await _stage(fixture);
+    // pub.dev lists a version before its archive downloads. A release reads
+    // the listing; it downloads nothing, so it waits on nothing.
     fixture.registry.unavailableArchives.add(_core);
-    final unavailable = Completer<void>();
-    fixture.registry.onEvent = (event) {
-      if (event.kind == 'archive_unavailable' &&
-          event.name == _core &&
-          !unavailable.isCompleted) {
-        unavailable.complete();
-      }
-    };
-    final interrupted = await fixture.rk([
-      'release',
-      '--yes',
-      '--json',
-    ], interruptWhen: unavailable.future);
-    expect(interrupted.code, 130, reason: interrupted.all);
-    expect(unavailable.isCompleted, isTrue);
-    fixture.registry.onEvent = null;
-    expect(fixture.registry.committed.keys, ['$_core@0.2.0']);
-
-    // Whole-stack release waits for propagation after committing core. A
-    // named consumer needs only core's version to be listed, as Pub's
-    // resolution does; neither run waits out the ten-minute poll.
-    _ok(await fixture.rk(['release', 'format', '--yes', '--json']));
-    expect(
-      fixture.registry.committed.keys,
-      unorderedEquals(['$_core@0.2.0', '$_format@0.3.0']),
-    );
+    _ok(await fixture.rk(['release', '--yes', '--json']));
     expect(
       fixture.registry.events.where((e) => e.kind == 'archive_unavailable'),
-      isNotEmpty,
+      isEmpty,
     );
 
     fixture.registry.unavailableArchives.clear();
     _ok(await fixture.rk(['release', '--yes', '--json']));
-    for (final name in [_core, _format]) {
+    for (final name in _versions.keys) {
       expect(
         fixture.registry.events.where(
           (e) => e.kind == 'upload_attempted' && e.name == name,
@@ -266,7 +250,6 @@ void main() {
         reason: '$name is uploaded once',
       );
     }
-    _published(fixture.registry, staged);
     _unchanged(staged);
     await _consume(fixture);
   });
@@ -302,54 +285,31 @@ void main() {
     },
   );
 
-  test(
-    'consumer control resolves a valid package but detects incompatible API',
-    () async {
-      const broken = 'rk_qualification_incompatible';
-      fixture.registry.seedArchive(
-        _controlArchive(
-          fixture.root,
-          broken,
-          '0.1.0',
-          library: 'const otherSymbol = 42;\n',
-        ),
-      );
-      final consumer = _consumer(
-        fixture.root,
-        'incompatible',
-        package: broken,
-        source:
-            '''
-import 'package:$broken/$broken.dart';
-void main() => print(requiredSymbol);
-''',
-      );
-      final environment = {'PUB_CACHE': '${consumer.path}/empty-cache'};
-      _processOk(
-        await fixture.runDart(
-          ['pub', 'get'],
-          workingDirectory: consumer.path,
-          environment: environment,
-        ),
-      );
-      final compiled = await fixture.runDart(
-        ['compile', 'exe', 'bin/main.dart', '-o', '${consumer.path}/app'],
-        workingDirectory: consumer.path,
-        environment: environment,
-      );
-      expect(compiled.exitCode, isNot(0));
-      expect(
-        '${compiled.stdout}${compiled.stderr}',
-        contains('requiredSymbol'),
-      );
-      expect(
-        fixture.registry.events.where(
-          (e) => e.kind == 'downloaded' && e.name == broken,
-        ),
-        isNotEmpty,
-      );
-    },
-  );
+  test('a host outside the loopback registry is unreachable', () async {
+    final script = File('${fixture.root.path}/outside.dart')
+      ..writeAsStringSync('''
+import 'dart:io';
+Future<void> main() async {
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(Uri.parse('https://outside.invalid/'));
+    await request.close();
+    exitCode = 1;
+  } on HttpException {
+    print('refused');
+  } finally {
+    client.close(force: true);
+  }
+}
+''');
+    final result = await fixture.runDart([script.path]);
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    expect('${result.stdout}'.trim(), 'refused');
+    expect(fixture.connections, ['CONNECT outside.invalid:443']);
+    expect(fixture.registry.events, isEmpty);
+    // Seen and refused; the check after each test is for the rest.
+    fixture.connections.clear();
+  });
 }
 
 void _ok(Run run) => expect(run.code, 0, reason: run.all);

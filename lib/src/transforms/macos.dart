@@ -97,134 +97,31 @@ class MacOsSigner {
     return identities;
   }
 
-  /// The SHA-256 fingerprint of the exact certificate identity selected by
-  /// `find-identity`.
-  ///
-  /// `find-certificate -Z` emits both SHA-256 and SHA-1. Names alone are not
-  /// unique, so the SHA-1 identity token correlates the selected signing
-  /// identity to the right certificate block; the stronger SHA-256 value is
-  /// what the stage records.
-  Future<String?> certificateSha256(SigningIdentity identity) async {
-    final result = await tools.run('security', [
-      'find-certificate',
-      '-a',
-      '-c',
-      identity.name,
-      '-Z',
-    ]);
-    if (!result.ok) return null;
-    final starts = RegExp(
-      r'SHA-256 hash:\s*([0-9A-Fa-f]{64})',
-    ).allMatches(result.stdout).toList();
-    for (var index = 0; index < starts.length; index++) {
-      final match = starts[index];
-      final end = index + 1 < starts.length
-          ? starts[index + 1].start
-          : result.stdout.length;
-      final block = result.stdout.substring(match.start, end);
-      final sha1 = RegExp(
-        r'SHA-1 hash:\s*([0-9A-Fa-f]{40})',
-      ).firstMatch(block)?.group(1)?.toLowerCase();
-      if (sha1 == identity.sha1) return match.group(1)!.toLowerCase();
-    }
-    return null;
-  }
-
-  /// Signs [binary]. [team] selects the certificate when the published
-  /// release names one; without it the certificate is discovered, because
-  /// capabilities are discovered and never declared — and a machine with
-  /// one Developer ID has nothing to declare.
+  /// Signs [binary] with [identity], the certificate the preflight chose,
+  /// selected by its SHA-1 token: names are labels and need not be unique.
+  /// codesign's run is the result, and its exit status says whether it signed.
   ///
   /// [pinnedLibraries] are the code hashes of the only non-system libraries
   /// [binary] may load. A non-empty list embeds a library load constraint
   /// admitting exactly them.
-  Future<SignOutcome> sign({
+  Future<ToolResult> sign({
     required String binary,
-    required String? team,
+    required SigningIdentity identity,
     required String codeId,
-    SigningIdentity? selectedIdentity,
-    String? expectedCertificateSha256,
     List<String> pinnedLibraries = const [],
   }) async {
-    if (pinnedLibraries.any((hash) => !_cdhash.hasMatch(hash))) {
-      return SignOutcome.failed('a pinned library code hash is malformed');
-    }
-    final identities = await availableIdentities();
-    if (identities == null) {
-      return SignOutcome.failed('the login keychain could not be read');
-    }
-    if (identities.isEmpty) {
-      return SignOutcome.failed(
-        'no Developer ID Application certificate is installed',
-      );
-    }
-
-    final matching = selectedIdentity == null
-        ? (team == null
-              ? identities
-              : identities.where((i) => i.team == team).toList())
-        : identities
-              .where((identity) => identity.sha1 == selectedIdentity.sha1)
-              .toList();
-
-    if (matching.isEmpty) {
-      return SignOutcome.failed(
-        'no certificate for team $team; this machine has '
-        '${identities.map((i) => i.team).join(', ')}',
-      );
-    }
-    if (matching.length > 1) {
-      return SignOutcome.failed(
-        team == null
-            ? 'this machine has ${matching.length} Developer ID certificates '
-                  '(${matching.map((i) => i.team).join(', ')}) and nothing '
-                  'published says which one distributes this — release once '
-                  'from a machine with one, and every release after derives it'
-            : '${matching.length} certificates for team $team — rk will not '
-                  'guess which one distributes this',
-      );
-    }
-
-    final selected = matching.single;
-    if (selectedIdentity != null &&
-        (selected.name != selectedIdentity.name ||
-            selected.team != selectedIdentity.team)) {
-      return SignOutcome.failed(
-        'the selected signing certificate changed after preflight',
-      );
-    }
-    final certificateSha256 = await this.certificateSha256(selected);
-    if (certificateSha256 == null) {
-      return SignOutcome.failed(
-        'the selected certificate SHA-256 fingerprint could not be read',
-      );
-    }
-    if (expectedCertificateSha256 != null &&
-        certificateSha256 != expectedCertificateSha256) {
-      return SignOutcome.failed(
-        'the selected certificate fingerprint changed after preflight',
-      );
-    }
-
     // The bundle maps a separately signed AOT module. Clear any entitlements
     // on the SDK runtime; no executable-memory or library-validation exception
     // is needed or inherited from the upstream Dart binary.
     final scratch = Directory.systemTemp.createTempSync('rk-codesign-inputs-');
-    final entitlements = File('${scratch.path}/entitlements.plist');
-    final constraint = File('${scratch.path}/library-constraint.plist');
-    final ToolResult signed;
     try {
-      try {
-        entitlements.writeAsStringSync(_emptyEntitlements);
-        if (pinnedLibraries.isNotEmpty) {
-          constraint.writeAsStringSync(libraryConstraintPlist(pinnedLibraries));
-        }
-      } on FileSystemException catch (error) {
-        return SignOutcome.failed(
-          'the codesign inputs could not be written: $error',
-        );
+      final entitlements = File('${scratch.path}/entitlements.plist')
+        ..writeAsStringSync(_emptyEntitlements);
+      final constraint = File('${scratch.path}/library-constraint.plist');
+      if (pinnedLibraries.isNotEmpty) {
+        constraint.writeAsStringSync(libraryConstraintPlist(pinnedLibraries));
       }
-      signed = await tools.run('codesign', [
+      return await tools.run('codesign', [
         '--force',
         '--timestamp',
         '--options=runtime',
@@ -240,37 +137,14 @@ class MacOsSigner {
           constraint.path,
         ],
         '--sign',
-        // Names are display labels and need not be unique. The SHA-1 identity
-        // token is the exact keychain selector emitted by find-identity; the
-        // stage records the correlated SHA-256 certificate fingerprint.
-        selected.sha1,
+        identity.sha1,
         binary,
       ]);
     } finally {
       // Inputs to codesign, never artifacts: they must not survive into the
-      // staged workspace, even when writing them or signing fails.
+      // staged workspace, even when signing fails.
       scratch.deleteSync(recursive: true);
     }
-    if (!signed.ok) {
-      return SignOutcome.failed(signed.summary, transcript: signed.transcript);
-    }
-
-    final requirement = await designatedRequirement(binary);
-    if (requirement == null) {
-      return SignOutcome.failed('the signature could not be read back');
-    }
-    final verified = await verifies(binary);
-    if (!verified.ok) {
-      return SignOutcome.failed(
-        'the signature did not verify after signing',
-        transcript: verified.transcript,
-      );
-    }
-    return SignOutcome.signed(
-      requirement,
-      certificate: selected.name,
-      certificateSha256: certificateSha256,
-    );
   }
 
   /// The designated requirement of an already-signed binary.
@@ -323,43 +197,6 @@ class MacOsSigner {
     }
     return (hashes: hashes.toList()..sort(), display: display);
   }
-
-  /// The code hashes the library load constraint in [binary]'s signature
-  /// admits: empty without a constraint, and null when codesign cannot be
-  /// read or the constraint states anything beyond a list of code hashes.
-  /// [display] is codesign's run either way.
-  ///
-  /// codesign displays a constraint only as a nested dump at its highest
-  /// verbosity. A constraint rk did not write — another fact, another
-  /// operator — answers null rather than a subset that looks like a pin.
-  Future<({Set<String>? admitted, ToolResult display})> admittedLibraries(
-    String binary,
-  ) async {
-    final display = await tools.run('codesign', ['-dvvvvvv', binary]);
-    if (!display.ok) return (admitted: null, display: display);
-    final text = '${display.stdout}\n${display.stderr}';
-    if (!text.contains('Has Library Load Constraints')) {
-      return (admitted: <String>{}, display: display);
-    }
-    const structure = {'ccat', 'comp', 'reqs', 'vers', 'cdhash', r'$in'};
-    final keys = RegExp(
-      r'^\s*\[Key\] (.*?)\s*$',
-      multiLine: true,
-    ).allMatches(text).map((match) => match.group(1)!);
-    final data = [
-      for (final match in RegExp(
-        r'^\s*\[Data\] (.*?)\s*$',
-        multiLine: true,
-      ).allMatches(text))
-        match.group(1)!.toLowerCase(),
-    ];
-    if (keys.any((key) => !structure.contains(key)) ||
-        data.isEmpty ||
-        data.any((hash) => !_cdhash.hasMatch(hash))) {
-      return (admitted: null, display: display);
-    }
-    return (admitted: data.toSet(), display: display);
-  }
 }
 
 class SigningIdentity {
@@ -373,54 +210,9 @@ class SigningIdentity {
   final String name;
   final String team;
 
-  /// The SHA-1 token `security find-identity` uses to name the exact
-  /// keychain identity. It is correlation only; stage evidence records the
-  /// SHA-256 certificate fingerprint read through that token.
+  /// The SHA-1 token `security find-identity` names the exact keychain
+  /// identity by, which codesign selects it by.
   final String sha1;
-}
-
-class SignOutcome {
-  const SignOutcome._(
-    this.requirement,
-    this.problem, {
-    this.certificate,
-    this.certificateSha256,
-    this.transcript,
-  });
-  const SignOutcome.signed(
-    String requirement, {
-    String? certificate,
-    String? certificateSha256,
-  }) : this._(
-         requirement,
-         null,
-         certificate: certificate,
-         certificateSha256: certificateSha256,
-       );
-  const SignOutcome.failed(String problem, {String? transcript})
-    : this._(null, problem, transcript: transcript);
-
-  /// The designated requirement the signature produced.
-  final String? requirement;
-  final String? problem;
-
-  /// codesign's whole account, for the two failures where codesign is what
-  /// spoke: the signing run and the verification after it.
-  ///
-  /// Null elsewhere — the failures rk reasons its way to (no certificate, an
-  /// ambiguous team), and, for now, the readers whose result shape carries no
-  /// room for it: `security find-identity`, `find-certificate`, and
-  /// `codesign -d -r-` still answer null-on-failure and lose what they said.
-  final String? transcript;
-
-  /// The certificate that signed, named so a first release can show which
-  /// identity it just made permanent.
-  final String? certificate;
-
-  /// The SHA-256 fingerprint of [certificate].
-  final String? certificateSha256;
-
-  bool get ok => requirement != null;
 }
 
 /// Submits a signed binary to Apple and waits for a verdict.
@@ -505,16 +297,21 @@ class MacOsNotarizer {
       );
     }
 
-    // The submission id is what a later run correlates against, so it is
-    // reported even on success.
-    final id = RegExp(
-      r'"id"\s*:\s*"([^"]+)"',
-    ).firstMatch(result.stdout)?.group(1);
-    final accepted =
-        result.stdout.contains('"status":"Accepted"') ||
-        result.stdout.contains('"status": "Accepted"');
+    // One answer, read once: notarytool's JSON names the submission and
+    // Apple's verdict.
+    String? id;
+    String? status;
+    try {
+      final answer = jsonDecode(result.stdout);
+      if (answer is Map) {
+        id = answer['id'] is String ? answer['id'] as String : null;
+        status = answer['status'] is String ? answer['status'] as String : null;
+      }
+    } on FormatException {
+      // Not JSON: no verdict, which is not an acceptance.
+    }
 
-    if (!accepted) {
+    if (status != 'Accepted') {
       // A rejection exits 0, so the submit output is a status line and not a
       // reason. The reason is in Apple's log, which rk can fetch as easily
       // as it can tell a person to — and telling them to run a command that
@@ -535,14 +332,10 @@ class MacOsNotarizer {
         ].join('\n'),
       );
     }
-    return NotarizeOutcome.accepted(id, raw: result.stdout);
+    return NotarizeOutcome.accepted(id);
   }
 
-  /// Apple's log for a submission — the evidence of what was checked.
-  ///
-  /// Published with the release: the result says Accepted, the log says what
-  /// that claim covered, and a user who trusts neither can ask Apple with
-  /// the id inside them.
+  /// Apple's log for a submission: what it checked, and why it refused.
   Future<ToolResult> log(String submissionId) => tools.run('xcrun', [
     'notarytool',
     'log',
@@ -573,27 +366,23 @@ class NotarizeOutcome {
     this.submissionId,
     this.problem,
     this.remedy, {
-    this.raw,
     this.transcript,
   });
-  const NotarizeOutcome.accepted(String? id, {String? raw})
-    : this._(id, null, null, raw: raw);
+  const NotarizeOutcome.accepted(String? id) : this._(id, null, null);
   const NotarizeOutcome.failed(
     String problem, {
     String? remedy,
     String? transcript,
   }) : this._(null, problem, remedy, transcript: transcript);
 
+  /// Apple's id for an accepted submission, which a person can ask Apple
+  /// about later.
   final String? submissionId;
   final String? problem;
   final String? remedy;
 
-  /// notarytool's own words for an accepted submission, kept verbatim
-  /// because they become a published asset.
-  final String? raw;
-
-  /// notarytool's own words for a rejected or failed one, which become
-  /// nothing unless they are carried out.
+  /// notarytool's own words for a rejected or failed submission, with
+  /// Apple's log when rk could fetch it.
   final String? transcript;
 
   bool get ok => problem == null;

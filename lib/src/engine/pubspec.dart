@@ -1,5 +1,6 @@
+import 'package:pub_semver/pub_semver.dart' as pub;
+
 import 'diagnostic.dart';
-import '../native/dart/version_constraints.dart';
 import 'version.dart';
 import 'yaml.dart';
 
@@ -159,15 +160,12 @@ class Pubspec {
     if (table == null) return const {};
     final result = <String, Dependency>{};
     for (final name in table.keys) {
-      final scalar = table.string(name);
-      if (scalar != null) {
-        result[name] = Dependency.hosted(scalar, table.lineOf(name));
-        continue;
-      }
       final nested = table.map(name);
       if (nested == null) {
-        // A bare name with no constraint means "any version".
-        result[name] = Dependency.hosted('any', table.lineOf(name));
+        result[name] = Dependency.hosted(
+          _constraint(table[name]),
+          table.lineOf(name),
+        );
         continue;
       }
       final path = nested.string('path');
@@ -185,7 +183,7 @@ class Pubspec {
       }
       // A hosted dependency written the long way.
       result[name] = Dependency.hosted(
-        nested.string('version') ?? 'any',
+        _constraint(nested['version']),
         table.lineOf(name),
         hostedUrl:
             nested.string('hosted') ?? nested.map('hosted')?.string('url'),
@@ -193,6 +191,14 @@ class Pubspec {
     }
     return result;
   }
+
+  /// A version constraint as Pub reads it: a bare name, `~` and `null`
+  /// are YAML's null, which allows any version. A quoted empty string is
+  /// kept for Pub to refuse.
+  static String _constraint(YamlNode? node) =>
+      node is YamlScalar && (node.value.isNotEmpty || node.quoted)
+      ? node.value
+      : 'any';
 }
 
 String canonicalPublishDestination(String value) {
@@ -279,7 +285,9 @@ class Dependency {
     final text = constraint?.trim();
     if (text == null || text.isEmpty) return null;
     try {
-      return dartConstraintAllows(text, version.canonical);
+      return pub.VersionConstraint.parse(
+        text,
+      ).allows(pub.Version.parse(version.canonical));
     } on FormatException {
       return null;
     }

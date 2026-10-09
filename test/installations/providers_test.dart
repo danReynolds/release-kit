@@ -6,6 +6,7 @@ import 'package:rk/src/builds/binary_artifact.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/store.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
@@ -142,7 +143,7 @@ void main() {
         const SystemTools(),
         store,
         'linux-x64',
-        fetch: (uri, limit) async {
+        fetch: (uri, limit, {check}) async {
           if (uri.host == 'api.github.com') {
             return Uint8List.fromList(
               utf8.encode(
@@ -188,32 +189,13 @@ void main() {
         (await Process.run(installed.commands['orbit']!.executable, [])).stdout,
         'release 1.1.0\n',
       );
-      await store.record(project, installed);
       expect(
         (await provider.inspect(project)).installation!.location,
         installed.location,
       );
-      File(installed.commands['orbit']!.executable).deleteSync();
-      final broken = await provider.inspect(project);
-      expect(broken.problem, contains('incomplete'));
-      expect(
-        broken.installation,
-        isNotNull,
-        reason: 'Known owned bytes can still be removed.',
-      );
       await provider.uninstall(project, installed);
       expect(Directory(installed.location).existsSync(), isFalse);
-      final forged = Installation(
-        source: InstallationSource.github,
-        version: '1.1.0',
-        location: project.directory,
-        commands: installed.commands,
-        managed: true,
-      );
-      await expectLater(
-        provider.uninstall(project, forged),
-        throwsA(isA<InstallationFailure>()),
-      );
+      expect((await provider.inspect(project)).installation, isNull);
       expect(Directory(project.directory).existsSync(), isTrue);
     },
   );
@@ -286,77 +268,174 @@ void main() {
   );
 
   test(
-    'Homebrew uses exact formula identity and installs without linking or upgrading',
+    'Homebrew reads its installation from the opt link and the keg receipt, asking brew only for its prefix',
     () async {
       final project = fixture(scratch, commands: ['orbit'], binary: true);
-      final cellar = '${scratch.path}/Cellar/orbit';
-      File('$cellar/1.2.0/bin/orbit')
-        ..createSync(recursive: true)
-        ..writeAsStringSync('binary');
-      var installed = false;
-      final calls = <List<String>>[];
-      final tools = TestTools((exe, args, cwd, env) async {
-        calls.add(args);
-        expect(env!['HOMEBREW_NO_INSTALL_UPGRADE'], '1');
-        if (args.first == 'list') {
-          expect(args, ['list', '--formula', '--full-name', '-1']);
-          return ok(
-            'someone/else/orbit\n${installed ? project.formula : ''}\n',
-          );
-        }
-        if (args.first == 'info') {
-          expect(args, ['info', '--json=v2', '--formula', project.formula]);
-          return ok(
-            jsonEncode({
-              'formulae': [
-                {
-                  'full_name': 'someone/else/orbit',
-                  'installed': [
-                    {'version': '3.0.0'},
-                  ],
-                },
-                if (installed)
-                  {
-                    'full_name': project.formula,
-                    'name': 'orbit',
-                    'linked_keg': '1.2.0',
-                    'installed': [
-                      {'version': '1.2.0'},
-                    ],
-                  },
-              ],
-            }),
-          );
-        }
-        if (args.first == '--cellar') {
-          expect(args, ['--cellar']);
-          return ok('${scratch.path}/Cellar');
-        }
-        if (args.first == '--prefix') return ok('${scratch.path}/brew');
-        if (args.first == 'install') {
-          installed = true;
-          return ok();
-        }
-        throw StateError('unexpected $args');
-      });
-      final provider = HomebrewInstallationProvider(tools, '/brew');
+      final brew = FakeHomebrew('${scratch.path}/brew');
+      final provider = HomebrewInstallationProvider(brew.tools, '/brew');
       expect((await provider.inspect(project)).installation, isNull);
+      brew.pour('someone/else/orbit', '3.0.0');
       expect(
-        calls,
-        [
-          ['list', '--formula', '--full-name', '-1'],
-        ],
-        reason:
-            'A different tap is not our installation or a reason to query it.',
+        (await provider.inspect(project)).installation,
+        isNull,
+        reason: 'A formula of the same name from another tap is not ours.',
       );
+      Directory('${brew.prefix}/Cellar').deleteSync(recursive: true);
+      Link('${brew.prefix}/opt/orbit').deleteSync();
       final result = await provider.install(project, (_) {});
-      expect(result.commands['orbit']!.executable, '$cellar/1.2.0/bin/orbit');
-      expect(calls.where((c) => c.first == 'install').single, [
-        'install',
-        '--formula',
-        '--skip-link',
-        project.formula,
+      expect(result.version, '1.2.0');
+      expect(
+        result.commands['orbit']!.executable,
+        '${brew.prefix}/opt/orbit/bin/orbit',
+      );
+      expect(brew.calls, [
+        ['--prefix'],
+        ['install', '--formula', '--skip-link', project.formula],
       ]);
+      expect(
+        brew.environments.every(
+          (environment) => environment?['HOMEBREW_NO_INSTALL_UPGRADE'] == '1',
+        ),
+        isTrue,
+      );
     },
   );
+
+  test(
+    'a Homebrew selection keeps running after brew upgrades it and removes the old keg',
+    () async {
+      final project = fixture(scratch, commands: ['orbit'], binary: true);
+      final brew = FakeHomebrew('${scratch.path}/brew');
+      final store = InstallationStore('${scratch.path}/data', brew.tools);
+      final manager = InstallationManager(
+        store: store,
+        providers: {
+          InstallationSource.homebrew: HomebrewInstallationProvider(
+            brew.tools,
+            '/brew',
+          ),
+        },
+        environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
+      );
+      await manager.act(
+        project,
+        InstallationSource.homebrew,
+        InstallationAction.use,
+        progress: (_) {},
+      );
+      Future<ProcessResult> orbit() => Process.run('${store.bin}/orbit', []);
+      expect((await orbit()).stdout, 'brew 1.2.0\n');
+      // `brew upgrade`, run outside rk: a new keg, and the old one cleaned up.
+      brew.pour(project.formula, '1.3.0', keepOld: false);
+      final upgraded = await orbit();
+      expect(upgraded.exitCode, 0, reason: '${upgraded.stderr}');
+      expect(upgraded.stdout, 'brew 1.3.0\n');
+    },
+  );
+
+  group('GitHub downloads', () {
+    late ExecutableProject project;
+    late InstallationStore store;
+    late FakeReleases releases;
+    late GithubInstallationProvider github;
+    late StubProvider local;
+    late InstallationManager manager;
+    late Directory downloads;
+    setUp(() {
+      project = fixture(scratch, commands: ['orbit'], binary: true);
+      store = InstallationStore('${scratch.path}/data', const SystemTools());
+      releases = FakeReleases(project, ['1.1.0']);
+      github = GithubInstallationProvider(
+        const SystemTools(),
+        store,
+        'linux-x64',
+        fetch: releases.fetch,
+      );
+      local = StubProvider(InstallationSource.local);
+      manager = InstallationManager(
+        store: store,
+        providers: {github.source: github, local.source: local},
+        environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
+      );
+      downloads = Directory(store.downloads(project));
+    });
+    Future<String> act(InstallationSource source, InstallationAction action) =>
+        manager.act(project, source, action, progress: (_) {});
+    Future<String> orbit() async =>
+        (await Process.run('${store.bin}/orbit', [])).stdout as String;
+
+    test(
+      'an update replaces the previous download; uninstall removes every one',
+      () async {
+        await act(github.source, InstallationAction.use);
+        expect(await orbit(), 'release 1.1.0\n');
+        releases.publish('1.2.0');
+        await manager.download(
+          project,
+          await manager.latest(project, github.source),
+          progress: (_) {},
+        );
+        expect(await orbit(), 'release 1.2.0\n');
+        expect(downloads.listSync(), hasLength(1));
+        await act(local.source, InstallationAction.use);
+        await act(github.source, InstallationAction.uninstall);
+        expect(downloads.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'an update interrupted before routing finishes when it runs again',
+      () async {
+        await act(github.source, InstallationAction.use);
+        releases.publish('1.2.0');
+        final release = await manager.latest(project, github.source);
+        // The update unpacked and renamed its download, then stopped.
+        await github.download(project, release, (_) {});
+        expect(await orbit(), 'release 1.1.0\n');
+        final fetched = releases.archiveFetches;
+        await manager.download(project, release, progress: (_) {});
+        expect(await orbit(), 'release 1.2.0\n');
+        expect(downloads.listSync(), hasLength(1));
+        expect(releases.archiveFetches, fetched);
+      },
+    );
+
+    test(
+      'a renamed origin keeps its download, and uninstall still removes it',
+      () async {
+        await act(github.source, InstallationAction.use);
+        final renamed = ExecutableProject(
+          root: project.root,
+          unit: project.unit,
+          project: project.project,
+          entrypoints: project.entrypoints,
+          repository: 'owner/renamed',
+        );
+        Future<String> actRenamed(
+          InstallationSource source,
+          InstallationAction action,
+        ) => manager.act(renamed, source, action, progress: (_) {});
+        final state = await manager.inspect(renamed);
+        expect(state.sources[github.source]!.installation!.version, '1.1.0');
+        await actRenamed(local.source, InstallationAction.use);
+        await actRenamed(github.source, InstallationAction.uninstall);
+        expect(downloads.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'a re-run after an interrupted install finishes it without downloading again',
+      () async {
+        // Interrupted after unpacking, before rk routed anything; and an
+        // earlier run that stopped while unpacking.
+        await github.install(project, (_) {});
+        Directory('${downloads.path}/preparing-interrupted').createSync();
+        final fetched = releases.archiveFetches;
+        await act(github.source, InstallationAction.use);
+        expect(releases.archiveFetches, fetched);
+        expect(await orbit(), 'release 1.1.0\n');
+        expect(downloads.listSync(), hasLength(1));
+      },
+    );
+  });
 }

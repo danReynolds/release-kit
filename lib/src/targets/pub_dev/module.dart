@@ -7,7 +7,6 @@ import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
 import '../../engine/verdict.dart';
-import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'endpoint.dart';
@@ -145,23 +144,27 @@ final class PubDevTargetModule extends TargetModule {
               : const [],
         );
       }
+      // pub.dev keeps the repository the latest version named. One that
+      // differs is another project's package, which pub.dev will not let
+      // this one upload to, or this repository's from before it moved. Both
+      // refuse before the tag is pushed: an upload pub.dev refuses would
+      // leave a tag no re-run can finish.
+      final project = target.project!;
       final publishedRepository = latest.repository;
-      final localRepository = target.project!.pubspec.repository;
+      final localRepository = project.pubspec.repository;
       final publishedIdentity = _repositoryIdentity(publishedRepository);
       final localIdentity = _repositoryIdentity(localRepository);
       if (publishedIdentity != null &&
           localIdentity != null &&
           publishedIdentity != localIdentity) {
-        final inspection = Inspection.conflict(
-          '${target.coordinate} points to another repository on pub.dev',
-          evidence: {
-            'published repository': publishedRepository!,
-            'this repository': localRepository!,
-          },
-        );
-        final project = target.project!;
         return TargetHistory(
-          inspection: inspection,
+          inspection: Inspection.conflict(
+            '${target.coordinate} points to another repository on pub.dev',
+            evidence: {
+              'published repository': publishedRepository!,
+              'this repository': localRepository!,
+            },
+          ),
           problems: [
             Diagnostic(
               code: 'RK-PUB-010',
@@ -173,9 +176,12 @@ final class PubDevTargetModule extends TargetModule {
                 project.pubspec.nameLine,
               ),
               remedy:
-                  'choose an unclaimed package name in pubspec.yaml; '
-                  'pub.dev package names cannot be reclaimed by publishing '
-                  'a newer version',
+                  "if the package is another project's, choose an "
+                  'unclaimed name in pubspec.yaml. If this repository '
+                  'moved, publish this version once yourself with '
+                  '`dart pub publish` in ${project.pubspec.directory}: '
+                  'pub.dev then names the new repository, and rk release '
+                  'finishes the rest',
             ),
           ],
         );
@@ -184,7 +190,6 @@ final class PubDevTargetModule extends TargetModule {
         detail: 'latest published package is ${latest.version}',
         evidence: {'version': latest.version.canonical},
       );
-      final project = target.project!;
       return TargetHistory.versioned(
         inspection: inspection,
         target: target,
@@ -318,11 +323,11 @@ final class PubDevTargetModule extends TargetModule {
         reconciledNote: 'publish response was lost',
       );
     }
+    // The read-back says when pub.dev published it, and what it compared.
     return TargetActOutcome(
       ok: true,
       coordinate: '${project.name} ${project.version}',
       mayHaveActed: true,
-      successNote: 'published',
       includeInspectionDetail: true,
     );
   }
@@ -332,7 +337,14 @@ final class PubDevTargetModule extends TargetModule {
     TargetReleaseContext context,
     ResolvedUnit unit,
     TargetPlan target,
+    TargetActOutcome act,
   ) async {
+    // pub.dev can take minutes to list an upload it accepted. One it refused,
+    // or that never arrived, is not worth that wait: a lost response shows
+    // within a few reads.
+    final deadline = act.ok
+        ? context.confirmDeadline
+        : context.confirmInterval * 2;
     var waited = Duration.zero;
     while (true) {
       context.reads.registry?.forget(target.coordinate);
@@ -342,8 +354,12 @@ final class PubDevTargetModule extends TargetModule {
         target,
         againstStage: true,
       );
-      if (!state.isAbsent || waited >= context.confirmDeadline) {
-        if (state.isAbsent && waited >= context.confirmDeadline) {
+      // An answer settles it; a read that failed is asked again, as an
+      // absence is, until the deadline.
+      final settled =
+          state.verdict == Verdict.exact || state.verdict == Verdict.conflict;
+      if (settled || waited >= deadline) {
+        if (state.isAbsent && waited >= deadline) {
           final project = target.project!;
           return Inspection.absent(
             detail:
@@ -360,109 +376,26 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetAvailabilityOutcome?> checkAvailability(
-    TargetAvailabilityContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-  ) async {
-    final cache = Directory.systemTemp.createTempSync('rk-pub-availability-');
-    try {
-      final result = await context.tools.run(
-        // RK may itself be a native executable or an AOT bundle. The running
-        // process is not necessarily an SDK capable of executing Pub commands.
-        'dart',
-        [
-          'pub',
-          'cache',
-          'add',
-          target.coordinate,
-          '--version',
-          target.targetVersion,
-        ],
-        environment: {'PUB_CACHE': cache.path, 'DART_DISABLE_ANALYTICS': '1'},
-        timeout: const Duration(seconds: 45),
-      );
-      if (result.ok) {
-        return const TargetAvailable(note: 'available to Dart');
-      }
-      return TargetAvailabilityPending(
-        Diagnostic(
-          code: 'RK-PUB-013',
-          message:
-              '${target.coordinate} ${target.targetVersion} is published '
-              'but not available to a fresh Dart resolver yet',
-          remedy:
-              'publication already reconciled exactly; wait for pub.dev '
-              'propagation and do not upload the version again',
-          evidence: result.transcript,
-        ),
-      );
-    } on Object catch (error) {
-      return TargetAvailabilityPending(
-        Diagnostic(
-          code: 'RK-PUB-013',
-          message:
-              '${target.coordinate} ${target.targetVersion} is published '
-              'but fresh Dart availability could not be checked',
-          remedy:
-              'publication already reconciled exactly; restore Dart or '
-              'network access and verify from a fresh PUB_CACHE',
-          evidence: '$error',
-        ),
-      );
-    } finally {
-      try {
-        cache.deleteSync(recursive: true);
-      } on FileSystemException {
-        // The provider answer is independent of best-effort scratch cleanup.
-      }
-    }
-  }
-
-  @override
-  Future<TargetFailure> classifyUnconfirmedPublication(
-    TargetReleaseContext context,
+  ({String code, String message, String? next}) nameUnconfirmed(
     ResolvedUnit unit,
     TargetPlan target,
     Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    final conflict = state.verdict == Verdict.conflict;
-    final code = conflict ? 'RK-PUB-006' : act.diagnostic?.code ?? 'RK-PUB-005';
-    final message = conflict
-        ? '${act.coordinate ?? target.project?.name}: '
-              '${state.detail ?? 'the public archive differs'}'
-        : act.diagnostic?.message ??
+    TargetActOutcome act,
+  ) => state.verdict == Verdict.conflict
+      ? (
+          code: 'RK-PUB-006',
+          message:
+              '${act.coordinate ?? target.project?.name}: '
+              '${state.detail ?? 'the public archive differs'}',
+          next: null,
+        )
+      : (
+          code: 'RK-PUB-005',
+          message:
               '${act.coordinate ?? target.project?.name}: the exact public '
-                  'archive could not be confirmed';
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (state.detail != null) state.detail!,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-    ];
-    final halt = conflict
-        ? HaltKind.actedAndUnfixable
-        : act.mayHaveActed || state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
-    return TargetFailure(
-      diagnostic: Diagnostic(
-        code: code,
-        message: message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                  'public target before any retry'
-            : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
-      ),
-      halt: halt,
-      nextCommand: code == 'RK-PUB-005' ? 'rk status ${unit.name}' : null,
-    );
-  }
+              'archive could not be confirmed',
+          next: 'rk status ${unit.name}',
+        );
 
   @override
   TargetStage stageInput({

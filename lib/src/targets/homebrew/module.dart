@@ -5,15 +5,11 @@ import '../../engine/assets.dart';
 import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
-import '../../engine/release_manifest.dart';
 import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/verdict.dart';
-import '../../transforms/digest.dart';
-import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../github_release/client.dart';
-import '../git_tag/client.dart';
 import '../target_module.dart';
 import 'client.dart';
 import 'formula_stage.dart';
@@ -107,27 +103,18 @@ final class HomebrewTargetModule extends TargetModule {
       intendedVersion: project.version,
       expectedBytes: null,
     );
-    final sameVersion =
-        publicFormula.evidence['version'] == project.version.canonical;
-    if (!publicFormula.isAbsent && !sameVersion) return publicFormula;
-
-    if (sameVersion) {
-      final historical = await _historicalFormulaIdentity(
-        context,
-        unit,
-        project: project,
-        tap: tap,
-        formulaPath: 'Formula/$name',
-      );
-      if (!historical.inspection.isExact) return historical.inspection;
-      return destination.inspect(
-        formulaPath: 'Formula/$name',
-        intendedVersion: project.version,
-        expectedBytes: null,
-        expectedSha256: historical.formulaSha256,
+    // A formula already at this version is published: what the tap holds
+    // is what its users install.
+    if (publicFormula.evidence['version'] == project.version.canonical) {
+      return Inspection.exact(
+        detail: 'the tap formula is at ${project.version.canonical}',
+        evidence: publicFormula.evidence,
       );
     }
+    if (!publicFormula.isAbsent) return publicFormula;
 
+    // Without its stage, the formula is rendered from the digests GitHub
+    // reports for the published archives.
     final current = await _publishedFormula(context, unit, project: project);
     if (!current.inspection.isExact) {
       if (current.inspection.isAbsent ||
@@ -138,160 +125,12 @@ final class HomebrewTargetModule extends TargetModule {
       }
       return current.inspection;
     }
-
-    // Without its stage, the formula is rendered from what the forge serves
-    // now. The release manifest the tag binds names the formula the release
-    // staged, so a rendering that differs means the public archives changed.
-    final historical = await _historicalFormulaIdentity(
-      context,
-      unit,
-      project: project,
-      tap: tap,
-      formulaPath: 'Formula/$name',
-    );
-    if (!historical.inspection.isExact) return historical.inspection;
-    final rendered = Sha256.hex(current.bytes!);
-    if (rendered != historical.formulaSha256) {
-      return Inspection.conflict(
-        'the GitHub Release archives no longer match its release manifest',
-        evidence: {
-          'formula sha256':
-              'rendered $rendered, manifest ${historical.formulaSha256}',
-        },
-      );
-    }
-
     return destination.inspect(
       formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
       expectedBytes: current.bytes,
     );
   }
-
-  Future<({Inspection inspection, String? formulaSha256})>
-  _historicalFormulaIdentity(
-    TargetReadContext context,
-    ResolvedUnit unit, {
-    required ResolvedProject project,
-    required String tap,
-    required String formulaPath,
-  }) async {
-    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
-    final tagObject = context.git.tagObject(tag);
-    final tagCommit = context.git.tagTarget(tag);
-    if (tagObject == null || tagCommit == null) {
-      return (
-        inspection: const Inspection.unknown(
-          'the release tag identity is unavailable, so the published formula '
-          'cannot be authenticated',
-        ),
-        formulaSha256: null,
-      );
-    }
-    final binding = await GitTag(tools: context.tools!, root: context.git.root)
-        .manifestBinding(
-          tag: tag,
-          expectedObject: tagObject,
-          expectedCommit: tagCommit,
-        );
-    final manifestSha256 = binding.sha256;
-    if (manifestSha256 == null) {
-      return (
-        inspection: _manifestBindingFailure(binding),
-        formulaSha256: null,
-      );
-    }
-
-    final read =
-        await GithubRelease(
-          tools: context.tools!,
-          repository: context.repository!,
-          workingDirectory: context.git.root,
-        ).readBoundAsset(
-          tag: tag,
-          expectedAssets: ReleaseAssets.expectedForUnit(unit).toSet(),
-          asset: ReleaseAssets.manifest,
-          expectedSha256: manifestSha256,
-          prerelease: unit.version.isPrerelease,
-        );
-    if (!read.inspection.isExact) {
-      return (inspection: read.inspection, formulaSha256: null);
-    }
-
-    final ReleaseManifest manifest;
-    try {
-      manifest = ReleaseManifest.parse(utf8.decode(read.bytes!));
-    } on Object catch (error) {
-      return (
-        inspection: Inspection.conflict(
-          'the authenticated release manifest is invalid: $error',
-        ),
-        formulaSha256: null,
-      );
-    }
-    final coordinateDifferences = <String, String>{};
-    if (manifest.unit != unit.name) {
-      coordinateDifferences['unit'] =
-          'manifest ${manifest.unit}, expected ${unit.name}';
-    }
-    if (manifest.version != unit.version.canonical) {
-      coordinateDifferences['version'] =
-          'manifest ${manifest.version}, expected ${unit.version.canonical}';
-    }
-    if (manifest.tag != tag) {
-      coordinateDifferences['tag'] =
-          'manifest ${manifest.tag ?? '<none>'}, expected $tag';
-    }
-    if (manifest.commit != tagCommit) {
-      coordinateDifferences['source commit'] =
-          'manifest ${manifest.commit ?? '<none>'}, expected $tagCommit';
-    }
-    if (coordinateDifferences.isNotEmpty) {
-      return (
-        inspection: Inspection.conflict(
-          'the authenticated release manifest names a different release',
-          evidence: coordinateDifferences,
-        ),
-        formulaSha256: null,
-      );
-    }
-
-    final homebrew = manifest.homebrew;
-    if (homebrew == null ||
-        !homebrew.names(project: project.name, tap: tap, path: formulaPath)) {
-      return (
-        inspection: Inspection.conflict(
-          'the authenticated release manifest does not bind '
-          '$tap/$formulaPath',
-        ),
-        formulaSha256: null,
-      );
-    }
-    return (
-      inspection: const Inspection.exact(
-        detail:
-            'published formula identity read from the authenticated '
-            'release manifest',
-      ),
-      formulaSha256: homebrew.sha256,
-    );
-  }
-
-  Inspection _manifestBindingFailure(TagManifestBinding binding) =>
-      switch (binding) {
-        TagManifestUnreadable(:final why) => Inspection.unknown(why),
-        TagManifestConflict(:final why, :final evidence) => Inspection.conflict(
-          why,
-          evidence: evidence,
-        ),
-        TagManifestAbsent(:final why) ||
-        TagManifestMissing(:final why) ||
-        TagManifestMalformed(:final why) ||
-        TagManifestUnbound(:final why) => Inspection.conflict(
-          'the published formula cannot be authenticated: $why',
-        ),
-        TagManifestBound() => throw StateError('bound manifest has no digest'),
-      };
 
   Future<({Inspection inspection, List<int>? bytes})> _publishedFormula(
     TargetReadContext context,
@@ -461,50 +300,31 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetFailure> classifyUnconfirmedPublication(
-    TargetReleaseContext context,
+  bool get conflictIsPermanent => false;
+
+  @override
+  ({String code, String message, String? next}) nameUnconfirmed(
     ResolvedUnit unit,
     TargetPlan target,
     Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    final code = switch (state.verdict) {
-      Verdict.unknown => 'RK-BREW-002',
-      Verdict.conflict => 'RK-BREW-003',
-      Verdict.absent || Verdict.exact => 'RK-BREW-001',
-    };
-    final message = switch (state.verdict) {
-      Verdict.unknown => 'the tap was updated and could not be read back',
-      Verdict.conflict => 'the public tap does not hold what rk pushed',
-      Verdict.absent || Verdict.exact => 'the tap formula was not updated',
-    };
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (state.detail != null) state.detail!,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-    ];
-    final halt = state.verdict == Verdict.conflict
-        ? HaltKind.stoppedPartway
-        : act.mayHaveActed || state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
-    return TargetFailure(
-      diagnostic: Diagnostic(
-        code: code,
-        message: message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                  'public target before any retry'
-            : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
-      ),
-      halt: halt,
-    );
-  }
+    TargetActOutcome act,
+  ) => switch (state.verdict) {
+    Verdict.unknown => (
+      code: 'RK-BREW-002',
+      message: 'the tap was updated and could not be read back',
+      next: null,
+    ),
+    Verdict.conflict => (
+      code: 'RK-BREW-003',
+      message: 'the public tap does not hold what rk pushed',
+      next: null,
+    ),
+    Verdict.absent || Verdict.exact => (
+      code: 'RK-BREW-001',
+      message: 'the tap formula was not updated',
+      next: null,
+    ),
+  };
 
   @override
   TargetStage stageInput({

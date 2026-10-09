@@ -7,6 +7,7 @@ import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
 import '../../engine/stage_contract.dart';
 import '../../engine/stage_receipt.dart';
+import '../../engine/stage_source.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
 import '../../output/progress.dart';
@@ -23,11 +24,9 @@ TargetStage pubDevPackageStage({
   required ResolvedUnit unit,
 }) {
   final archivePath = ReleaseAssets.pubArchivePath(target.project!);
-  final contract = StageContributionContract(
-    step: StageStepContract(
-      'pub-archive:${target.project!.name}',
-      outputs: {archivePath: 'pub-archive'},
-    ),
+  final contract = StageStepContract(
+    'pub-archive:${target.project!.name}',
+    outputs: {archivePath: 'pub-archive'},
   );
   return TargetStage(
     target: target,
@@ -56,7 +55,7 @@ Future<TargetStageOutcome> _prepareStage(
   TargetStageContext context,
   ResolvedProject project,
 ) async {
-  final receiptName = context.contract.step.name;
+  final receiptName = context.contract.name;
   context.progress('source').begin(CommonProgressActivities.validating);
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
@@ -131,7 +130,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   // override but the repository packages it takes from this source. Pub
   // leaves overrides files out of archives, so the one written here does
   // not change what is published.
-  final consumer = _mirrorSource(context);
+  final consumer = _mirrorSource(context, project);
   late final ToolResult packaged;
   late final String resolvedAs;
   late final Set<String> takenFromSource;
@@ -245,6 +244,28 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   final summary = RegExp(
     r'Package has[^\n]*',
   ).allMatches(validation).map((match) => match.group(0)!).lastOrNull;
+
+  // Pub exits 69, unavailable, when it cannot reach a registry while it
+  // resolves, and then validates nothing: no finding of Pub's is there to
+  // fix, and staging again once it can reach the registry is the remedy.
+  if (packaged.exitCode == 69 &&
+      summary == null &&
+      findings.errors.isEmpty &&
+      findings.warnings.isEmpty) {
+    return (
+      diagnostic: Diagnostic(
+        code: 'RK-PUB-019',
+        message:
+            'Pub could not resolve dependencies or reach the registry for '
+            '${project.name}',
+        remedy:
+            '${_firstLine(packaged.stderr)}. Check the network and the '
+            'registry, then stage ${project.name} again',
+        evidence: validation.isEmpty ? packaged.summary : validation,
+      ),
+      warnings: const <Diagnostic>[],
+    );
+  }
   final refused =
       findings.errors.isNotEmpty ||
       (!packaged.ok &&
@@ -290,9 +311,11 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
         Diagnostic(
           code: 'RK-PUB-012',
           message: 'pub validation for ${project.name}: ${_headline(warning)}',
+          // Said once for every warning that shares it, so it reads for
+          // one warning or several.
           remedy:
-              'fix or consciously accept this warning before release; '
-              'rk publishes past it only after explicit authorization',
+              'rk release lists pub warnings again before it asks, and '
+              'publishes past them only with your yes',
           evidence: warning.contains('\n') ? warning : null,
         ),
     ],
@@ -350,16 +373,21 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   return (errors: errors, warnings: warnings);
 }
 
-/// A finding's first line, and its last when the first introduces a list.
+/// A finding's first line. When that line introduces what follows, the
+/// sentence before the introduction ("… more than one version. For
+/// example:"), or, with none, the line and the last, which counts what it
+/// introduced ("`dart analyze` found …: 1 issue found.").
 String _headline(String finding) {
   final lines = [
     for (final line in finding.split('\n'))
       if (line.trim().isNotEmpty) line.trim(),
   ];
-  if (lines.length > 1 && lines.first.endsWith(':')) {
-    return '${lines.first} ${lines.last}';
-  }
-  return lines.isEmpty ? finding : lines.first;
+  if (lines.isEmpty) return finding;
+  final first = lines.first;
+  if (lines.length == 1 || !first.endsWith(':')) return first;
+  final sentence = first.lastIndexOf('. ');
+  if (sentence >= 0) return first.substring(0, sentence + 1);
+  return '$first ${lines.last}';
 }
 
 /// The path from directory [from] to [to], `/`-separated as a pubspec
@@ -384,10 +412,11 @@ String _relativePath(String from, String to) {
 /// Release stages deliberately live under `.rk/`, which repositories normally
 /// ignore, and Pub walks ancestor Git ignore rules when it builds a package:
 /// beneath a repository, the whole package can look ignored and produce an
-/// empty archive. The mirror holds the tracked files with their modes and
-/// the workspace layout, under `source/`, and is deleted after the archive
+/// empty archive. The mirror holds, with their modes and under `source/`,
+/// what a Dart build of the package reads (see
+/// [StageSourceSnapshot.dartBuildInputs]), and is deleted after the archive
 /// command finishes.
-Directory _mirrorSource(TargetStageContext context) {
+Directory _mirrorSource(TargetStageContext context, ResolvedProject project) {
   final mirror = Directory.systemTemp.createTempSync('rk-pub-source-');
   try {
     final gitControl = _gitControlAncestor(mirror.path);
@@ -398,7 +427,11 @@ Directory _mirrorSource(TargetStageContext context) {
       );
     }
     final source = _join(mirror.path, const ['source']);
-    context.source.export(source);
+    context.source.export(
+      source,
+      only: context.source.dartBuildInputs(project.pubspec.directory),
+      reader: project.name,
+    );
     // Records the source tracks are not Pub's answer for it, and a lockfile
     // holds versions its consumers do not get.
     _removePubRecords(source);

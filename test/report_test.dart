@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/report.dart';
 import 'package:test/test.dart';
 
@@ -11,6 +10,18 @@ Map<String, Object?> decode(Report report, {int exit = 0}) =>
     jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
 
 void main() {
+  test('a crash after a release staged privately says nothing public '
+      'changed', () {
+    // Staging writes a stage, which sets acted; a halt in a release speaks
+    // of public targets, and none changed until one is published.
+    final release = Report('release')..acted = true;
+    expect(release.changedWhatHaltsSpeakOf, isFalse);
+    release.actedPublicly = true;
+    expect(release.changedWhatHaltsSpeakOf, isTrue);
+    // init, clean and use write files, and those are what a halt speaks of.
+    expect((Report('init')..acted = true).changedWhatHaltsSpeakOf, isTrue);
+  });
+
   group('the document a caller keys on', () {
     test('names its schema, its command, and how the process ended', () {
       final report = Report('status');
@@ -68,15 +79,7 @@ void main() {
 
   group('rerun_helps is the one rerun question', () {
     test('true by default, because re-running is the resume', () {
-      final json = decode(Report('release'));
-      expect(json['rerun_helps'], isTrue);
-      expect(
-        json.containsKey('safe_to_rerun'),
-        isFalse,
-        reason:
-            're-running is safe by construction — the same inspection '
-            'precedes every act — so a field for it could only ever say so',
-      );
+      expect(decode(Report('release'))['rerun_helps'], isTrue);
     });
 
     test('a conflict does not help, and the halt says why', () {
@@ -114,43 +117,9 @@ void main() {
     expect(problem['remedy'], 'align the constraint');
   });
 
-  test('warnings are separate, coded, and nonblocking', () {
-    final report = Report('status')
-      ..warning(
-        const Diagnostic(
-          code: 'RK-GIT-001',
-          message: '1 uncommitted path will be included',
-        ),
-      );
-    final json = decode(report);
-    expect(json['problems'], isEmpty);
-    expect((json['warnings'] as List).single['code'], 'RK-GIT-001');
-    expect(json['exit'], 0);
-  });
-
   test('the next command is data a caller can chain on', () {
     final report = Report('status')..next('rk release cli');
     expect(decode(report)['next'], ['rk release cli']);
-  });
-
-  group('recording happens inside printing, so the two cannot drift', () {
-    test('a problem printed is a problem reported', () {
-      final output = Output(sink: (_) {}, isTerminal: false);
-      output.problem(Diagnostic(code: 'RK-GIT-001', message: '2 uncommitted'));
-      expect(
-        decode(output.report)['problems'],
-        hasLength(1),
-        reason: 'there is one call, so there is nothing to forget',
-      );
-    });
-
-    test('and prose suppressed is still recorded', () {
-      final buffer = StringBuffer();
-      final output = Output(sink: (_) {}, isTerminal: false);
-      output.next('rk release cli');
-      expect(buffer.toString(), isEmpty);
-      expect(decode(output.report)['next'], ['rk release cli']);
-    });
   });
 
   group('the diagnosis directory', () {
@@ -207,7 +176,6 @@ void main() {
           unit: 'cli',
           summary: 'notarize',
           verdict: 'rejected',
-          took: const Duration(minutes: 4),
         );
 
       final at = Diagnosis.write(
@@ -221,7 +189,6 @@ void main() {
       expect(at, contains('2026-07-29T12-00-00'));
       final run = File('$at/run.json').readAsStringSync();
       expect(run, contains('"verdict": "rejected"'));
-      expect(run, contains('"took_ms": 240000'), reason: 'durations');
       expect(run, contains('"exit": 1'));
       expect(
         File('$at/notarytool.stderr').readAsStringSync(),

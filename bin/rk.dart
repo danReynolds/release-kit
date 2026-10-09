@@ -12,6 +12,7 @@
 /// models to the engine, keeping source discovery outside its policy layer.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
@@ -25,13 +26,10 @@ import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/target.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/targets/pub_dev/endpoint.dart';
-import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/dart_workspace.dart';
-import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -39,40 +37,37 @@ import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/release_source.dart';
 import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/source_context.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/version.dart';
 import 'package:rk/src/engine/timings.dart';
 
 const _usage = '''
-rk — an austere release tool
+rk makes releasing code simple
 
 Release this project
-  rk                              status all units
-  rk --version                    print this binary's version
-  rk status [unit]                report release status and return to the prompt
-  rk plan [unit]                  show the configured release graph; read-only
-  rk init                         choose outputs and review release.toml
+  rk init                         choose what to release; writes release.toml
+  rk status [unit]                what is released, staged and left to do; bare rk too
+  rk stage [unit]                 build and check what a release publishes; publishes nothing
+  rk release [unit]               release what is not released yet, in dependency order
+  rk plan [unit]                  the release graph: each unit's steps and what they wait on
+  rk target [name]                the targets this rk supports, or one in detail
   rk clean                        remove this repository's staged release work
-  rk target list                  list every release choice this rk supports
-  rk target <name>                explain one choice and its configuration
-  rk stage [unit]                 prepare all units, or one named unit; publish nothing
-  rk release [unit]               release all unfinished units, or one named unit
+  rk help [command]               this, or one command's flags and examples
 
 Run locally
-  rk use [source] [-p project]     choose the source of your commands
-  rk install [source] [-p project] prepare an installation without switching
-  rk uninstall [source] [-p project] remove an inactive installation
+  rk use [source] [-p project]        choose the source of your commands
+  rk install [source] [-p project]    prepare an installation without switching
+  rk uninstall [source] [-p project]  remove an inactive installation
 
 Flags
-  --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   -y, --yes   release, clean or uninstall: confirm without an interactive prompt
-  --latest    install: get the latest compatible version without changing source
-  --write     init: write the default configuration without a prompt
   --timings   stage or release: how long each step took, after the run
               (and .rk/timings.json, a trace Perfetto opens)
+  --write     init: write the default configuration without a prompt
+  --latest    install: get the latest compatible version without changing source
+  --version   print this binary's version and exit
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
        → your next move,  unmarked pending
@@ -111,7 +106,6 @@ May read the network; does not build or publish. Bare rk also runs status.
 
 $_unitHelp
 Omit the unit to check every release unit.
-Prints the report and exits; no interaction is required.
 --json    emit one structured report
 
 Example: rk status tools
@@ -176,6 +170,52 @@ To prepare without publishing: rk stage tools
 Use rk plan tools to see the configured work before running it.
 ''';
 
+const _verbs = {
+  'status',
+  'plan',
+  'stage',
+  'release',
+  'init',
+  'clean',
+  'target',
+};
+
+/// The flags each verb takes. A flag that exists but does not apply to a
+/// verb is refused the same way as one that does not exist: accepting
+/// `rk status --yes` would imply that a read-only report needs
+/// authorization.
+const _perVerb = {
+  'status': {'-h', '--help', '--json'},
+  'plan': {'-h', '--help', '--json'},
+  'stage': {'-h', '--help', '--json', '--timings'},
+  'release': {'-h', '--help', '--json', '-y', '--yes', '--timings'},
+  'init': {'-h', '--help', '--json', '--write'},
+  'clean': {'-h', '--help', '--json', '-y', '--yes'},
+  'target': {'-h', '--help', '--json'},
+  'help': {'-h', '--help', '--json'},
+};
+
+/// What a misused verb takes instead, in one line: the usage itself is a
+/// command away, rather than poured under the refusal.
+String _takes(String command) {
+  final flags = [
+    for (final flag in _perVerb[command]!)
+      if (flag == '--yes')
+        '-y/--yes'
+      else if (flag != '-h' && flag != '--help' && flag != '-y')
+        flag,
+  ];
+  final series = flags.length <= 2
+      ? flags.join(' and ')
+      : '${flags.sublist(0, flags.length - 1).join(', ')} and ${flags.last}';
+  return 'rk $command takes $series · rk help $command';
+}
+
+const _commands =
+    'the commands are init, status, stage, release, plan, target, clean, '
+    'use, install, uninstall and help; a unit follows one, as in '
+    'rk status [unit]';
+
 String _usageFor(String? command) => switch (command) {
   'init' => _initUsage,
   'status' => _statusUsage,
@@ -187,7 +227,22 @@ String _usageFor(String? command) => switch (command) {
   _ => _usage,
 };
 
-Future<void> main(List<String> args) => runRk(args);
+Future<void> main(List<String> args) {
+  // A reader that stops reading, as `rk --help | head -1` does, closes the
+  // pipe under rk's later writes. Output nobody reads is not an error: rk
+  // finishes what it was doing, writes nothing more, and exits as it would
+  // have, rather than dying with a stack trace mid-run.
+  stdout.done.catchError((_) {}, test: _closedPipe);
+  stderr.done.catchError((_) {}, test: _closedPipe);
+  return runRk(args);
+}
+
+/// EPIPE: the reading end of stdout or stderr is gone.
+bool _closedPipe(Object error) => switch (error) {
+  FileSystemException(:final osError?) => osError.errorCode == 32,
+  SocketException(:final osError?) => osError.errorCode == 32,
+  _ => false,
+};
 
 /// Shared command composition. The shipped entry point always uses pub.dev;
 /// native publication qualification supplies an explicit loopback endpoint.
@@ -198,8 +253,13 @@ Future<void> runRk(
   // This is deliberately self-contained: smoke tests, Homebrew, and a user
   // holding only the compiled artifact must be able to identify its bytes
   // without a repository, release.toml, network, or credential access.
-  if (args.length == 1 && args.single == '--version') {
-    stdout.writeln('rk $rkVersion');
+  if (args.contains('--version') &&
+      args.every((arg) => arg == '--version' || arg == '--json')) {
+    stdout.writeln(
+      args.contains('--json')
+          ? jsonEncode({'version': rkVersion})
+          : 'rk $rkVersion',
+    );
     return;
   }
 
@@ -216,16 +276,11 @@ Future<void> runRk(
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
-  const verbs = {
-    'status',
-    'plan',
-    'stage',
-    'release',
-    'init',
-    'clean',
-    'target',
-  };
   final first = positional.isEmpty ? null : positional.first;
+  if (first == 'help') {
+    await _help(positional.skip(1).toList(), flags, json: json);
+    return;
+  }
   if (const {'use', 'install', 'uninstall'}.contains(first)) {
     await installations.loadLibrary();
     await installations.installationMain(args, first!);
@@ -236,12 +291,12 @@ Future<void> runRk(
 
   final output = Output.stdio(json: json, command: command);
 
-  if (!verbs.contains(command)) {
+  if (!_verbs.contains(command)) {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-008',
         message: 'rk has no command named "$command"',
-        remedy: _usageFor(first).trim(),
+        remedy: _commands,
       ),
     );
     exitCode = ExitCodes.usage;
@@ -249,19 +304,7 @@ Future<void> runRk(
     return;
   }
 
-  // A flag that exists but does not apply to this verb is refused the same
-  // way as one that does not exist: accepting `rk status --yes` would imply
-  // that a read-only report needs authorization.
-  const perVerb = {
-    'status': {'-h', '--help', '--json'},
-    'plan': {'-h', '--help', '--json'},
-    'stage': {'-h', '--help', '--json', '--timings'},
-    'release': {'-h', '--help', '--json', '-y', '--yes', '--timings'},
-    'init': {'-h', '--help', '--json', '--write'},
-    'clean': {'-h', '--help', '--json', '-y', '--yes'},
-    'target': {'-h', '--help', '--json'},
-  };
-  final inapplicable = flags.difference(perVerb[command] ?? known);
+  final inapplicable = flags.difference(_perVerb[command] ?? known);
   final unknown = flags.difference(known);
   if (unknown.isNotEmpty) {
     // Silently ignoring a flag is worse than refusing it: a caller asking for
@@ -272,7 +315,7 @@ Future<void> runRk(
       Diagnostic(
         code: 'RK-CLI-001',
         message: 'rk does not have ${unknown.join(', ')}',
-        remedy: _usageFor(first).trim(),
+        remedy: _takes(command),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -287,7 +330,7 @@ Future<void> runRk(
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
-        remedy: _usageFor(first).trim(),
+        remedy: _takes(command),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -312,7 +355,7 @@ Future<void> runRk(
                   'got "${positional.skip(1).join(' ')}"'
             : 'rk takes a verb and a unit, and got '
                   '"${positional.join(' ')}"',
-        remedy: _usageFor(first).trim(),
+        remedy: 'rk help $command',
       ),
     );
     exitCode = ExitCodes.usage;
@@ -371,7 +414,9 @@ Future<void> runRk(
     // reached the write — which teaches a reader to discount the sentence
     // everywhere it is true.
     output.halt(
-      output.report.acted ? HaltKind.lostTrack : HaltKind.beforeActing,
+      output.report.changedWhatHaltsSpeakOf
+          ? HaltKind.lostTrack
+          : HaltKind.beforeActing,
     );
     final recordsDiagnosis = Diagnosis.shouldWrite(
       command: command,
@@ -412,6 +457,67 @@ Future<void> runRk(
   // it is written here, after the code is known, rather than by whichever path
   // decided to stop.
   if (json) stdout.write(output.report.encode(exit: code));
+}
+
+/// `rk help [command]`: what `rk [command] --help` prints.
+Future<void> _help(
+  List<String> words,
+  Set<String> flags, {
+  required bool json,
+}) async {
+  final output = Output.stdio(json: json, command: 'help');
+  void refuse(Diagnostic problem) {
+    output.problem(problem);
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+  }
+
+  final inapplicable = flags.difference(_perVerb['help']!);
+  if (inapplicable.isNotEmpty) {
+    return refuse(
+      Diagnostic(
+        code: 'RK-CLI-005',
+        message: 'rk help does not have ${inapplicable.join(', ')}',
+        remedy: _takes('help'),
+      ),
+    );
+  }
+  if (words.length > 1) {
+    return refuse(
+      Diagnostic(
+        code: 'RK-CLI-007',
+        message: 'rk help takes one command, and got "${words.join(' ')}"',
+        remedy: _commands,
+      ),
+    );
+  }
+  final named = words.firstOrNull;
+  String? usage;
+  if (named == null || named == 'help') {
+    usage = _usage;
+  } else if (_verbs.contains(named)) {
+    usage = _usageFor(named);
+  } else if (const {'use', 'install', 'uninstall'}.contains(named)) {
+    await installations.loadLibrary();
+    usage = installations.installationUsage;
+  }
+  if (usage == null) {
+    return refuse(
+      Diagnostic(
+        code: 'RK-CLI-008',
+        message: 'rk has no command named "$named"',
+        remedy: _commands,
+      ),
+    );
+  }
+  // Under --json stdout carries the document and nothing else, so the usage
+  // travels inside it rather than beside it.
+  if (json) {
+    output.report.next(usage.trim());
+    stdout.write(output.report.encode(exit: ExitCodes.ok));
+  } else {
+    output.help(usage);
+  }
 }
 
 /// Says where a staging or release run's time went.
@@ -517,9 +623,7 @@ Future<int> _init(
   final tree = gitRoot == null
       ? FileSystemSourceTree(root)
       : GitSourceTree(gitRoot) as SourceTree;
-  final git = gitRoot == null
-      ? GitState.unbound(root)
-      : await GitState.read(root);
+  final git = gitRoot == null ? null : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
   if (selectorEnabled) await init_ui.loadLibrary();
@@ -541,30 +645,21 @@ Future<int> _init(
       tree: tree,
       output: commandOutput,
       capabilities: HostCapabilities.inspect(),
-      origin: git.originUrl,
-      gitBound: git.isBound,
-      hasRemote: git.hasRemote,
+      origin: git?.originUrl,
+      gitBound: git != null,
+      hasRemote: git?.hasRemote ?? false,
       ambientPubHostedUrl: Platform.environment['PUB_HOSTED_URL'],
       select: interaction?.select,
       review: interaction?.review,
-      updateGitignore: git.isBound ? () => _ensureRkIgnored(root) : null,
+      updateGitignore: git != null ? () => _ensureRkIgnored(root) : null,
       write: (path, contents) {
-        if (path == 'release.toml') {
-          final file = File('$root/$path')..createSync(exclusive: true);
-          file.writeAsStringSync(contents, flush: true);
-        } else {
-          File('$root/$path').writeAsStringSync(contents);
-        }
+        final file = File('$root/$path')..createSync(exclusive: true);
+        file.writeAsStringSync(contents, flush: true);
       },
-      // A prompt would be written straight to stdout, past the sink that --json
-      // silences, so asking is not an option when a caller is parsing the
-      // answer. init already refuses when nobody can confirm. The answer is
-      // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
-      // alone does not guard that, because macOS reports a terminal for
-      // `rk init < /dev/null`.
-      // --write is the typed yes, carried as a flag: the door for scripts and
-      // agents, named in the refusal a terminal-less run prints.
-      confirm: write ? (_) async => true : null,
+      // At a terminal the selector's review asks. --write is the typed yes,
+      // carried as a flag: the door for scripts and agents, named in what a
+      // run with no terminal prints.
+      yes: write,
     ).run();
   } finally {
     try {
@@ -643,20 +738,26 @@ Future<int> _release(
 }) async {
   final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
-  final context = prepared.context!;
-  final source = _selectReleaseSource(prepared, unit, output);
-  if (source == null) return ExitCodes.refused;
+  final source = prepared.source!;
+  // Outside Git there is nothing to stage, and nothing of rk's — not even
+  // the stage lock — belongs in this directory.
+  if (!source.inRepository) {
+    _showRepository(output, source);
+    output.problem(source.git.stagingProblem()!);
+    output.halt(HaltKind.beforeActing);
+    return ExitCodes.refused;
+  }
+  final resolution = prepared.resolution!;
   final registry = Registry(
     host: pubEndpoint.uri.authority,
     secure: pubEndpoint.uri.scheme == 'https',
   );
-  final capabilities = source.resolution.units.any((unit) => unit.shipsBinaries)
-      ? await HostCapabilities.detect()
-      : HostCapabilities.inspect();
+  // A container runtime is asked for only when a smoke test needs one.
+  final capabilities = HostCapabilities.detect();
   StageStoreLock? stageLock;
   try {
     try {
-      stageLock = StageStore(context.root).acquireForMutation();
+      stageLock = StageStore(source.root).acquireForMutation();
     } on StageStoreBusy catch (error) {
       output.problem(_stageStoreProblem(error));
       return ExitCodes.refused;
@@ -664,9 +765,8 @@ Future<int> _release(
       output.problem(_stageStoreProblem(error));
       return ExitCodes.refused;
     }
-    final resolution = source.resolution;
     final tree = source.tree;
-    final git = source.binding;
+    final git = source.git;
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
     final stages = ReleaseStages(
       source: tree,
@@ -678,8 +778,6 @@ Future<int> _release(
       resolution: resolution,
       tree: tree,
       git: git,
-      repositoryGit: source.repository,
-      sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(registry: registry),
@@ -736,366 +834,61 @@ Future<String?> _promptOnTerminal(Output output, String prompt) async {
 /// correct answer rather than a failure — an agent sweeping a fleet must not
 /// see a fault for every repository that simply does not use rk.
 class _Prepared {
-  _Prepared.ready(this.resolution, this.context) : code = null;
-  _Prepared.stopped(this.code) : resolution = null, context = null;
+  _Prepared.ready(this.source, this.resolution) : code = null;
+  _Prepared.stopped(this.code) : source = null, resolution = null;
 
+  final ReleaseSource? source;
   final Resolution? resolution;
-  final SourceContext? context;
   final int? code;
 
   bool get isReady => code == null;
 }
 
+/// Reads the release configuration once — at HEAD for a clean repository,
+/// from the working tree otherwise — for status, plan, stage and release.
 Future<_Prepared> _prepare(Output output) async {
-  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
-  final root = gitRoot ?? Directory.current.absolute.path;
-  SourceTree tree = gitRoot == null
-      ? FileSystemSourceTree(root)
-      : GitSourceTree(gitRoot);
-  final git = gitRoot == null
-      ? GitState.unbound(root)
-      : await GitState.read(root);
-  if (git.isClean && git.hasCommit) {
-    tree = GitCommitSourceTree(root, git.head);
-  }
-  final String? source;
-  try {
-    source = tree.read('release.toml');
-  } on SourceUnreadable catch (error) {
-    output.repository(name: root.split('/').last);
-    output.problem(
-      error.path == 'release.toml'
-          ? _wrongReleaseConfigProblem(error.reason)
-          : Diagnostic(
-              code: 'RK-SRC-003',
-              message: 'the selected source could not be read',
-              remedy:
-                  '${error.path}: ${error.reason}\n'
-                  'Repair the repository source, then run rk again.',
-            ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-  if (source == null) {
-    if (tree.exists('release.toml')) {
-      output.repository(name: root.split('/').last);
-      output.problem(
-        _wrongReleaseConfigProblem('release.toml must be a regular file'),
-      );
+  final source = await ReleaseSource.open(Directory.current.absolute.path);
+  switch (source.readConfig()) {
+    case ConfigMissing():
+      output.repository(name: source.root.split('/').last);
+      output.blank();
+      output.line('no release.toml', mark: Mark.none);
+      output.next('rk init');
+      return _Prepared.stopped(ExitCodes.ok);
+    case ConfigProblems(:final problems):
+      _showRepository(output, source);
+      output.blank();
+      output.problems(problems);
       return _Prepared.stopped(ExitCodes.refused);
-    }
-    _showNoReleaseConfig(output, root);
-    return _Prepared.stopped(ExitCodes.ok);
+    case ConfigResolved(:final resolution):
+      return _Prepared.ready(source, resolution);
   }
-
-  final diagnostics = Diagnostics();
-  ReleaseConfig? config;
-  Resolution? resolution;
-  try {
-    config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-    resolution = config == null
-        ? null
-        : Resolution.resolve(config, tree, diagnostics);
-
-    if (resolution != null && !git.isBound) {
-      tree = FileSystemSourceTree(
-        root,
-        roots: _filesystemSourceRoots(tree, resolution),
-      );
-      final narrowedDiagnostics = Diagnostics();
-      resolution = Resolution.resolve(config!, tree, narrowedDiagnostics);
-      for (final diagnostic in narrowedDiagnostics.found) {
-        diagnostics.report(diagnostic);
-      }
-    }
-  } on SourceUnreadable catch (error) {
-    diagnostics.add(
-      'RK-SRC-003',
-      'the source snapshot could not be read',
-      remedy:
-          '${error.path}: ${error.reason}\n'
-          'Make that path a readable repository-local regular file or '
-          'directory, then run rk again.',
-    );
-    resolution = null;
-  }
-
-  if (resolution != null && !git.isBound) {
-    for (final unit in resolution.units) {
-      final requiringGit = <PublishTarget>{
-        ...unit.publish.where((target) => target.requiresGit),
-        for (final project in unit.projects)
-          ...project.publish.where((target) => target.requiresGit),
-      };
-      if (requiringGit.isEmpty) continue;
-      final names = requiringGit.map((target) => target.configName).toList()
-        ..sort();
-      diagnostics.add(
-        'RK-SRC-001',
-        '${unit.name} selects targets that require Git',
-        remedy:
-            'initialize a Git repository, or remove '
-            '${names.join(', ')} from this unit',
-      );
-    }
-  }
-
-  if (resolution == null || diagnostics.isNotEmpty) {
-    output.repository(name: root.split('/').last);
-    output.blank();
-    output.problems(diagnostics.found);
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-
-  return _Prepared.ready(resolution, SourceContext(tree: tree, git: git));
 }
 
-Set<String> _filesystemSourceRoots(SourceTree tree, Resolution resolution) {
-  final roots = <String>{
-    'release.toml',
-    ...DartWorkspaceDiscovery(tree).sourceRoots,
-    for (final unit in resolution.units)
-      for (final project in unit.projects) project.pubspec.directory,
-  };
-  return roots;
-}
-
-ReleaseSource? _selectReleaseSource(
-  _Prepared prepared,
-  String? unit,
-  Output output,
-) {
-  final context = prepared.context!;
-  final diagnostics = Diagnostics();
-  final source = ReleaseSource.select(
-    tree: context.tree,
-    git: context.git,
-    repository: context.git,
-    resolution: prepared.resolution!,
-    only: unit,
-    diagnostics: diagnostics,
-  );
-  if (source != null) return source;
-
-  final git = context.git;
+/// The repository line a refusal before any command starts is shown under.
+void _showRepository(Output output, ReleaseSource source) {
+  final git = source.git;
   output.repository(
-    name: context.root.split('/').last,
+    name: source.root.split('/').last,
     branch: git.branch,
     commit: git.hasCommit ? git.shortHead : null,
-    uncommitted: git.uncommitted.length,
-    head: git.hasCommit ? git.head : null,
-    remote: git.originUrl,
-  );
-  output.blank();
-  output.problems(diagnostics.found);
-  return null;
-}
-
-Future<int> _plan(Output output, String? unit) async {
-  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
-  final root = gitRoot ?? Directory.current.absolute.path;
-  final initial = SourceContext(
-    tree: gitRoot == null ? FileSystemSourceTree(root) : GitSourceTree(gitRoot),
-    git: gitRoot == null ? GitState.unbound(root) : await GitState.read(root),
-  );
-  final prepared = await _selectPlanSource(initial, output);
-  if (!prepared.isReady) return prepared.code!;
-  return PlanCommand(
-    resolution: prepared.resolution!,
-    git: prepared.context!.git,
-    output: output,
-    targets: TargetCatalog.builtIn(),
-  ).run(only: unit);
-}
-
-/// Captures one immutable current-source view for `rk plan`.
-///
-/// This intentionally does less than [ReleaseSource.select]: a configured Git
-/// target is valid topology even when this directory has no Git identity.
-/// Readiness belongs to status and release. Like release, a clean repository
-/// with a commit resolves from immutable HEAD while a dirty, unborn, or
-/// unbound repository gets one byte snapshot. Git is read once.
-Future<_Prepared> _selectPlanSource(
-  SourceContext context,
-  Output output,
-) async {
-  final git = context.git;
-  if (git.worktreeStatusError != null) {
-    _showPlanSourceProblem(
-      output,
-      context,
-      git.uncommittedProblem() ??
-          Diagnostic(
-            code: 'RK-GIT-008',
-            message: 'the worktree state could not be read',
-            remedy:
-                '${git.worktreeStatusError}\n'
-                '`git status --porcelain` must succeed before rk can select '
-                'the source for this plan.',
-          ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-
-  final SourceTree selected;
-  try {
-    selected = !git.isBound
-        ? _captureUnboundPlanSource(context.root)
-        : git.isClean && git.head.isNotEmpty
-        ? GitCommitSourceTree(context.root, git.head)
-        : FrozenSourceTree.capture(GitWorktreeSourceTree(context.root));
-  } on SourceUnreadable catch (error) {
-    _showPlanSourceProblem(
-      output,
-      context,
-      error.path == 'release.toml' &&
-              error.kind == SourceUnreadableKind.wrongType
-          ? _wrongReleaseConfigProblem(error.reason)
-          : Diagnostic(
-              code: 'RK-SRC-003',
-              message: 'the source snapshot could not be selected',
-              remedy:
-                  '${error.path}: ${error.reason}\n'
-                  'Stop concurrent edits, then run rk plan again.',
-            ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-
-  final diagnostics = Diagnostics();
-  String? configSource;
-  Resolution? resolution;
-  try {
-    configSource = selected.read('release.toml');
-    if (configSource == null && selected.exists('release.toml')) {
-      diagnostics.report(
-        _wrongReleaseConfigProblem('release.toml must be a regular file'),
-      );
-    }
-    final config = configSource == null
-        ? null
-        : ReleaseConfig.parse(configSource, 'release.toml', diagnostics);
-    resolution = config == null
-        ? null
-        : Resolution.resolve(config, selected, diagnostics);
-  } on SourceUnreadable catch (error) {
-    if (error.path == 'release.toml' &&
-        error.kind == SourceUnreadableKind.wrongType) {
-      diagnostics.report(_wrongReleaseConfigProblem(error.reason));
-    } else {
-      diagnostics.add(
-        'RK-SRC-003',
-        'the selected source could not be read',
-        remedy:
-            '${error.path}: ${error.reason}\n'
-            'Repair the repository, then run rk plan again.',
-      );
-    }
-  }
-  if (diagnostics.isNotEmpty) {
-    output.repository(
-      name: context.root.split('/').last,
-      branch: git.branch,
-      commit: git.hasCommit ? git.shortHead : null,
-      uncommitted: git.isBound ? git.uncommitted.length : null,
-      head: git.hasCommit ? git.head : null,
-      remote: git.originUrl,
-    );
-    output.blank();
-    output.problems(diagnostics.found);
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-  if (configSource == null) {
-    _showNoReleaseConfig(output, context.root);
-    return _Prepared.stopped(ExitCodes.ok);
-  }
-  if (resolution == null) {
-    _showPlanSourceProblem(
-      output,
-      SourceContext(tree: selected, git: git),
-      const Diagnostic(
-        code: 'RK-SRC-003',
-        message: 'the selected source could not be resolved',
-        remedy: 'Run rk plan again. If this repeats, report an rk bug.',
-      ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-  return _Prepared.ready(resolution, SourceContext(tree: selected, git: git));
-}
-
-/// Freezes only the files plan resolution consumes in an unbound directory.
-///
-/// The first release.toml read discovers that finite manifest set; the frozen
-/// copy must contain the same release.toml bytes or discovery is retried. This
-/// avoids both an unbounded recursive snapshot and a plan assembled from two
-/// configurations when the file changes between scope discovery and capture.
-FrozenSourceTree _captureUnboundPlanSource(String root) {
-  final discovery = FileSystemSourceTree(root);
-  for (var attempt = 0; attempt < 2; attempt++) {
-    final source = discovery.read('release.toml');
-    final roots = <String>{'release.toml'};
-    final projectPaths = <String>{};
-    if (source != null) {
-      final diagnostics = Diagnostics();
-      final config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-      if (config != null) {
-        for (final unit in config.units) {
-          for (final project in unit.projects) {
-            projectPaths.add(project.path);
-            roots.add(
-              project.path == '.'
-                  ? 'pubspec.yaml'
-                  : '${project.path}/pubspec.yaml',
-            );
-          }
-        }
-      }
-    }
-    final frozen = FrozenSourceTree.capture(
-      FileSystemSourceTree(root, roots: roots, rootsAreFiles: true),
-      preservePaths: projectPaths,
-    );
-    if (frozen.read('release.toml') == source) return frozen;
-  }
-  throw SourceUnreadable(
-    'the unbound source',
-    'the file changed while plan inputs were being selected',
-  );
-}
-
-void _showNoReleaseConfig(Output output, String root) {
-  output.repository(name: root.split('/').last);
-  output.blank();
-  output.line('no release.toml', mark: Mark.none);
-  output.next('rk init');
-}
-
-Diagnostic _wrongReleaseConfigProblem(String reason) => Diagnostic(
-  code: 'RK-CONF-034',
-  message: 'release.toml is there and rk could not read it',
-  source: const SourceLocation('release.toml', 1),
-  remedy: reason,
-);
-
-void _showPlanSourceProblem(
-  Output output,
-  SourceContext context,
-  Diagnostic problem,
-) {
-  final git = context.git;
-  output.repository(
-    name: context.root.split('/').last,
-    branch: git.branch,
-    commit: git.hasCommit ? git.shortHead : null,
-    uncommitted: git.worktreeStatusError == null && git.isBound
+    uncommitted: source.inRepository && git.worktreeStatusError == null
         ? git.uncommitted.length
         : null,
     head: git.hasCommit ? git.head : null,
     remote: git.originUrl,
   );
-  output.blank();
-  output.problem(problem);
+}
+
+Future<int> _plan(Output output, String? unit) async {
+  final prepared = await _prepare(output);
+  if (!prepared.isReady) return prepared.code!;
+  return PlanCommand(
+    resolution: prepared.resolution!,
+    git: prepared.source!.git,
+    output: output,
+    targets: TargetCatalog.builtIn(),
+  ).run(only: unit);
 }
 
 Future<int> _status(
@@ -1105,16 +898,15 @@ Future<int> _status(
 }) async {
   final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
-  final source = _selectReleaseSource(prepared, unit, output);
-  if (source == null) return ExitCodes.refused;
+  final source = prepared.source!;
   final registry = Registry(
     host: pubEndpoint.uri.authority,
     secure: pubEndpoint.uri.scheme == 'https',
   );
   final cancellation = ToolCancellation();
-  final resolution = source.resolution;
+  final resolution = prepared.resolution!;
   final tree = source.tree;
-  final git = source.binding;
+  final git = source.git;
   try {
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
     final stages = ReleaseStages(
@@ -1130,8 +922,6 @@ Future<int> _status(
       resolution: resolution,
       tree: tree,
       git: git,
-      repositoryGit: source.repository,
-      sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(registry: registry),

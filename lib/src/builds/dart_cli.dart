@@ -34,7 +34,6 @@ class DartCliBuilder {
     required String expectedVersion,
     Map<String, String> defines = const {},
     void Function(DartBuildEvent event)? onProgress,
-    Future<ToolResult> Function(List<String> arguments)? runCompiler,
   }) async {
     // The caller refuses an unproducible platform with a diagnostic before
     // reaching here, so this asks only *how* to produce it.
@@ -61,13 +60,11 @@ class DartCliBuilder {
       '-o',
       module,
     ];
-    final compiled = runCompiler == null
-        ? await tools.run(
-            compilerExecutable,
-            arguments,
-            workingDirectory: workingDirectory,
-          )
-        : await runCompiler(arguments);
+    final compiled = await tools.run(
+      compilerExecutable,
+      arguments,
+      workingDirectory: workingDirectory,
+    );
 
     if (!compiled.ok) {
       return BuildOutcome.failed(
@@ -106,12 +103,18 @@ class DartCliBuilder {
       }
     }
 
-    if (!capability.canProve) {
+    // Another platform's binary runs in a container, when one answers.
+    final runtime =
+        capability.capability == Capability.native || !capability.canProve
+        ? null
+        : await capabilities.containerRuntime();
+    if (!capability.canProve ||
+        (capability.capability != Capability.native && runtime == null)) {
       // Built, and nothing here can run it. The absence of the proof is
       // carried forward rather than swallowed or treated as a failure.
       return BuildOutcome.built(
         output,
-        unproven: capability.reason ?? 'nothing here can run it',
+        unproven: capability.reason ?? noContainerRuntime,
       );
     }
 
@@ -119,7 +122,7 @@ class DartCliBuilder {
     final smoke = await _smokeTest(
       platform: platform,
       binary: output,
-      capability: capability,
+      runtime: runtime,
       expectedVersion: expectedVersion,
     );
     if (smoke != null) return smoke;
@@ -134,26 +137,14 @@ class DartCliBuilder {
     final compiler = compilerExecutable == 'dart'
         ? DartSdk.ambient().executable
         : File(compilerExecutable).absolute.path;
-    final runtime = '${File(compiler).parent.path}/dartaotruntime';
-    final installedRuntime = '$root/${artifact.identityFile}';
-    final copied = await tools.run('/bin/cp', [runtime, installedRuntime]);
-    if (!copied.ok) {
-      return BuildOutcome.failed(
-        'the matching Dart runtime could not be copied',
-        transcript: copied.transcript,
-      );
-    }
-    final licensePath = '$root/lib/${artifact.entryPoint}/LICENSE.dart';
-    final license = await tools.run('/bin/cp', [
+    // A copy keeps the runtime's executable mode; the archive records every
+    // file's mode from the layout.
+    File(
+      '${File(compiler).parent.path}/dartaotruntime',
+    ).copySync('$root/${artifact.identityFile}');
+    File(
       '${File(compiler).parent.parent.path}/LICENSE',
-      licensePath,
-    ]);
-    if (!license.ok) {
-      return BuildOutcome.failed(
-        'the Dart runtime license could not be copied',
-        transcript: license.transcript,
-      );
-    }
+    ).copySync('$root/lib/${artifact.entryPoint}/LICENSE.dart');
     final scratch = Directory.systemTemp.createTempSync('rk-dart-launcher-');
     final source = File('${scratch.path}/launcher.c');
     try {
@@ -179,15 +170,6 @@ class DartCliBuilder {
     File(
       '$root/${BinaryArtifact.manifestName}',
     ).writeAsStringSync(artifact.manifest);
-    for (final file in artifact.files) {
-      final mode = await tools.run('/bin/chmod', [
-        file.mode,
-        '$root/${file.path}',
-      ]);
-      if (!mode.ok) {
-        return BuildOutcome.failed(mode.summary, transcript: mode.transcript);
-      }
-    }
     return null;
   }
 
@@ -196,28 +178,20 @@ class DartCliBuilder {
   /// The strongest cheap signal that the right thing was built: a binary that
   /// prints the wrong version is one nobody should ship, and it is exactly
   /// what a stale artifact looks like.
+  /// [runtime] runs another platform's binary; null runs it here.
   Future<BuildOutcome?> _smokeTest({
     required String platform,
     required String binary,
-    required PlatformCapability capability,
+    required String? runtime,
     required String expectedVersion,
   }) async {
     final ToolResult result;
-    if (capability.capability == Capability.native) {
+    if (runtime == null) {
       result = await tools.run(binary, const [
         '--version',
       ], timeout: _smokeTimeout);
     } else {
       final target = _target(platform);
-      final runtime = capabilities.containerRuntime;
-      if (runtime == null) {
-        // Unreachable through the capability gate, and stated rather than
-        // assumed: the alternative is a null-check crash at the one step
-        // whose whole job is to prove the binary runs.
-        return const BuildOutcome.failed(
-          'no container runtime is available to run it',
-        );
-      }
       result = await tools.run(runtime, [
         'run',
         '--rm',

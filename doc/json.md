@@ -4,6 +4,7 @@ One complete JSON document on stdout, nothing else. It survives every
 non-zero exit, is never truncated, and is written by the same calls that
 print the human output, so the two surfaces cannot drift. Schema version
 rides in `"rk"` and is bumped only when a key changes meaning.
+`rk --version --json` is the exception: it prints `{"version": "<version>"}`.
 
 This is the surface an agent drives a release through. The loop it
 supports, end to end:
@@ -48,7 +49,7 @@ changes no public target.
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
-| `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status, stage, and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
+| `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent when there is no commit: outside Git, or before the first commit. `remote` is always present and null when no origin exists. Status, stage, and release report `source_binding` as `gitCommit` when the source has a commit and `unbound` when it has none, independently from `source_comparison` (`exact` or `unavailable`). Stage and release need a clean commit |
 | `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each discovered candidate is reported even when the interactive selector hides it by default, with its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one release output is selected |
 | `cleanup` | present on `clean`: `{root, path, found, removed}` for the frozen repository-local stage set. `root` is the absolute repository root and `path` is always `.rk/work/stages`; diagnoses are outside it and are never removed |
 | `plan` | present on `plan`: the canonical configured release topology. It is source-only and contains no observation, verdict, action, credential, or stage receipt |
@@ -68,8 +69,8 @@ credential state. The accompanying sentence states what changed and whether
 re-running can advance the work.
 
 An empty `problems[]` remains the release gate. `warnings[]` never changes the
-exit code or authorizes work by itself; it discloses facts such as a
-registry-only release capturing dirty working-tree state.
+exit code or authorizes work by itself; it discloses facts such as a staged
+binary that was built but never run.
 
 Successful stage-only and local-only releases include `stage id` and
 `stage path` in the `completeStage` step's `evidence`. The path is relative to
@@ -87,17 +88,19 @@ progress.
 
 `rk plan [unit] --json` derives topology from the configured source and native
 manifests. It does not inspect public destinations or decide what is already
-complete. A clean Git repository is read from immutable `HEAD`; dirty and
-unbound source is captured as one byte snapshot. Git is read once. The top-level `plan`
+complete. A clean Git repository is read from immutable `HEAD`; a dirty one,
+or a directory outside Git, from its working tree. The configuration is read
+once. The top-level `plan`
 object is:
 
 ```text
 {
-  source_only: true,
-  destinations_inspected: false,
-  units: [{name, version, tag, requires_units[], nodes[], dependency_candidates}]
+  units: [{name, version, tag, requires_units[], nodes[]}]
 }
 ```
+
+The plan's `source_only: true` and `destinations_inspected: false` are gone:
+every plan is source-only, so the two keys never said anything.
 
 Each node has `id`, `kind`, `phase`, `summary`, and its direct dependency ids
 in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
@@ -107,20 +110,10 @@ in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
 `buildAssets`, `completeStage`, `tag`, `publishRegistry`, `publishRelease`,
 and `publishHomebrew`. `buildAssets` runs a project's own declared build.
 
-`dependency_candidates` has `preparation` and `publication` lists, projected
-from the same native requirements. Each selection contains `requirements[]`,
-an optional configured `candidate`, and `resolution`. A candidate has native
-`package` identity (`ecosystem`, opaque credential-free `source`, `name`),
-`version`, provider `unit`, `project`, and `producer`. Each requirement records
-its native `context`, owning configured root `owner`, installation `slot`,
-immediate declaring `consumer`, `package`, opaque
-`constraint`, native `kind`, manifest `location`, and applicable `phases`.
-`resolution` is `repository` when the candidate is taken from this
-repository's source while staging, its version satisfying every requirement on
-it, or `registry` when Pub resolves the requirement from its registry. Neither
-is proof that a registry version is available. An incompatible local candidate
-leaves the requirement to the registry; it does not force the dependent package
-to change version. Development requirements do not become publication edges.
+`requires_units[]` names the units whose packages this one depends on, which
+release first. A requirement on a package this repository publishes counts
+when it names pub.dev and its constraint allows the version here; any other
+requirement is Pub's to resolve from its registry.
 
 Node ids and `needs[]` are the machine graph. `lane`, when present, is an
 opaque equality key scoped to one unit and phase: nodes with the same key are
@@ -168,14 +161,15 @@ target's verdict reads it where the settled observation lives.
 
 Keyed by frozen `id` (treat ids as opaque tokens). Fields: `id`, `kind`,
 optional concrete `target`, `summary`, `verdict`,
-`permanent?`, `public?`, `needs[]`, `detail?`, `evidence?`, `took_ms?`, and
-optional `action` during `stage` or `release`.
+`permanent?`, `public?`, `needs[]`, `detail?`, `evidence?`, and optional
+`action` during `stage` or `release`. The optional `took_ms` is gone: rk never
+filled it; `--timings` writes a run's times to `.rk/timings.json`.
 
 `kind` describes lifecycle mechanics; `target` is the stable destination id
 for public steps (for example `pubDev` or `githubRelease`). More than one
 registry can therefore share `publishRegistry` without becoming ambiguous.
 `action` records what this release invocation did with a public target:
-`not_attempted`, `attempted`, `already_published`, `completed`, or `failed`.
+`not_attempted`, `already_published`, `completed`, or `failed`.
 It is an execution result, not another target-state vocabulary; `verdict`
 remains the shared status/release observation. Native login is not a target
 action. A pub.dev action is `completed` only after publish and exact public
@@ -198,10 +192,12 @@ dependencies never order publication.
 
 Each `units[].targets[]` entry is the settled observation the human report
 renders as one target row: `id`, `kind`, `label`, `coordinate`, `current_known`,
-`current_version`, `target_version`, `verdict`, `source_binding`,
-`source_comparison`, optional `detail`, optional `uses`, and `artifacts[]`.
-The source fields stay independent of the target verdict: a non-Git target may
-be remotely exact while source comparison remains unavailable. `uses` refers
+`current_version`, `target_version`, `verdict`, optional `detail`, optional
+`uses`, and `artifacts[]`. Whether the source has a commit to compare is
+`repository.source_binding` and `repository.source_comparison`; each target
+no longer repeats them, as it always said the same. They stay independent of
+a target's verdict: a target may be exact while source comparison is
+unavailable. `uses` refers
 to an artifact inventoried under
 another target without duplicating it. An artifact is
 `{name, status, problem?}`, where `status` is

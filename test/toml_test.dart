@@ -113,6 +113,13 @@ path = "packages/keybay"
     expect(document.root['tag'], 'v{version}#1');
   });
 
+  test('a comma inside a string does not split the list', () {
+    final document = parse(
+      'build = ["tool/build.sh", "--targets=a,b", "{out}"]',
+    )!;
+    expect(document.root['build'], ['tool/build.sh', '--targets=a,b', '{out}']);
+  });
+
   test('an empty list is allowed by the parser', () {
     // Emptiness is a schema question, refused later with a better message.
     expect(parse('publish = []')!.root['publish'], isEmpty);

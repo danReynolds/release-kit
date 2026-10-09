@@ -125,4 +125,16 @@ void main() {
       reason: 'build metadata alone is not a prerelease',
     );
   });
+
+  test('a component wider than the platform integer is refused', () {
+    expect(Version.tryParse('99999999999999999999.0.0'), isNull);
+  });
+
+  test('a numeric prerelease identifier of any width still orders', () {
+    expect(
+      Version.tryParse('1.0.0-1')! <
+          Version.tryParse('1.0.0-99999999999999999999')!,
+      isTrue,
+    );
+  });
 }

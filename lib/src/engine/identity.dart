@@ -109,7 +109,8 @@ class PublishedIdentity {
     }
   }
 
-  /// Reads the designated requirement of the macOS binary published at [tag].
+  /// Reads the designated requirement of the macOS binary published at [tag],
+  /// a release [priorReleaseTags] listed.
   ///
   /// [into] is a directory this may fill with a downloaded archive and its
   /// contents. Nothing is kept: the reading is the product.
@@ -118,47 +119,21 @@ class PublishedIdentity {
     required String executable,
     required String into,
     String platform = 'macos-arm64',
-    bool expectedPublished = false,
   }) async {
-    // No asset is a fact; a failure to ask is not. They are kept apart
-    // because the first means "there is no published identity yet" — the
-    // honest answer for a first signed release — and the second means rk
-    // does not know, which must never read as permission. The distinction
-    // is read from the release object's own asset list via `gh api`, whose
-    // error line carries the HTTP status — the porcelain download said the
-    // same words for a missing release and an unreachable one, and absence
-    // used to hang on matching them.
+    // No asset is a fact; a failure to ask is not. The first means this
+    // release published no identity to keep; the second means rk does not
+    // know, which must never read as permission. The release was listed as
+    // public, so even a 404 for it is a failure to ask, not an absence.
     final viewed = await tools.run('gh', [
       'api',
       'repos/$repository/releases/tags/$tag',
     ], workingDirectory: workingDirectory);
     if (!viewed.ok) {
-      if (viewed.summary.contains('(HTTP 404)')) {
-        if (expectedPublished) {
-          return IdentityReading.unreadable(
-            'the public release at $tag disappeared while its signing '
-            'identity was being read',
-          );
-        }
-        // GitHub answers 404 for a repository the token cannot see, so a
-        // 404 becomes "nothing is published" only once the repository has
-        // answered for itself.
-        final readable = await tools.run('gh', [
-          'repo',
-          'view',
-          repository,
-          '--json',
-          'name',
-        ], workingDirectory: workingDirectory);
-        return readable.ok
-            ? const IdentityReading.none('no release is published at that tag')
-            : IdentityReading.unreadable(
-                '$repository could not be read, so rk cannot tell what is '
-                'published: ${readable.summary}',
-              );
-      }
       return IdentityReading.unreadable(
-        'the published release could not be read: ${viewed.summary}',
+        viewed.summary.contains('(HTTP 404)')
+            ? 'the public release at $tag disappeared while its signing '
+                  'identity was being read'
+            : 'the published release could not be read: ${viewed.summary}',
       );
     }
 

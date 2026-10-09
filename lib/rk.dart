@@ -1,4 +1,4 @@
-/// rk — an austere release tool.
+/// rk makes releasing code simple.
 ///
 /// This library exports nothing: rk is a command-line program, not a package
 /// you import. It exists because the published package renders this file as

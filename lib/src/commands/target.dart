@@ -12,27 +12,31 @@ final class TargetCommand {
   const TargetCommand({required this.output});
 
   static const usage = '''
-Usage
-  rk target list                  list every release choice this rk supports
-  rk target <name>                explain one choice and its configuration
+rk target [name] [--json]
+
+List what this rk can create or publish, or explain one target: what it
+needs, how to select it, and a minimal configuration.
+Reads nothing from the current folder; rk status shows what is set up here.
+
+rk target and rk target list both list them.
+--json    emit the reference as one structured report
+
+Example: rk target pub.dev
 ''';
 
   final Output output;
 
   int run(String? name) {
-    if (name == 'list') return _list();
-    final choice = name == null ? null : ReleaseChoice.named(name);
+    if (name == null || name == 'list') return _list();
+    final choice = ReleaseChoice.named(name);
     if (choice == null) {
       output.problem(
         Diagnostic(
           code: 'RK-CLI-009',
-          message: name == null
-              ? 'rk target needs "list" or a release choice name'
-              : 'rk does not support a release choice named "$name"',
-          remedy: name == null
-              ? usage.trim()
-              : 'Supported: ${ReleaseChoice.values.map((item) => item.id).join(', ')}\n'
-                    'Run rk target list to see what each one does.',
+          message: 'rk does not support a release choice named "$name"',
+          remedy:
+              'Supported: ${ReleaseChoice.values.map((item) => item.id).join(', ')}\n'
+              'Run rk target list to see what each one does.',
         ),
       );
       return ExitCodes.usage;

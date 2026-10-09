@@ -1,9 +1,7 @@
 import 'dart:io';
-import 'dart:math';
 
 import 'canonical_json.dart';
 import 'release_asset.dart';
-import 'release_manifest.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
 import 'stage.dart';
@@ -17,14 +15,6 @@ import 'stage_receipt.dart';
 import 'stage_source.dart';
 import 'git.dart';
 import 'timings.dart';
-
-String _newRunId() {
-  final random = Random.secure();
-  return List.generate(
-    4,
-    (_) => random.nextInt(0x40000000).toRadixString(16).padLeft(8, '0'),
-  ).join();
-}
 
 /// One shared, cached stage resolver for status and release composition.
 class ReleaseStages {
@@ -43,37 +33,32 @@ class ReleaseStages {
   final StageContractResolver stageContracts;
   final DartSdk Function() _sdk;
   final Map<String, ReleaseStage> _stages = {};
-  final String _unboundRunId = _newRunId();
 
+  /// [unit]'s stage at this commit. A stage is named by its commit, so this
+  /// is asked only of a source that has one.
   ReleaseStage call(ResolvedUnit unit) =>
-      _stages.putIfAbsent(unit.name, () => _resolve(unit, git));
+      _stages.putIfAbsent(unit.name, () => _resolve(unit));
 
-  ReleaseStage _resolve(ResolvedUnit unit, GitState currentGit) {
-    final plan = stagePlanFor(unit, currentGit);
-    final identity = currentGit.isBound
-        ? StageIdentity.forPlan(
-            headCommit: currentGit.head,
-            headTree: currentGit.headTree,
-            resolvedPlan: plan,
-          )
-        : StageIdentity.forUnboundPlan(
-            runId: _unboundRunId,
-            resolvedPlan: plan,
-          );
+  ReleaseStage _resolve(ResolvedUnit unit) {
+    final plan = stagePlanFor(unit, git);
     return ReleaseStage(
       unit: unit,
       source: source,
       sdk: _sdk,
-      repository: currentGit.originUrl,
+      repository: git.originUrl,
       enforceUnitContract: true,
       directory: StageDirectory(
         repositoryRoot: repositoryRoot,
-        identity: identity,
+        identity: StageIdentity.forPlan(
+          headCommit: git.head,
+          headTree: git.headTree,
+          resolvedPlan: plan,
+        ),
       ),
       resolvedPlan: plan,
       targetContributions: stageContracts(
         unit: unit,
-        repository: currentGit.originUrl,
+        repository: git.originUrl,
       ),
     );
   }
@@ -94,12 +79,12 @@ class ReleaseStage {
     this.repository,
     this.enforceUnitContract = false,
     Map<String, Object?>? resolvedPlan,
-    Iterable<StageContributionContract> targetContributions = const [],
+    Iterable<StageStepContract> targetContributions = const [],
   }) : _readSdk = sdk ?? DartSdk.ambient,
        resolvedPlan = resolvedPlan == null
            ? null
            : CanonicalJson.normalize(resolvedPlan) as Map<String, Object?>,
-       targetContributions = List<StageContributionContract>.unmodifiable(
+       targetContributions = List<StageStepContract>.unmodifiable(
          targetContributions,
        );
 
@@ -116,7 +101,7 @@ class ReleaseStage {
   /// What the stage is built from beyond its commit, recorded in the
   /// receipt so a person can read it.
   final Map<String, Object?>? resolvedPlan;
-  final List<StageContributionContract> targetContributions;
+  final List<StageStepContract> targetContributions;
 
   /// Direct construction is used by low-level receipt tests whose
   /// deliberately partial producer graphs are not a release plan. Every
@@ -128,13 +113,11 @@ class ReleaseStage {
   /// and the inspector so canonical order and validation cannot drift.
   /// Null exactly when [enforceUnitContract] is off: a deliberately partial
   /// graph has no unit contract to order by or validate against.
-  late final StageReceiptContract? _unitContract = _resolveContract();
+  late final StageProducerGraph? _unitContract = _resolveContract();
 
-  StageReceiptContract? _resolveContract() {
+  StageProducerGraph? _resolveContract() {
     if (!enforceUnitContract) return null;
-    return StageReceiptContract.forUnit(
-      unit: unit,
-      repository: repository,
+    return StageProducerGraph.forUnit(
       targetContributions: targetContributions,
       localProducers: localProducerContracts(unit),
     );
@@ -154,33 +137,6 @@ class ReleaseStage {
   StageStepContract producerContract(String producer) =>
       _unitContract?.producerContract(producer) ??
       (throw StateError('this partial stage has no producer contract'));
-
-  /// The recorded output of [producer] at [path], for a later producer in
-  /// the same stage. Only recorded steps are trusted.
-  StageArtifact requireProducerArtifact({
-    required String producer,
-    required String path,
-    required String type,
-  }) {
-    if (!enforceUnitContract ||
-        producerContract(producer).outputs[path] != type) {
-      throw StateError(
-        'dependency artifact does not match the producer contract',
-      );
-    }
-    final inspected = inspect();
-    if (!inspected.reusable && !inspected.validProgress) {
-      throw StateError(
-        'the stage does not validate: ${inspected.issues.join('; ')}',
-      );
-    }
-    return inspected.receipt!.steps
-        .singleWhere((step) => step.name == producer)
-        .outputs
-        .singleWhere(
-          (artifact) => artifact.path == path && artifact.type == type,
-        );
-  }
 
   /// What this stage is: its receipt, checked against the files it records
   /// and against the producers this rk runs for the unit.
@@ -219,34 +175,6 @@ class ReleaseStage {
         'stage changed before it could be reset',
         directory.path,
       );
-    }
-  }
-
-  /// Removes this unit's earlier stages of a source with no commit. Each such
-  /// run starts a stage no later run can reuse, so the one before it is
-  /// garbage once this one begins.
-  void discardEarlierUnboundStages() {
-    if (directory.identity.isGitBound) return;
-    final store = StageStore(directory.repositoryRoot);
-    for (final entry in store.inventory()) {
-      if (entry.name == directory.identity.id ||
-          entry.type != FileSystemEntityType.directory) {
-        continue;
-      }
-      try {
-        final receipt = StageReceipt.parse(
-          File(store.receiptPath(entry.name)!).readAsStringSync(),
-        );
-        final planned = receipt.plan?['unit'];
-        if (receipt.identity.isGitBound ||
-            planned is! Map ||
-            planned['name'] != unit.name) {
-          continue;
-        }
-        store.deleteEntry(entry);
-      } on Object {
-        // Not a stage rk can read as this unit's; rk clean shows it.
-      }
     }
   }
 
@@ -340,21 +268,6 @@ class ReleaseStage {
     required Iterable<ReleaseAssetSpec> releaseAssets,
     Map<String, Object?> evidence = const {},
   }) {
-    final specs = validateReleaseAssetSpecs(releaseAssets).toList();
-    final stagedPaths = specs.map((asset) => asset.stagedPath).toSet();
-    if (specs.map((asset) => asset.publicName).toSet().length != specs.length ||
-        stagedPaths.length != specs.length) {
-      throw ArgumentError(
-        'release assets must name unique public files and blobs',
-      );
-    }
-    final homebrew = _homebrewBinding();
-    if (homebrew != null && stagedPaths.contains(homebrew.stagedPath)) {
-      throw ArgumentError(
-        'Homebrew formulae cannot also be release assets: '
-        '${homebrew.stagedPath}',
-      );
-    }
     final inspected = inspect();
     final progress = inspected.receipt;
     if (inspected.reusable) return progress!;
@@ -371,24 +284,12 @@ class ReleaseStage {
     final oldManifest = File(directory.resolve('release-manifest.json'));
     if (oldManifest.existsSync()) oldManifest.deleteSync();
 
-    final byPath = {
-      for (final artifact in progress.artifacts) artifact.path: artifact,
-    };
-    final missing = {
-      ...stagedPaths,
-      if (homebrew != null) homebrew.stagedPath,
-    }.difference(byPath.keys.toSet());
-    if (missing.isNotEmpty) {
-      throw StateError(
-        'stage is missing publication artifacts: ${missing.join(', ')}',
-      );
-    }
     final completion = StageCompletion(
       unit: unit,
       repository: repository,
       commit: directory.identity.headCommit,
-      artifacts: byPath.values,
-      releaseAssets: specs,
+      artifacts: progress.artifacts,
+      releaseAssets: releaseAssets,
     );
     completion.manifest.writeTo(directory);
     final receipt = StageReceipt(
@@ -426,8 +327,11 @@ class ReleaseStage {
   }
 
   /// Exact public-name to private-blob mapping frozen by complete-stage.
-  Map<String, StageArtifact> releaseAssets() {
-    final receipt = requireReceipt();
+  Map<String, StageArtifact> releaseAssets() =>
+      releaseAssetsIn(requireReceipt());
+
+  /// The same mapping in a completed [receipt] already in hand.
+  static Map<String, StageArtifact> releaseAssetsIn(StageReceipt receipt) {
     final complete = receipt.steps.last;
     final encoded = complete.evidence['release_assets'];
     final byPath = {
@@ -489,9 +393,5 @@ class ReleaseStage {
         return byContract != 0 ? byContract : left.$1.compareTo(right.$1);
       });
     return [for (final (_, step) in decorated) step];
-  }
-
-  StagedHomebrewBinding? _homebrewBinding() {
-    return StageCompletion.homebrewFor(unit, repository);
   }
 }

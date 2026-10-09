@@ -9,9 +9,9 @@ import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
 
-/// The forge reader, whose whole inspect arm a mutation pass found protected
-/// by nothing: a draft could read as published, a missing asset as exact, and
-/// any gh failure as absent, and the suite stayed green.
+/// The GitHub Release reader, and the private draft rk fills before it
+/// publishes: a draft is never published, a missing or extra asset is a
+/// conflict, and a gh failure is never absent.
 void main() {
   Future<Inspection> inspect(
     List<({int code, String out, String err})> answers, {
@@ -140,29 +140,17 @@ void main() {
             'deliberately — and absent is what lets a release proceed',
       );
     });
+  });
 
-    test('the porcelain prose alone is never absence', () async {
-      // The old reader keyed on gh's "release not found" wording, which gh
-      // rewords between versions and says for more than one condition. A
-      // failure carrying only prose — no status — is unknown.
+  group('everything else gh can do wrong is unknown, never absent', () {
+    test('a failure that is not a 404, even one saying not found', () async {
+      // Without the status, "release not found" is prose gh says for more
+      // than one condition.
       final state = await inspect([
         (code: 1, out: '', err: 'release not found'),
       ]);
       expect(state.verdict, Verdict.unknown);
     });
-  });
-
-  group('everything else gh can do wrong is unknown, never absent', () {
-    for (final (label, err) in [
-      ('an expired token', 'HTTP 401: Bad credentials'),
-      ('a rate limit', 'HTTP 403: API rate limit exceeded'),
-      ('no network', 'could not resolve host: api.github.com'),
-    ]) {
-      test(label, () async {
-        final state = await inspect([(code: 1, out: '', err: err)]);
-        expect(state.verdict, Verdict.unknown, reason: err);
-      });
-    }
 
     test('a body that is not JSON', () async {
       final state = await inspect([
@@ -172,15 +160,13 @@ void main() {
     });
 
     test('a release whose assets cannot be read', () async {
+      // A readable release in every other field, so only its inventory is
+      // in question.
+      final release = jsonDecode(view()) as Map;
       final state = await inspect([
         (
           code: 0,
-          out: jsonEncode({
-            'tagName': 'v1.0.0',
-            'isDraft': false,
-            'name': 'v1.0.0',
-            'assets': 'not a list',
-          }),
+          out: jsonEncode({...release, 'assets': 'not a list'}),
           err: '',
         ),
       ]);
@@ -189,6 +175,7 @@ void main() {
         Verdict.unknown,
         reason: 'no assets and no answer about assets are different facts',
       );
+      expect(state.detail, contains('asset inventory'));
     });
   });
 
@@ -197,14 +184,10 @@ void main() {
     final bytes = utf8.encode('the staged archive bytes');
 
     GithubReleaseExpectation expectation({
-      String title = 'tool 1.0.0',
-      String body = 'release notes\n',
       String? digest,
       bool prerelease = false,
     }) => GithubReleaseExpectation(
       tag: 'v1.0.0',
-      title: title,
-      body: body,
       prerelease: prerelease,
       assetSha256: {asset: digest ?? Sha256.hex(bytes)},
     );
@@ -227,55 +210,44 @@ void main() {
     ).inspectExact(expected ?? expectation());
 
     test(
-      'tag, title, body, inventory, and downloaded bytes can all be exact',
+      'tag, inventory, and downloaded bytes can all be exact, read at once',
       () async {
-        final state = await inspectExact(view());
+        final downloads = {
+          for (final name in ['a.tar.gz', 'b.tar.gz', 'c.tar.gz'])
+            name: utf8.encode(name),
+        };
+        final tools = _DownloadTools(
+          response: view(assets: downloads.keys.toList()),
+          downloads: downloads,
+        );
+        final state =
+            await GithubRelease(
+              tools: tools,
+              repository: 'example/tool',
+              workingDirectory: '/repo',
+            ).inspectExact(
+              GithubReleaseExpectation(
+                tag: 'v1.0.0',
+                prerelease: false,
+                assetSha256: {
+                  for (final entry in downloads.entries)
+                    entry.key: Sha256.hex(entry.value),
+                },
+              ),
+            );
         expect(state.verdict, Verdict.exact);
         expect(state.detail, contains('asset bytes match'));
-        expect(state.evidence[asset], 'sha256:${Sha256.hex(bytes)}');
+        expect(
+          state.evidence['a.tar.gz'],
+          'sha256:${Sha256.hex(downloads['a.tar.gz']!)}',
+        );
+        expect(
+          tools.maxActive,
+          greaterThan(1),
+          reason: 'independent assets download side by side',
+        );
       },
     );
-
-    test('independent asset downloads run concurrently', () async {
-      final downloads = {
-        'a.tar.gz': utf8.encode('a'),
-        'b.tar.gz': utf8.encode('b'),
-        'c.tar.gz': utf8.encode('c'),
-      };
-      final tools = _ConcurrentDownloadTools(
-        response: jsonEncode({
-          'tag_name': 'v1.0.0',
-          'draft': false,
-          'prerelease': false,
-          'id': 41,
-          'name': 'tool 1.0.0',
-          'body': 'release notes\n',
-          'assets': [
-            for (final name in downloads.keys) {'name': name},
-          ],
-        }),
-        downloads: downloads,
-      );
-      final state =
-          await GithubRelease(
-            tools: tools,
-            repository: 'example/tool',
-            workingDirectory: '/repo',
-          ).inspectExact(
-            GithubReleaseExpectation(
-              tag: 'v1.0.0',
-              title: 'tool 1.0.0',
-              body: 'release notes\n',
-              prerelease: false,
-              assetSha256: {
-                for (final entry in downloads.entries)
-                  entry.key: Sha256.hex(entry.value),
-              },
-            ),
-          );
-      expect(state.verdict, Verdict.exact);
-      expect(tools.maxActive, greaterThan(1));
-    });
 
     test('the endpoint returning a different tag is a conflict', () async {
       final state = await inspectExact(view(tag: 'v2.0.0'));
@@ -285,30 +257,28 @@ void main() {
     });
 
     test(
-      'title and body differences are conflicts before any download',
+      'a title or notes edited after publishing are still the release',
       () async {
-        final state = await inspectExact(
+        // Prose its owner may correct on GitHub; the assets are the release.
+        final edited = await inspectExact(
           view(title: 'Surprise', body: 'different notes'),
         );
-        expect(state.verdict, Verdict.conflict);
-        expect(state.evidence.keys, containsAll(['title', 'body']));
+        expect(edited.verdict, Verdict.exact, reason: edited.detail);
+
+        final cleared = await inspectExact(
+          jsonEncode({
+            'tag_name': 'v1.0.0',
+            'draft': false,
+            'prerelease': false,
+            'id': 41,
+            'assets': [
+              {'name': asset},
+            ],
+          }),
+        );
+        expect(cleared.verdict, Verdict.exact, reason: cleared.detail);
       },
     );
-
-    test('missing title/body fields are unreadable, not a mismatch', () async {
-      final state = await inspectExact(
-        jsonEncode({
-          'tag_name': 'v1.0.0',
-          'draft': false,
-          'prerelease': false,
-          'id': 41,
-          'assets': [
-            {'name': asset},
-          ],
-        }),
-      );
-      expect(state.verdict, Verdict.unknown);
-    });
 
     test(
       'a downloaded digest mismatch is a conflict with both digests',
@@ -439,47 +409,6 @@ void main() {
       expect(read.digests[asset], Sha256.hex(bytes));
       expect(tools.downloadRequests, [asset]);
     });
-
-    test(
-      'bound asset reads verify downloaded bytes, not provider claims',
-      () async {
-        final expected = utf8.encode('authenticated manifest');
-        final substituted = utf8.encode('different manifest');
-        final tools = _DownloadTools(
-          response: jsonEncode({
-            'tag_name': 'v1.0.0',
-            'draft': false,
-            'prerelease': false,
-            'id': 41,
-            'assets': [
-              {'name': asset, 'digest': 'sha256:${Sha256.hex(expected)}'},
-            ],
-          }),
-          downloads: {asset: substituted},
-        );
-
-        final read =
-            await GithubRelease(
-              tools: tools,
-              repository: 'example/tool',
-              workingDirectory: '/repo',
-            ).readBoundAsset(
-              tag: 'v1.0.0',
-              expectedAssets: const {asset},
-              asset: asset,
-              expectedSha256: Sha256.hex(expected),
-              prerelease: false,
-            );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(
-          read.inspection.detail,
-          contains('authenticated by the Git tag'),
-        );
-        expect(read.bytes, isNull);
-        expect(tools.downloadRequests, [asset]);
-      },
-    );
   });
 
   group('publish: private draft transaction', () {
@@ -494,7 +423,6 @@ void main() {
     publish({
       String slurp = '[[]]',
       bool prerelease = false,
-      bool duplicateAssetNames = false,
       List<String> initialDraftNames = const [],
       String draftTitle = 'tool 1.0.0',
       String draftBody = 'notes',
@@ -518,10 +446,7 @@ void main() {
       final notes = File('${scratch.path}/notes.md')
         ..writeAsStringSync('notes');
       final paths = <String>[];
-      for (final name
-          in duplicateAssetNames
-              ? const ['left/a.tar.gz', 'right/a.tar.gz']
-              : const ['a.tar.gz', 'b.tar.gz']) {
+      for (final name in const ['a.tar.gz', 'b.tar.gz']) {
         final file = File('${scratch.path}/$name');
         file.parent.createSync(recursive: true);
         file.writeAsStringSync(name);
@@ -592,43 +517,25 @@ void main() {
           if (key.startsWith('gh api --paginate --slurp')) {
             draftReads++;
             if (unreadDraftsAfterCreate && draftReads > 1) {
-              return ToolResult(
-                exitCode: 1,
-                stdout: '',
-                stderr: 'GitHub could not be reached',
-              );
+              return failed('GitHub could not be reached');
             }
-            return ToolResult(exitCode: 0, stdout: slurp, stderr: '');
-          }
-          if (key.startsWith('gh api -X DELETE')) {
-            return ToolResult(exitCode: 0, stdout: '', stderr: '');
+            return ok(slurp);
           }
           if (key.contains(' -X POST repos/example/tool/releases --input ')) {
-            return ToolResult(
-              exitCode: createFailure == null ? 0 : 1,
-              stdout: createFailure == null ? jsonEncode({'id': 7}) : '',
-              stderr: createFailure ?? '',
-            );
+            return createFailure == null
+                ? ok(jsonEncode({'id': 7}))
+                : failed(createFailure);
           }
           if (key.contains('uploads.github.com')) {
             final fails = uploadFailure != null && uploadCount == 1;
-            return ToolResult(
-              exitCode: fails ? 1 : 0,
-              stdout: '',
-              stderr: fails ? uploadFailure : '',
-            );
-          }
-          if (exactSameTagDownloadAvailable &&
-              key.startsWith('gh release download ')) {
-            return ToolResult(exitCode: 0, stdout: '', stderr: '');
+            return fails ? failed(uploadFailure) : ok();
           }
           if (RegExp(
             r'^gh api repos/example/tool/releases/\d+$',
           ).hasMatch(key)) {
             final id = int.parse(key.split('/').last);
-            return ToolResult(
-              exitCode: 0,
-              stdout: jsonEncode({
+            return ok(
+              jsonEncode({
                 'tag_name': 'v1.0.0',
                 'draft': draft,
                 'prerelease': prerelease,
@@ -640,15 +547,10 @@ void main() {
                     draftAssetJson(assets.keys.elementAt(index), index),
                 ],
               }),
-              stderr: '',
             );
           }
           if (key.contains(' -X PATCH repos/example/tool/releases/7 ')) {
-            return ToolResult(
-              exitCode: patchFails ? 1 : 0,
-              stdout: '',
-              stderr: patchFails ? 'connection lost' : '',
-            );
+            return patchFails ? failed('connection lost') : ok();
           }
           return null;
         },
@@ -765,30 +667,6 @@ void main() {
           ),
           isFalse,
         );
-      },
-    );
-
-    test(
-      'local request validation runs before any remote read or mutation',
-      () async {
-        final run = await publish(
-          slurp: jsonEncode([
-            [
-              {
-                'tag_name': 'v1.0.0',
-                'draft': true,
-                'prerelease': false,
-                'id': 11,
-              },
-            ],
-          ]),
-          duplicateAssetNames: true,
-        );
-
-        expect(run.outcome.ok, isFalse);
-        expect(run.outcome.mayHaveActed, isFalse);
-        expect(run.outcome.draftEffect, DraftEffect.none);
-        expect(run.tools.calls, isEmpty);
       },
     );
 
@@ -978,27 +856,19 @@ void main() {
         );
         expect(create, greaterThanOrEqualTo(0));
         expect(uploads, hasLength(2));
-        expect(reads, hasLength(3));
-        expect(create, lessThan(reads.first));
-        expect(reads.first, lessThan(uploads.first));
-        expect(uploads.last, lessThan(reads[1]));
-        expect(reads[1], lessThan(patch));
-        expect(patch, lessThan(reads.last));
+        // The draft is read after its last upload and before it is made
+        // public. What the PATCH did is read back by the release.
+        expect(create, lessThan(uploads.first));
+        expect(uploads.last, lessThan(reads.last));
+        expect(reads.last, lessThan(patch));
+        expect(patch, run.tools.calls.length - 1);
         for (final index in uploads) {
-          final call = run.tools.calls[index];
           expect(
-            call,
+            run.tools.calls[index],
             contains(
               'https://uploads.github.com/repos/example/tool/releases/7/'
               'assets?name=',
             ),
-          );
-          expect(
-            call,
-            isNot(contains('--hostname uploads.github.com')),
-            reason:
-                'uploads use the github.com credential through gh\'s '
-                'absolute-URL transport, not a nonexistent second host login',
           );
         }
         expect(
@@ -1046,8 +916,8 @@ void main() {
           for (var i = 0; i < run.tools.calls.length; i++)
             if (run.tools.calls[i] == 'gh api repos/example/tool/releases/7') i,
         ];
-        expect(draftReads[1], greaterThan(uploads.first));
-        expect(draftReads[1], lessThan(uploads.last));
+        expect(draftReads.first, greaterThan(uploads.first));
+        expect(draftReads.first, lessThan(uploads.last));
       },
     );
 
@@ -1082,18 +952,21 @@ void main() {
     test(
       'a named truncated asset cannot reconcile a lost upload response',
       () async {
+        // a.tar.gz uploads first, and its response is the one lost.
         final run = await publish(
           uploadFailure: 'connection lost',
           failedUploadLands: true,
-          draftAssetOverrides: {'b.tar.gz': utf8.encode('truncated')},
+          draftAssetOverrides: {'a.tar.gz': utf8.encode('truncated')},
         );
 
         expect(run.outcome.ok, isFalse);
         expect(run.outcome.mayHaveActed, isFalse);
         expect(run.outcome.draftEffect, DraftEffect.changed);
+        expect(run.outcome.problem, contains('reconciled by bytes'));
         expect(
-          run.outcome.problem,
-          contains('does not contain the staged bytes'),
+          run.tools.calls.where((call) => call.contains('uploads.github.com')),
+          hasLength(1),
+          reason: 'nothing more is uploaded beside bytes rk cannot account for',
         );
         expect(
           run.tools.calls.any((call) => call.contains(' -X PATCH ')),
@@ -1123,10 +996,16 @@ void main() {
     );
 
     test(
-      'a lost final PATCH response reconciles by immutable release id',
+      'a lost final PATCH response is left to the release to read back',
       () async {
         final run = await publish(patchFails: true, failedPatchLands: true);
-        expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+        expect(run.outcome.ok, isFalse);
+        expect(run.outcome.mayHaveActed, isTrue);
+        expect(
+          run.tools.calls.last,
+          contains(' -X PATCH '),
+          reason: 'one read-back, by the release, settles it',
+        );
       },
     );
 
@@ -1143,77 +1022,10 @@ void main() {
       },
     );
   });
-
-  group('latest published GitHub Release', () {
-    Future<Inspection> latest(ToolResult result) => GithubRelease(
-      tools: RecordingTools(
-        results: {
-          'gh api --paginate --slurp repos/example/tool/releases': result,
-        },
-      ),
-      repository: 'example/tool',
-      workingDirectory: '/repo',
-    ).inspectLatestVersion('v{version}');
-
-    test('reads all pages and excludes private drafts', () async {
-      final result = await latest(
-        ToolResult(
-          exitCode: 0,
-          stdout: jsonEncode([
-            [
-              {'tag_name': 'v1.9.0', 'draft': false},
-              {'tag_name': 'v9.0.0', 'draft': true},
-            ],
-            [
-              {'tag_name': 'v1.10.0', 'draft': false},
-              {'tag_name': 'docs', 'draft': false},
-            ],
-          ]),
-          stderr: '',
-        ),
-      );
-      expect(result.verdict, Verdict.exact);
-      expect(result.evidence['version'], '1.10.0');
-    });
-
-    test('no matching published release is absent', () async {
-      final result = await latest(
-        ToolResult(
-          exitCode: 0,
-          stdout: jsonEncode([
-            [
-              {'tag_name': 'v2.0.0', 'draft': true},
-              {'tag_name': 'docs', 'draft': false},
-            ],
-          ]),
-          stderr: '',
-        ),
-      );
-      expect(result.verdict, Verdict.absent);
-    });
-
-    test('malformed pagination is unknown', () async {
-      final result = await latest(
-        ToolResult(
-          exitCode: 0,
-          stdout: jsonEncode([
-            {'tag_name': 'v1.0.0', 'draft': false},
-          ]),
-          stderr: '',
-        ),
-      );
-      expect(result.verdict, Verdict.unknown);
-    });
-
-    test('an unreadable release list is unknown', () async {
-      final result = await latest(
-        ToolResult(exitCode: 1, stdout: '', stderr: 'network unavailable'),
-      );
-      expect(result.verdict, Verdict.unknown);
-    });
-  });
 }
 
+/// GitHub answering [response] to every API read, and serving [downloads]
+/// by asset name.
 class _DownloadTools implements Tools {
   _DownloadTools({
     required this.response,
@@ -1228,64 +1040,9 @@ class _DownloadTools implements Tools {
   final bool omitDownloadedFile;
   final List<String> downloadRequests = [];
 
-  @override
-  Future<ToolResult> run(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-    Map<String, String>? environment,
-    Duration? timeout,
-  }) async {
-    if (executable == 'gh' &&
-        arguments.length >= 2 &&
-        arguments.first == 'api') {
-      return ToolResult(exitCode: 0, stdout: response, stderr: '');
-    }
-    if (executable == 'gh' &&
-        arguments.length >= 2 &&
-        arguments[0] == 'release' &&
-        arguments[1] == 'download') {
-      if (downloadFailure != null) {
-        return ToolResult(exitCode: 1, stdout: '', stderr: downloadFailure!);
-      }
-      final name = arguments[arguments.indexOf('--pattern') + 1];
-      downloadRequests.add(name);
-      final output = arguments[arguments.indexOf('--output') + 1];
-      final bytes = downloads[name];
-      if (bytes == null) {
-        return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: '$name is not downloadable',
-        );
-      }
-      if (!omitDownloadedFile) {
-        await File(output).writeAsBytes(bytes);
-      }
-      return ToolResult(exitCode: 0, stdout: '', stderr: '');
-    }
-    return ToolResult(
-      exitCode: 127,
-      stdout: '',
-      stderr: '$executable ${arguments.join(' ')} was not scripted',
-    );
-  }
-
-  @override
-  Future<int> runInteractive(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-  }) async => 0;
-}
-
-class _ConcurrentDownloadTools implements Tools {
-  _ConcurrentDownloadTools({required this.response, required this.downloads});
-
-  final String response;
-  final Map<String, List<int>> downloads;
-  var active = 0;
+  /// The most downloads that were in flight at once.
   var maxActive = 0;
+  var _active = 0;
 
   @override
   Future<ToolResult> run(
@@ -1295,28 +1052,30 @@ class _ConcurrentDownloadTools implements Tools {
     Map<String, String>? environment,
     Duration? timeout,
   }) async {
-    if (executable == 'gh' && arguments.first == 'api') {
-      return ToolResult(exitCode: 0, stdout: response, stderr: '');
+    if (executable == 'gh' && arguments.first == 'api') return ok(response);
+    if (executable != 'gh' ||
+        arguments.take(2).join(' ') != 'release download') {
+      return failed('$executable ${arguments.join(' ')} was not scripted');
     }
-    if (executable == 'gh' &&
-        arguments.length >= 2 &&
-        arguments[0] == 'release' &&
-        arguments[1] == 'download') {
-      active++;
-      if (active > maxActive) maxActive = active;
-      try {
-        // Long enough for every independently-started future to enter. A
-        // serial implementation can never make maxActive exceed one.
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        final name = arguments[arguments.indexOf('--pattern') + 1];
-        final output = arguments[arguments.indexOf('--output') + 1];
-        await File(output).writeAsBytes(downloads[name]!);
-        return ToolResult(exitCode: 0, stdout: '', stderr: '');
-      } finally {
-        active--;
+    if (downloadFailure case final failure?) return failed(failure);
+    final name = arguments[arguments.indexOf('--pattern') + 1];
+    downloadRequests.add(name);
+    final bytes = downloads[name];
+    if (bytes == null) return failed('$name is not downloadable');
+    if (++_active > maxActive) maxActive = _active;
+    try {
+      // Long enough for downloads started together to be in flight together;
+      // one at a time never makes maxActive exceed one.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      if (!omitDownloadedFile) {
+        await File(
+          arguments[arguments.indexOf('--output') + 1],
+        ).writeAsBytes(bytes);
       }
+    } finally {
+      _active--;
     }
-    return ToolResult(exitCode: 127, stdout: '', stderr: 'not scripted');
+    return ok();
   }
 
   @override

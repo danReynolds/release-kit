@@ -5,12 +5,8 @@ import 'package:test/test.dart';
 
 import 'support/compiled_rk.dart';
 
-/// Runs the real `rk` in a real repository.
-///
-/// Shared so that a conformance check can execute the program rather than read
-/// a test file and hope. The phase 2 gate was, at one point, satisfied by
-/// asserting that a file under test/ contained a particular sentence — which
-/// meant renaming a test failed the phase and deleting the feature passed it.
+/// Runs the compiled `rk` in a real repository, for what only the shipped
+/// program can show: its arguments, exit codes and output on a real pipe.
 class Rk {
   Rk(this.root);
 
