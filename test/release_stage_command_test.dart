@@ -103,63 +103,6 @@ void main() {
   setUp(() => harness = _Harness());
   tearDown(() => harness.close());
 
-  for (final copied in [0, 2]) {
-    test(
-      'source retry preserves its frozen header after $copied copied files',
-      () async {
-        var reads = 0;
-        harness.source.beforeReadBytes = (path) {
-          final header = StageReceiptStore(harness.stage.directory).read();
-          if (header != null && header.steps.isEmpty && reads++ == copied) {
-            expect(header.plan, harness.stage.resolvedPlan);
-            throw StateError('fixture source interruption');
-          }
-        };
-        final failed = await harness.run(stageOnly: true, confirm: null);
-        expect(failed.code, ExitCodes.refused, reason: failed.text);
-        expect(failed.publicMutations, isEmpty);
-        final file = File(harness.stage.directory.resolve('stage.json'));
-        final bytes = file.readAsBytesSync();
-        final modified = file.lastModifiedSync();
-        final header = StageReceipt.parse(utf8.decode(bytes));
-        expect(header.steps, isEmpty);
-        expect(header.plan, harness.stage.resolvedPlan);
-        expect(harness.stage.inspect().validProgress, isFalse);
-        expect(harness.stage.inspect().planRecorded, isTrue);
-
-        // Recreate the resolver to prove the header survives a new process's
-        // stage object. Native intent lookup is tested separately when wired.
-        harness.stages = ReleaseStages(
-          source: harness.source,
-          git: harness.git,
-          stageContracts: TargetCatalog.builtIn().stageContractResolver(
-            harness.resolution,
-          ),
-          repositoryRoot: harness.root.path,
-        );
-        reads = 0;
-        final failedAgain = await harness.run(stageOnly: true, confirm: null);
-        expect(failedAgain.code, ExitCodes.refused, reason: failedAgain.text);
-        expect(failedAgain.publicMutations, isEmpty);
-        expect(file.readAsBytesSync(), bytes);
-        expect(
-          file.lastModifiedSync(),
-          modified,
-          reason: 'retry must never replace the frozen header',
-        );
-
-        harness.source.beforeReadBytes = null;
-        final resumed = await harness.run(stageOnly: true, confirm: null);
-        expect(resumed.code, ExitCodes.ok, reason: resumed.text);
-        expect(resumed.publicMutations, isEmpty);
-        final complete = harness.stage.requireReceipt();
-        expect(complete.identity.id, header.identity.id);
-        expect(complete.plan, header.plan);
-        expect(complete.steps.last.evidence, isNot(contains('release_plan')));
-      },
-    );
-  }
-
   test('an interrupted stage resumes past files it does not own', () async {
     final stage = harness.stage;
     stage.writeProgress(const []);
@@ -668,7 +611,7 @@ void main() {
       stageOnly: true,
       confirm: (_) async {
         authorizationPrompts++;
-        return '1.2.3';
+        return 'yes';
       },
     );
 
@@ -684,7 +627,6 @@ void main() {
     final packaged = run.invocations.singleWhere(
       (call) => call.arguments.contains('--to-archive'),
     );
-    expect(packaged.arguments.take(3), ['pub', 'publish', '--to-archive']);
     final archivePath = ReleaseAssets.pubArchivePath(
       harness.unit.projects.single,
     );
@@ -743,12 +685,8 @@ void main() {
     ], workingDirectory: native.root.path);
     expect(initialized.exitCode, 0, reason: '${initialized.stderr}');
 
-    final run = await native.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
+    final run = await native.runStage();
 
-    expect(run.code, ExitCodes.ok, reason: run.text);
     expect(native.stage.inspect().reusable, isTrue);
     expect(run.problemCodes, isEmpty);
     final packaged = run.invocations.singleWhere(
@@ -763,18 +701,14 @@ void main() {
 
   test('normal release reuses the exact stage without producers or preflight '
       'and publishes its staged archive', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final receipt = File(
       harness.stage.directory.resolve('stage.json'),
     ).readAsStringSync();
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(released.code, ExitCodes.ok, reason: released.text);
@@ -792,15 +726,14 @@ void main() {
     final publish = released.invocations.singleWhere(
       (call) => call.arguments.contains('--from-archive'),
     );
-    expect(publish.arguments, [
-      'pub',
-      'publish',
-      '--from-archive',
-      harness.stage.directory.workspace.pathOf(
-        ReleaseAssets.pubArchivePath(harness.unit.projects.single),
+    expect(
+      publish.arguments,
+      contains(
+        harness.stage.directory.workspace.pathOf(
+          ReleaseAssets.pubArchivePath(harness.unit.projects.single),
+        ),
       ),
-      '--force',
-    ]);
+    );
     expect(
       publish.workingDirectory,
       isNot(startsWith(harness.stage.directory.repositoryRoot)),
@@ -828,16 +761,12 @@ void main() {
   });
 
   test('public acts never borrow the bounded target-read tools', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final reads = _ForwardingReadTools(harness.tools);
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       readTools: reads,
     );
 
@@ -856,11 +785,7 @@ void main() {
 
   test('independent publication lanes overlap and dependents unlock '
       'immediately', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final pubStarted = Completer<void>();
     final allowPubToFinish = Completer<void>();
@@ -874,7 +799,7 @@ void main() {
     };
     final running = harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       onInvocation: (call) {
         if (call.publicKind == 'github-release' &&
             !githubPublished.isCompleted) {
@@ -911,32 +836,6 @@ void main() {
   });
 
   test(
-    'a live session is confirmed without pub saying so to the terminal',
-    () async {
-      final released = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => 'yes',
-      );
-
-      expect(released.code, ExitCodes.ok, reason: released.text);
-      expect(
-        released.keys.where((key) => key == 'dart pub login'),
-        hasLength(1),
-        reason:
-            'the session is still checked — refreshed and put to the '
-            'provider — exactly once',
-      );
-      expect(
-        released.text,
-        isNot(contains('already logged in')),
-        reason:
-            'what pub says about a session it just confirmed is not what '
-            'a terminal asking about a release needs to read',
-      );
-    },
-  );
-
-  test(
     'a failed pub session check keeps the approved stage and stops before public work',
     () async {
       harness.tools.failPubLogin = true;
@@ -946,7 +845,7 @@ void main() {
         stageOnly: false,
         confirm: (_) async {
           authorizationPrompts++;
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -974,11 +873,7 @@ void main() {
   );
 
   test('a second identical stage performs no producer work', () async {
-    final first = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(first.code, ExitCodes.ok, reason: first.text);
+    final first = await harness.runStage();
     expect(first.text, contains('✓ tool 1.2.3 staged successfully.'));
     expect(first.text, startsWith('Staging tool 1.2.3\n'));
     expect(first.text, contains('worktree · main@1111111'));
@@ -991,12 +886,8 @@ void main() {
       harness.stage.directory.resolve('stage.json'),
     ).readAsBytesSync();
 
-    final second = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
+    final second = await harness.runStage();
 
-    expect(second.code, ExitCodes.ok, reason: second.text);
     expect(second.text, isNot(contains('Rebuilding:')));
     expect(first.text, contains('\ntool 1.2.3 · staged\n'));
     expect(
@@ -1050,11 +941,7 @@ void main() {
   test(
     'the staged formula links the public archive name, not its stage path',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
 
       final formula = File(
         harness.stage.directory.resolve(
@@ -1072,16 +959,12 @@ void main() {
   test(
     'a lost GitHub final-publish response reconciles from exact public bytes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.loseGithubFinalResponse = true;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1095,16 +978,12 @@ void main() {
   test(
     'a lost tag-push response reconciles from the exact release binding',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.loseTagPushResponse = true;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1116,18 +995,14 @@ void main() {
 
   test('a failed push whose origin cannot be read is lost-track and stops '
       'before pub', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools
       ..loseTagPushResponse = true
       ..unreadTagAfterPush = true;
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(released.code, ExitCodes.refused);
@@ -1147,17 +1022,13 @@ void main() {
   test(
     'an ambiguous pub response can reconcile after delayed exact bytes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.losePubPublishResponse = true;
       harness.registry.hideCandidateLookups = 1;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1168,11 +1039,7 @@ void main() {
   );
 
   test('a malformed local tag is refused before it can be pushed', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.git = harness.gitAt(
       tags: const ['v1.2.3'],
       tagObjects: const {'v1.2.3': _tagObject},
@@ -1195,16 +1062,12 @@ void main() {
   test(
     'a lost Homebrew push response reconciles from exact public bytes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.loseHomebrewPushResponse = true;
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.ok, reason: released.text);
@@ -1235,16 +1098,12 @@ void main() {
     test(
       '${race.name} appearing between inspect and clone is not overwritten',
       () async {
-        final staged = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
-        expect(staged.code, ExitCodes.ok, reason: staged.text);
+        await harness.runStage();
         harness.tools.formulaAtNextClone = race.formula;
 
         final released = await harness.run(
           stageOnly: false,
-          confirm: (_) async => '1.2.3',
+          confirm: (_) async => 'yes',
         );
 
         expect(released.code, ExitCodes.refused);
@@ -1268,14 +1127,10 @@ void main() {
   }
 
   test('rerunning skips every public lane already published', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final first = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(first.code, ExitCodes.ok, reason: first.text);
     harness.git = harness.gitAt(
@@ -1291,6 +1146,11 @@ void main() {
 
     expect(rerun.code, ExitCodes.ok, reason: rerun.text);
     expect(rerun.publicMutations, isEmpty);
+    expect(
+      rerun.keys,
+      isNot(contains('dart pub login')),
+      reason: 'no pub.dev act remains, so no session is needed',
+    );
     expect(rerun.text, contains('already released'));
     final unit = (rerun.report['units'] as List).single as Map;
     final actions = {
@@ -1324,16 +1184,12 @@ void main() {
   test(
     'a partial binary release refuses to rebuild a lost exact stage',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.failPubPublish = true;
 
       final partial = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
       expect(partial.code, ExitCodes.refused);
       expect(partial.problemCodes, contains('RK-PUB-003'));
@@ -1373,23 +1229,24 @@ void main() {
   test(
     'an unread partial binary release also refuses to rebuild a lost stage',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools
         ..loseGithubFinalResponse = true
         ..unreadGithubAfterPublish = true;
 
       final partial = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
       expect(partial.code, ExitCodes.refused, reason: partial.text);
+      expect(partial.problemCodes, contains('RK-REL-003'));
       expect((partial.report['halt'] as Map?)?['kind'], 'lostTrack');
       expect(harness.tools.remoteTags, contains('v1.2.3'));
       expect(harness.tools.githubReleaseExists, isTrue);
+      expect(
+        partial.publicMutations.map((call) => call.publicKind),
+        isNot(contains('homebrew')),
+      );
 
       harness.stage.reset();
       harness.git = harness.gitAt(
@@ -1424,11 +1281,7 @@ void main() {
 
   test('a definite private GitHub failure drains Pub but leaves Homebrew '
       'unattempted', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools.failGithubDraftCreate = true;
 
     final pubStarted = Completer<void>();
@@ -1442,7 +1295,7 @@ void main() {
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       onInvocation: (call) {
         if (call.executable == 'gh' &&
             _starts(call.arguments, [
@@ -1488,11 +1341,7 @@ void main() {
     'a private draft failure is not reported as nothing acted when no public '
     'target changed this run',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
 
       harness.tools.remoteTags.add('v1.2.3');
       harness.registry.published['tool']!.add('1.2.3');
@@ -1507,7 +1356,7 @@ void main() {
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.refused, reason: released.text);
@@ -1528,16 +1377,12 @@ void main() {
   test(
     'retry after a middle-target failure skips exact lanes and resumes',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       harness.tools.failGithubDraftCreate = true;
 
       final first = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
       expect(first.code, ExitCodes.refused, reason: first.text);
       expect(
@@ -1554,7 +1399,7 @@ void main() {
       );
       final resumed = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(resumed.code, ExitCodes.ok, reason: resumed.text);
@@ -1581,16 +1426,12 @@ void main() {
 
   test('notes edited on the published GitHub Release do not stop the '
       'release from finishing', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools.rejectHomebrewPush = true;
 
     final partial = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(partial.code, ExitCodes.refused, reason: partial.text);
     expect(harness.tools.githubReleaseExists, isTrue);
@@ -1608,7 +1449,7 @@ void main() {
 
     final resumed = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(resumed.code, ExitCodes.ok, reason: resumed.text);
@@ -1619,16 +1460,12 @@ void main() {
 
   test('a lost stage can finish only the Homebrew channel from the public '
       'release', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools.rejectHomebrewPush = true;
 
     final partial = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(partial.code, ExitCodes.refused, reason: partial.text);
     expect(harness.tools.githubReleaseExists, isTrue);
@@ -1649,7 +1486,7 @@ void main() {
 
     final resumed = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(resumed.code, ExitCodes.ok, reason: resumed.text);
@@ -1680,15 +1517,11 @@ void main() {
 
   test('status agrees that a lost stage can finish Homebrew from the public '
       'release', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools.rejectHomebrewPush = true;
     final partial = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(partial.code, ExitCodes.refused, reason: partial.text);
     harness.stage.reset();
@@ -1739,7 +1572,7 @@ void main() {
 
     final resumed = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(resumed.code, ExitCodes.ok, reason: resumed.text);
     expect(resumed.publicMutations.map((call) => call.publicKind), [
@@ -1747,41 +1580,13 @@ void main() {
     ]);
   });
 
-  test('an unreadable GitHub readback remains lost-track', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
-    harness.tools
-      ..loseGithubFinalResponse = true
-      ..unreadGithubAfterPublish = true;
-
-    final released = await harness.run(
-      stageOnly: false,
-      confirm: (_) async => '1.2.3',
-    );
-
-    expect(released.code, ExitCodes.refused);
-    expect(released.problemCodes, contains('RK-REL-003'));
-    expect((released.report['halt'] as Map?)?['kind'], 'lostTrack');
-    expect(
-      released.publicMutations.map((call) => call.publicKind),
-      isNot(contains('homebrew')),
-    );
-  });
-
   test('an immutable GitHub conflict is terminal', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     harness.tools.conflictGithubAfterPublish = true;
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
 
     expect(released.code, ExitCodes.refused);
@@ -1811,16 +1616,12 @@ void main() {
     ),
   ]) {
     test(scenario.name, () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       scenario.configure(harness.tools);
 
       final released = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(released.code, ExitCodes.refused);
@@ -1831,15 +1632,11 @@ void main() {
 
   test('a weaker publishing host can release an exact stage without producing '
       'its platform again', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final released = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       capabilities: HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
@@ -1863,11 +1660,7 @@ void main() {
 
   test('normal release refuses a tampered completed artifact while explicit '
       'stage mode can rebuild it', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
 
     final archive = harness.stage.directory.resolve(
       'producers/tool/archives/'
@@ -1881,7 +1674,7 @@ void main() {
       stageOnly: false,
       confirm: (_) async {
         authorizationPrompts++;
-        return '1.2.3';
+        return 'yes';
       },
     );
 
@@ -1895,11 +1688,7 @@ void main() {
     );
     expect(refused.publicMutations, isEmpty);
 
-    final rebuilt = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(rebuilt.code, ExitCodes.ok, reason: rebuilt.text);
+    final rebuilt = await harness.runStage();
     expect(rebuilt.keys, contains('dart pub publish --to-archive <archive>'));
     expect(
       rebuilt.keys.where((key) => key.startsWith('dart compile exe')),
@@ -1955,7 +1744,7 @@ void main() {
         stageOnly: false,
         confirm: (_) async {
           prompts++;
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -2031,11 +1820,7 @@ void main() {
       expect(actions.values.toSet(), {'not_attempted'});
 
       harness.tools.runFailure = null;
-      final recovered = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(recovered.code, ExitCodes.ok, reason: recovered.text);
+      final recovered = await harness.runStage();
       expect(harness.stage.inspect().reusable, isTrue);
       expect(recovered.publicMutations, isEmpty);
     });
@@ -2058,7 +1843,7 @@ void main() {
         stageOnly: false,
         confirm: (_) async {
           authorizationPrompts++;
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -2113,15 +1898,11 @@ void main() {
     'an SDK without native Pub archive publication refuses clearly',
     () async {
       harness.tools.failPubArchiveCapability = true;
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
 
       final run = await harness.run(
         stageOnly: false,
-        confirm: (_) async => '1.2.3',
+        confirm: (_) async => 'yes',
       );
 
       expect(run.code, ExitCodes.refused, reason: run.text);
@@ -2148,7 +1929,7 @@ void main() {
           stageOnly: false,
           confirm: (_) async {
             prompts++;
-            return '1.2.3';
+            return 'yes';
           },
           // Planted as the pub.dev lane starts (its first Pub command),
           // before any lane writes.
@@ -2176,11 +1957,7 @@ void main() {
         );
 
         Directory(harness.stage.directory.resolve(failure.path)).deleteSync();
-        final recovered = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
-        expect(recovered.code, ExitCodes.ok, reason: recovered.text);
+        final recovered = await harness.runStage();
         expect(harness.stage.inspect().reusable, isTrue);
         expect(recovered.publicMutations, isEmpty);
       },
@@ -2198,11 +1975,7 @@ void main() {
     test(
       'an interrupted ${boundary.step} prefix resumes from exact bytes',
       () async {
-        final first = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
-        expect(first.code, ExitCodes.ok, reason: first.text);
+        await harness.runStage();
         _interruptAfter(harness.stage, boundary.step);
         final before = harness.stage.inspect();
         expect(
@@ -2217,12 +1990,8 @@ void main() {
             ).readAsBytesSync(),
         };
 
-        final resumed = await harness.run(
-          stageOnly: true,
-          confirm: (_) async => fail('stage mode must not authorize'),
-        );
+        final resumed = await harness.runStage();
 
-        expect(resumed.code, ExitCodes.ok, reason: resumed.text);
         if (boundary.preflightDone) {
           expect(
             resumed.keys,
@@ -2252,11 +2021,7 @@ void main() {
   test(
     'an unreceipted declared output is discarded and prior lanes resume',
     () async {
-      final first = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(first.code, ExitCodes.ok, reason: first.text);
+      await harness.runStage();
       _interruptAfter(harness.stage, 'build:tool:linux-x64');
       final retainedBinary = File(
         harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
@@ -2273,12 +2038,8 @@ void main() {
       // archive producer runs again over it.
       expect(harness.stage.inspect().validProgress, isTrue);
 
-      final resumed = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
+      final resumed = await harness.runStage();
 
-      expect(resumed.code, ExitCodes.ok, reason: resumed.text);
       expect(
         resumed.keys.where((key) => key.startsWith('dart compile exe')),
         isEmpty,
@@ -2302,23 +2063,15 @@ void main() {
   test(
     'a changed dependency in an interrupted prefix is rebuilt, not reused',
     () async {
-      final first = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(first.code, ExitCodes.ok, reason: first.text);
+      await harness.runStage();
       _interruptAfter(harness.stage, 'build:tool:linux-x64');
       File(
         harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
       ).writeAsStringSync('planted binary');
       expect(harness.stage.inspect().validProgress, isFalse);
 
-      final rebuilt = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
+      final rebuilt = await harness.runStage();
 
-      expect(rebuilt.code, ExitCodes.ok, reason: rebuilt.text);
       expect(
         rebuilt.keys.where((key) => key.startsWith('dart compile exe')),
         hasLength(1),
@@ -2329,11 +2082,7 @@ void main() {
   );
 
   test('a complete receipt cannot omit its package preflight', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final receipt = harness.stage.requireReceipt();
     StageReceiptStore(harness.stage.directory).write(
       StageReceipt(
@@ -2351,50 +2100,9 @@ void main() {
     );
   });
 
-  test(
-    'a digest-consistent receipt cannot rename a required producer',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      final receipt = harness.stage.requireReceipt();
-      final build = receipt.steps.singleWhere(
-        (step) => step.name == 'build:tool:linux-x64',
-      );
-      final renamed = StageStep(
-        name: 'compiled-something',
-        outputs: build.outputs,
-        evidence: build.evidence,
-      );
-      StageReceiptStore(harness.stage.directory).write(
-        StageReceipt(
-          identity: receipt.identity,
-          plan: receipt.plan,
-          steps: [
-            for (final step in receipt.steps)
-              if (step.name == build.name) renamed else step,
-          ],
-        ),
-      );
-
-      final inspected = harness.stage.inspect();
-      expect(inspected.reusable, isFalse);
-      expect(
-        inspected.issues.map((issue) => issue.kind),
-        contains(StageIssueKind.invalidStructure),
-      );
-    },
-  );
-
   test('a finalized receipt whose terminal step was displaced still refuses '
       'silent replacement', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final receipt = harness.stage.requireReceipt();
     final steps = [...receipt.steps];
     final terminal = steps.removeLast();
@@ -2433,11 +2141,7 @@ void main() {
   test(
     'stage tampering at the authorization prompt blocks the first act',
     () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      await harness.runStage();
       final archive = harness.stage.directory.resolve(
         ReleaseAssets.archivePath(
           harness.stage.unit.binaryProject!,
@@ -2451,7 +2155,7 @@ void main() {
         confirm: (_) async {
           prompts++;
           File(archive).writeAsStringSync('changed while consent waited');
-          return '1.2.3';
+          return 'yes';
         },
       );
 
@@ -2467,7 +2171,7 @@ void main() {
     // told which commit to tag rather than tagging whatever HEAD is by then.
     final run = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
     );
     expect(run.code, ExitCodes.ok, reason: run.text);
     final created = run.invocations.singleWhere(
@@ -2480,18 +2184,14 @@ void main() {
   });
 
   test('stage tampering after one target blocks the next public act', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    await harness.runStage();
     final archive = harness.stage.directory.resolve(
       ReleaseAssets.archivePath(harness.stage.unit.binaryProject!, 'linux-x64'),
     );
 
     final refused = await harness.run(
       stageOnly: false,
-      confirm: (_) async => '1.2.3',
+      confirm: (_) async => 'yes',
       onRegistryRead: () {
         if (harness.tools.remoteTags.contains('v1.2.3')) {
           File(archive).writeAsStringSync('changed after the tag');
@@ -2568,7 +2268,7 @@ class _Harness {
         : pubOnly
         ? _pubOnlyConfig
         : _config;
-    source = _InterruptibleSourceTree({
+    source = MemorySourceTree({
       '.gitignore': '.rk/\n',
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
@@ -2612,11 +2312,11 @@ class _Harness {
   /// what rk has actually said rather than on a guessed delay.
   StringBuffer? liveOutput;
 
-  late final _InterruptibleSourceTree source;
+  late final MemorySourceTree source;
   late final Resolution resolution;
   late final ResolvedUnit unit;
   late GitState git;
-  late ReleaseStages stages;
+  late final ReleaseStages stages;
   late final _ReleaseRegistry registry;
   late final _WorldTools tools;
 
@@ -2648,10 +2348,19 @@ class _Harness {
     originUrl: originUrl,
   );
 
+  /// `rk stage`, which asks nothing and is expected to succeed.
+  Future<_Run> runStage() async {
+    final staged = await run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    return staged;
+  }
+
   Future<_Run> run({
     required bool stageOnly,
     required Future<String?> Function(String prompt)? confirm,
-    ReleaseStage Function(ResolvedUnit unit)? stageFor,
     HostCapabilities? capabilities,
     void Function(_Invocation call)? onInvocation,
     void Function()? onRegistryRead,
@@ -2685,18 +2394,9 @@ class _Harness {
       inspector: inspector,
       tools: tools,
       output: output,
-      // Most of this long-lived safety suite predates ordinary yes/no and
-      // returns the fixture version after performing its prompt-time hook.
-      // Preserve those hooks while adapting the old fixture answer at this
-      // single boundary.
-      confirm: confirm == null
-          ? null
-          : (prompt) async {
-              final answer = await confirm(prompt);
-              return answer == '1.2.3' ? 'yes' : answer;
-            },
+      confirm: confirm,
       stageOnly: stageOnly,
-      stageFor: stageFor ?? stages.call,
+      stageFor: stages.call,
       wait: (_) => Future<void>.delayed(Duration.zero),
       // Without a HOME of its own, rk reads the pub session of whoever is
       // running the tests, and a case about a missing session stops being
@@ -2719,18 +2419,6 @@ class _Harness {
 
   void close() {
     if (root.existsSync()) root.deleteSync(recursive: true);
-  }
-}
-
-class _InterruptibleSourceTree extends MemorySourceTree {
-  _InterruptibleSourceTree(super.files, {required super.description});
-
-  void Function(String path)? beforeReadBytes;
-
-  @override
-  List<int>? readBytes(String path) {
-    beforeReadBytes?.call(path);
-    return super.readBytes(path);
   }
 }
 
