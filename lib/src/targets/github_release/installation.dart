@@ -199,19 +199,7 @@ class GithubInstallationProvider implements InstallationProvider {
     }
     final temporary = Directory(parent).createTempSync('preparing-');
     try {
-      for (final entry in decoded.files.entries) {
-        final file = File('${temporary.path}/${entry.key}');
-        file.parent.createSync(recursive: true);
-        file.writeAsBytesSync(entry.value, flush: true);
-        // The archive's own modes: 0755 for its executables, 0644 otherwise.
-        final executable = decoded.artifact.files.any(
-          (f) => f.path == entry.key && f.executable,
-        );
-        await checked(tools, '/bin/chmod', [
-          executable ? '755' : '644',
-          file.path,
-        ]);
-      }
+      decoded.extractTo(temporary);
       final smoke = await tools.run(
         '${temporary.path}/${decoded.artifact.entryPoint}',
         ['--version'],

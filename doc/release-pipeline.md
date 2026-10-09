@@ -268,3 +268,21 @@ Follow-up measurements against `283ea98`, on the same SDK and host:
   response cleanup now releases it. A 404 still means absent, and failed or
   incomplete 200 responses remain unknown. This is
   evidence of connection reuse, not an internet latency measurement.
+
+Two further changes remove work without adding a mechanism:
+
+- **Use the existing extraction path.** GitHub installation had its own
+  write-and-chmod loop, while identity checks already used the archive
+  reader's extraction method. Reusing that method removes the duplicate
+  policy and batches permission changes. Five alternating trials on a
+  seven-file bundle fixture used seven chmod processes before, one under
+  umask 022 afterward and two under umask 077. Installed bytes and modes
+  matched and the native smoke command passed. Median fixture installation
+  improved from about 182 to 174 ms; the primary benefit is less code.
+- **Use fixed gzip level 6.** Three compression trials per level on the
+  existing Keybay and rk binary archives took 456 and 732 ms at level 9,
+  versus 149 and 207 ms at level 6. Sizes grew 0.16% and 0.26%. Level 3
+  took 79 and 105 ms but grew the files 4.4% and 4.9%, so it was not kept.
+  Decoded tar bytes matched. The deterministic headers and file ordering
+  remain the same; newly compressed archives have new digests, while existing
+  receipt-backed archives keep their bytes and remain reusable.

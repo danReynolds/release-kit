@@ -211,6 +211,51 @@ void main() {
     },
   );
 
+  test('GitHub installs every bundle file with its validated mode', () async {
+    final project = fixture(scratch, commands: ['orbit'], binary: true);
+    final artifact = BinaryArtifact.dartBundle('orbit');
+    final entries = [
+      for (final file in artifact.files)
+        ArchiveEntry(
+          name: file.path,
+          executable: file.executable,
+          bytes: utf8.encode(
+            file.path == BinaryArtifact.manifestName
+                ? artifact.manifest
+                : file.path == 'orbit'
+                ? '#!/bin/sh\nprintf "1.1.0\\n"\n'
+                : 'bundle fixture',
+          ),
+        ),
+      ArchiveEntry(name: 'LICENSE', bytes: utf8.encode('license')),
+      ArchiveEntry(name: 'README.md', bytes: utf8.encode('readme')),
+    ];
+    final bytes = Uint8List.fromList(
+      ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)),
+    );
+    final provider = GithubInstallationProvider(
+      const SystemTools(),
+      InstallationStore('${scratch.path}/store', const SystemTools()),
+      'macos-arm64',
+      fetch: (_, __, {check}) async => bytes,
+    );
+    final installed = await provider.install(
+      project,
+      AvailableInstallation(
+        '1.1.0',
+        url: Uri.parse('https://example.invalid/orbit.tar.gz'),
+        size: bytes.length,
+        sha256: Sha256.hex(bytes),
+      ),
+      (_) {},
+    );
+    for (final entry in entries) {
+      final file = File('${installed.location}/${entry.name}');
+      expect(file.readAsBytesSync(), entry.bytes);
+      expect(file.statSync().mode & 0x1ff, entry.executable ? 0x1ed : 0x1a4);
+    }
+  });
+
   test(
     'Pub recognizes hosted activations and refuses path activations',
     () async {

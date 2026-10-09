@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Binary archives use fixed gzip level 6: measured roughly three times
+  faster than level 9, with about 0.2% larger archives on Keybay and rk.
+- GitHub installation uses the same archive extraction as identity checks,
+  applying the validated file modes in batches instead of per-file processes.
+
 - Decoded binary archives keep compact immutable byte buffers, reducing
   extraction time and peak memory without changing their contents.
 - Native Pub archives are copied into the stage through the existing atomic
