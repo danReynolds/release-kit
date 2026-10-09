@@ -50,7 +50,7 @@ Example: rk clean
       }
       final inventory = lock == null ? observed : stages.list();
       final found = inventory.length;
-      void record(int removed) => output.report.section('cleanup', {
+      void record(int removed) => output.report.section(ReportSection.cleanup, {
         'root': stages.root,
         'path': '.rk/work/stages',
         'found': found,

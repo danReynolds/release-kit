@@ -140,11 +140,11 @@ void main() {
   test('the top-level keys keep their documented order', () {
     // Recorded out of order: the document's order is its own.
     final report = Report('release')
-      ..section('release_choices', const [])
-      ..section('installations', const {})
-      ..section('plan', const {})
-      ..section('cleanup', const {})
-      ..section('init', const {})
+      ..section(ReportSection.releaseChoices, const [])
+      ..section(ReportSection.installations, const {})
+      ..section(ReportSection.plan, const {})
+      ..section(ReportSection.cleanup, const {})
+      ..section(ReportSection.init, const {})
       ..repository(name: 'tool')
       ..next('rk release')
       ..attach('notes', 'text')

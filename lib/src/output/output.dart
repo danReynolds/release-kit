@@ -8,6 +8,8 @@ import 'report.dart';
 import 'timeline.dart';
 import '../engine/verdict.dart';
 
+export 'report.dart' show ReportSection;
+
 part 'board.dart';
 
 /// What a checkout is at, in one phrase: `main@abc1234 · 2 uncommitted`.

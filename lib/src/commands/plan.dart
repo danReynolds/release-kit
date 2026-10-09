@@ -59,7 +59,7 @@ final class PlanCommand {
       uncommitted: uncommitted,
       show: false,
     );
-    output.report.section('plan', planJson(plan));
+    output.report.section(ReportSection.plan, planJson(plan));
     renderPlan(
       output,
       plan,

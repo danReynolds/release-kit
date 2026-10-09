@@ -114,7 +114,7 @@ class InitCommand {
         (gitignore == null ||
             !gitignore.split('\n').any((l) => l.trim() == '.rk/'));
     while (true) {
-      output.report.section('init', plan.toJson());
+      output.report.section(ReportSection.init, plan.toJson());
       final selector = select;
       if (selector != null && plan.candidates.isNotEmpty) {
         final selected = await selector(plan);
@@ -123,7 +123,7 @@ class InitCommand {
           return ExitCodes.ok;
         }
         plan = selected;
-        output.report.section('init', plan.toJson());
+        output.report.section(ReportSection.init, plan.toJson());
       }
 
       final reasons = _reasons(plan);

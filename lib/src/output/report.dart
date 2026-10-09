@@ -37,7 +37,7 @@ class Report {
   final List<Map<String, Object?>> _warnings = [];
   final List<String> _next = [];
   Map<String, Object?>? _repository;
-  final Map<String, Object> _sections = {};
+  final Map<ReportSection, Object> _sections = {};
   Map<String, Object?>? _halt;
 
   /// Whether re-running would move the release forward.
@@ -239,22 +239,9 @@ class Report {
 
   void attach(String name, String contents) => attachments[name] = contents;
 
-  /// What one command reports beside its units, by [key]: `init`'s
-  /// proposal, what `clean` found and removed, `plan`'s release graph,
-  /// `use`'s installations, or `target`'s release choices. The document
-  /// keeps them in that order, whichever came first.
-  void section(String key, Object value) {
-    assert(_sectionOrder.contains(key), 'no report section $key');
-    _sections[key] = value;
-  }
-
-  static const _sectionOrder = [
-    'init',
-    'cleanup',
-    'plan',
-    'installations',
-    'release_choices',
-  ];
+  /// Records what one command reports beside its units.
+  void section(ReportSection section, Object value) =>
+      _sections[section] = value;
 
   /// Whether a halt sentence has been recorded, so a generic late halt can
   /// yield to a specific one already diagnosed.
@@ -314,7 +301,8 @@ class Report {
       'exit': exit,
       'rerun_helps': rerunHelps,
       'repository': ?_repository,
-      for (final key in _sectionOrder) key: ?_sections[key],
+      for (final section in ReportSection.values)
+        section.key: ?_sections[section],
       'units': _units.values.toList(),
       'problems': _problems,
       'warnings': _warnings,
@@ -325,4 +313,21 @@ class Report {
     };
     return '${const JsonEncoder.withIndent('  ').convert(document)}\n';
   }
+}
+
+/// What one command reports beside its units: `init`'s proposal, what
+/// `clean` found and removed, `plan`'s release graph, `use`'s installations,
+/// or `target`'s release choices. The document keeps them in this order,
+/// whichever came first.
+enum ReportSection {
+  init('init'),
+  cleanup('cleanup'),
+  plan('plan'),
+  installations('installations'),
+  releaseChoices('release_choices');
+
+  const ReportSection(this.key);
+
+  /// The section's key in the document.
+  final String key;
 }
