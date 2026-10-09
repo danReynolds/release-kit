@@ -335,6 +335,16 @@ void main() {
       expect(build(), build());
     });
 
+    test('old and new compression preserve the same archive contents', () {
+      final tar = ArchiveBuilder.tar([
+        ArchiveEntry(name: 'tool', bytes: [1, 2, 3], executable: true),
+      ]);
+      final older = ArchiveReader.decode(GZipCodec(level: 9).encode(tar));
+      final current = ArchiveReader.decode(ArchiveBuilder.gzip(tar));
+      expect(current.files, older.files);
+      expect(current.artifact.toJson(), older.artifact.toJson());
+    });
+
     test('the gzip header records no timestamp', () {
       final bytes = build();
       expect(bytes.sublist(4, 8), [0, 0, 0, 0]);

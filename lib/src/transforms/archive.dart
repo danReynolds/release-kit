@@ -71,7 +71,7 @@ class ArchiveBuilder {
   /// built it, so the same input produces the same output on any day and
   /// any host.
   static List<int> gzip(List<int> bytes) {
-    final out = GZipCodec(level: 9).encode(bytes);
+    final out = GZipCodec(level: 6).encode(bytes);
     out.setRange(4, 8, const [0, 0, 0, 0]); // no timestamp
     out[8] = 0x00; // no extra flags, rather than the compression level
     out[9] = 0xff; // unknown OS, rather than the one that happened to build it
