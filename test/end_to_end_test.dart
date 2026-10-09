@@ -1431,7 +1431,7 @@ publish = ["git-tag", "pub.dev"]
   group('rk init', () {
     late Directory scratch;
 
-    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase6-'));
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-init-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
     test(
