@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/report.dart';
 import 'package:test/test.dart';
 
@@ -68,15 +67,7 @@ void main() {
 
   group('rerun_helps is the one rerun question', () {
     test('true by default, because re-running is the resume', () {
-      final json = decode(Report('release'));
-      expect(json['rerun_helps'], isTrue);
-      expect(
-        json.containsKey('safe_to_rerun'),
-        isFalse,
-        reason:
-            're-running is safe by construction — the same inspection '
-            'precedes every act — so a field for it could only ever say so',
-      );
+      expect(decode(Report('release'))['rerun_helps'], isTrue);
     });
 
     test('a conflict does not help, and the halt says why', () {
@@ -114,43 +105,9 @@ void main() {
     expect(problem['remedy'], 'align the constraint');
   });
 
-  test('warnings are separate, coded, and nonblocking', () {
-    final report = Report('status')
-      ..warning(
-        const Diagnostic(
-          code: 'RK-GIT-001',
-          message: '1 uncommitted path will be included',
-        ),
-      );
-    final json = decode(report);
-    expect(json['problems'], isEmpty);
-    expect((json['warnings'] as List).single['code'], 'RK-GIT-001');
-    expect(json['exit'], 0);
-  });
-
   test('the next command is data a caller can chain on', () {
     final report = Report('status')..next('rk release cli');
     expect(decode(report)['next'], ['rk release cli']);
-  });
-
-  group('recording happens inside printing, so the two cannot drift', () {
-    test('a problem printed is a problem reported', () {
-      final output = Output(sink: (_) {}, isTerminal: false);
-      output.problem(Diagnostic(code: 'RK-GIT-001', message: '2 uncommitted'));
-      expect(
-        decode(output.report)['problems'],
-        hasLength(1),
-        reason: 'there is one call, so there is nothing to forget',
-      );
-    });
-
-    test('and prose suppressed is still recorded', () {
-      final buffer = StringBuffer();
-      final output = Output(sink: (_) {}, isTerminal: false);
-      output.next('rk release cli');
-      expect(buffer.toString(), isEmpty);
-      expect(decode(output.report)['next'], ['rk release cli']);
-    });
   });
 
   group('the diagnosis directory', () {

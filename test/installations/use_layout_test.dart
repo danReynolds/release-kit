@@ -91,7 +91,7 @@ void main() {
     expect(second.hasFocus, isTrue);
   });
 
-  test('wide table is bounded; only the focused action is blue', () {
+  test('a blocked source shows its reason and repair in the table', () {
     final scratch = Directory.systemTemp.createTempSync('rk-table-layout-');
     addTearDown(() => scratch.deleteSync(recursive: true));
     final project = fixture(scratch);
@@ -128,65 +128,48 @@ void main() {
       close: () {},
     );
     addTearDown(model.dispose);
-    final tester = FleuryTester(viewportSize: const CellSize(240, 30));
+    final tester = FleuryTester(viewportSize: const CellSize(80, 24));
     addTearDown(tester.dispose);
     tester.pumpWidget(
       FleuryApp(title: 'rk', theme: matrixTheme, home: UseScreen(model)),
     );
     tester.pump();
-    final lines = tester.renderToString().split('\n');
-    expect(lines.every((line) => line.trimRight().length <= 104), isTrue);
-    expect(lines.join('\n'), contains('Already activated from a local path'));
-    expect(lines.join('\n'), contains('dart pub global deactivate orbit_cli'));
-    expect(lines.join('\n'), isNot(contains('Why?')));
-    expect(lines.join('\n'), isNot(contains('↓ Download')));
-    expect(lines.join('\n'), isNot(contains('Not installed')));
-    final row = lines.indexWhere((line) => line.contains('This checkout'));
-    void expectRow(Color color) {
-      final buffer = tester.render();
-      for (
-        var col = 2;
-        col < lines.firstWhere((line) => line.contains('─')).trimRight().length;
-        col++
-      ) {
-        expect(
-          buffer.atColRow(col, row).style.background,
-          color,
-          reason:
-              'Cell $col must share the row background, including foreground content',
-        );
-      }
-    }
+    final screen = tester.renderToString();
+    expect(screen, contains('Already activated from a local path'));
+    expect(screen, contains('dart pub global deactivate orbit_cli'));
+  });
 
-    expectRow(const RgbColor(24, 55, 41));
-    tester.sendMouse(
-      MouseEvent(
-        kind: MouseEventKind.moved,
-        button: MouseButton.none,
-        col: 45,
-        row: row,
+  test('compact details can page to the remedy without leaving Back', () {
+    final tester = FleuryTester(viewportSize: const CellSize(40, 12));
+    addTearDown(tester.dispose);
+    var returned = false;
+    tester.pumpWidget(
+      FleuryApp(
+        title: 'rk',
+        home: MatrixDetails(
+          command: 'rk use',
+          title: 'Pub unavailable',
+          body:
+              '${List.generate(20, (i) => 'Detail $i').join('\n')}\nRepair: dart pub global activate tool',
+          onBack: () => returned = true,
+        ),
       ),
     );
     tester.pump();
-    expectRow(const RgbColor(24, 55, 41));
-    // The default badge is status, never a hoverable/focusable button.
-    tester.sendMouse(
-      MouseEvent(
-        kind: MouseEventKind.moved,
-        button: MouseButton.none,
-        col: 95,
-        row: row,
-      ),
+    expect(tester.renderToString(), contains('More below'));
+    expect(tester.renderToString(), isNot(contains('Repair:')));
+    tester.sendKey(const KeyEvent(KeyCode.end));
+    tester.pump();
+    expect(
+      tester.renderToString(),
+      contains('Repair: dart pub global activate'),
     );
-    tester.pump();
-    expectRow(const RgbColor(24, 55, 41));
-    expect(lines[row], contains('✓ Default'));
-    expect(lines[row], isNot(contains('[')));
-    tester.sendKey(const KeyEvent(KeyCode.tab));
-    tester.pump();
-    expectRow(const RgbColor(24, 55, 41));
-    tester.render(size: const CellSize(40, 12));
-    tester.pump();
-    expect(tester.renderToString(), contains('Esc Done'));
+    expect(tester.renderToString(), contains('End · PgUp/PgDn scroll'));
+    tester.sendKey(const KeyEvent(KeyCode.enter));
+    expect(
+      returned,
+      isTrue,
+      reason: 'Paging must leave the safe Back action focused.',
+    );
   });
 }

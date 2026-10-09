@@ -870,7 +870,6 @@ final class ReleaseStageCoordinator {
         tag: tag,
         executable: project.executable!,
         into: '${scratch.path}/published-identity',
-        expectedPublished: true,
       );
       try {
         scratch.deleteSync(recursive: true);

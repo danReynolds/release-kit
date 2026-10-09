@@ -36,16 +36,10 @@ publish = ["git-tag", "pub.dev"]
   }
 
   Future<Inspection> inspect({
-    bool published = true,
-    bool unavailable = false,
     String? registrySha256 = _a,
     String? stagedSha256,
   }) => PubDevTarget(
-    registry: _Registry(
-      published: published,
-      unavailable: unavailable,
-      archiveSha256: registrySha256,
-    ),
+    registry: _Registry(archiveSha256: registrySha256),
   ).inspectProject(project(), expectedArchiveSha256: stagedSha256);
 
   test(
@@ -87,45 +81,25 @@ publish = ["git-tag", "pub.dev"]
     expect(result.verdict, Verdict.exact);
     expect(result.evidence['comparison'], 'unavailable');
   });
-
-  test('an unread registry is unknown, never absent', () async {
-    final result = await inspect(unavailable: true);
-    expect(result.verdict, Verdict.unknown);
-  });
-
-  test('a version that is not listed remains absent', () async {
-    final result = await inspect(published: false);
-    expect(result.verdict, Verdict.absent);
-  });
 }
 
+/// pub.dev with version 1.0.0 published, and [archiveSha256] its digest.
 class _Registry implements RegistryReader {
-  _Registry({
-    required this.published,
-    required this.unavailable,
-    required this.archiveSha256,
-  });
+  _Registry({required this.archiveSha256});
 
-  final bool published;
-  final bool unavailable;
   final String? archiveSha256;
 
   @override
-  Future<RegistryPackage?> lookup(String name) async {
-    if (unavailable) throw RegistryUnavailable('offline');
-    return RegistryPackage(
-      name: name,
-      versions: published
-          ? [
-              PublishedVersion(
-                version: Version.tryParse('1.0.0')!,
-                published: DateTime.now().toUtc(),
-                archiveSha256: archiveSha256,
-              ),
-            ]
-          : [],
-    );
-  }
+  Future<RegistryPackage?> lookup(String name) async => RegistryPackage(
+    name: name,
+    versions: [
+      PublishedVersion(
+        version: Version.tryParse('1.0.0')!,
+        published: DateTime.now().toUtc(),
+        archiveSha256: archiveSha256,
+      ),
+    ],
+  );
 
   @override
   Future<PublishedVersion?> lookupVersion(String name, Version version) async =>

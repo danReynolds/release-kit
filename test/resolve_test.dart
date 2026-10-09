@@ -491,4 +491,68 @@ assets = ["b.so"]
       );
     });
   });
+
+  test('refuses two units that declare one tag', () {
+    expect(
+      refusedWith(
+        '''
+schema = 2
+
+[release.a]
+tag = "v{version}"
+path = "packages/a"
+publish = ["git-tag", "pub.dev"]
+
+[release.b]
+tag = "v{version}"
+path = "packages/b"
+publish = ["git-tag", "pub.dev"]
+''',
+        MemorySourceTree({
+          'packages/a/pubspec.yaml': 'name: a\nversion: 1.0.0\n',
+          'packages/b/pubspec.yaml': 'name: b\nversion: 1.0.0\n',
+        }),
+      ),
+      'RK-RES-010',
+    );
+  });
+
+  test('refuses a project built from sources outside the repository', () {
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse(
+      '''
+schema = 2
+
+[release.cli]
+publish = ["git-tag", "github-release"]
+binary_platforms = ["macos-arm64"]
+''',
+      'release.toml',
+      diagnostics,
+    )!;
+    final resolution = Resolution.resolve(
+      config,
+      MemorySourceTree({
+        'pubspec.yaml': '''
+name: dune_cli
+version: 0.0.1
+publish_to: none
+executables:
+  dune: dune
+dependencies:
+  dune_core:
+    path: ../dune_core
+  stdio:
+    path: ../stdio
+''',
+      }),
+      diagnostics,
+    );
+
+    expect(resolution, isNull);
+    final problem = diagnostics.found.single;
+    expect(problem.code, 'RK-DART-201');
+    expect(problem.remedy, contains('dune_core'));
+    expect(problem.remedy, contains('stdio'));
+  });
 }

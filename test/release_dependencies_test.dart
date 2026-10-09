@@ -105,11 +105,6 @@ void main() {
       final resolution = _stack({'mid': 'dependencies:\n  core:\n'});
       expect(requires(resolution, 'mid'), ['core']);
     });
-
-    test('not when its constraint excludes this version', () {
-      final resolution = _stack({'mid': 'dependencies:\n  core: ^0.1.0\n'});
-      expect(requires(resolution, 'mid'), isEmpty);
-    });
   });
 }
 

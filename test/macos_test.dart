@@ -4,6 +4,8 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
+import 'scripted_tools.dart';
+
 const _name = 'Developer ID Application: Dan (TEAM123456)';
 final _sha1 = 'a' * 40;
 final _identity = SigningIdentity(name: _name, team: 'TEAM123456', sha1: _sha1);
@@ -137,11 +139,7 @@ void main() {
       () async {
         final tools = _tools(
           displays: {
-            'codesign -dvvv /tmp/app.aot': ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'not signed at all',
-            ),
+            'codesign -dvvv /tmp/app.aot': failed('not signed at all'),
           },
         );
 
@@ -179,14 +177,10 @@ RecordingTools _tools({
   },
   answers: (key) {
     if (key == 'security find-identity -v -p codesigning') {
-      return ToolResult(exitCode: 0, stdout: '1) $_sha1 "$_name"', stderr: '');
+      return ok('1) $_sha1 "$_name"');
     }
     if (key.startsWith('codesign -d -r-')) {
-      return ToolResult(
-        exitCode: 0,
-        stdout: 'designated => identifier "io.example.tool"',
-        stderr: '',
-      );
+      return ok('designated => identifier "io.example.tool"');
     }
     return null;
   },

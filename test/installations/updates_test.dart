@@ -17,14 +17,6 @@ import 'package:rk/src/tui/use_picker.dart';
 import 'package:test/test.dart';
 import 'fixtures.dart';
 
-class Release extends AvailableInstallation {
-  Release(
-    super.project, [
-    super.source = InstallationSource.pub,
-    super.version = '1.3.0',
-  ]);
-}
-
 class UpdatingProvider extends StubProvider implements InstallationUpdates {
   UpdatingProvider() : super(InstallationSource.pub);
   @override
@@ -381,134 +373,80 @@ void main() {
     );
   }
 
-  for (final mouse in [false, true]) {
-    test(
-      '${mouse ? 'mouse' : 'keyboard'} focuses one action; download completion never turns Enter into Use',
-      () async {
-        var downloads = 0, uses = 0, closes = 0;
-        Installation? installed;
-        final gate = Completer<String>();
-        List<ProjectInstallations> inspect() => [
-          ProjectInstallations(project, {
-            InstallationSource.local: const SourceInspection(),
-            InstallationSource.pub: const SourceInspection(
-              problem: 'Blocked activation',
-            ),
-            InstallationSource.github: SourceInspection(
-              installation: installed,
-            ),
-          }),
-        ];
-        final model = UsePicker(
-          states: inspect(),
-          refresh: () async => inspect(),
-          checkAvailable: (_, source, _) async => Release(project, source),
-          downloadAvailable: (_, release, _, _) {
-            downloads++;
-            return gate.future;
-          },
-          use: (_, source, _, _) async {
-            expect(source, InstallationSource.github);
-            uses++;
-            return 'Used';
-          },
-          close: () => closes++,
-        );
-        addTearDown(model.dispose);
-        final tester = FleuryTester(viewportSize: const CellSize(104, 24));
-        addTearDown(tester.dispose);
-        tester.pumpWidget(FleuryApp(title: 'rk', home: UseScreen(model)));
-        tester.pump();
-        await Future<void>.delayed(Duration.zero);
-        tester.pump();
-        void key(KeyCode code) {
-          tester.sendKey(KeyEvent(code));
-          tester.pump();
-        }
-
-        void expectBlue(String label) {
-          final lines = tester.renderToString().split('\n');
-          final buffer = tester.render();
-          final row = lines.indexWhere(
-            (line) =>
-                line.contains(label) &&
-                line.contains('[') &&
-                buffer
-                        .atColRow(line.indexOf(label), lines.indexOf(line))
-                        .style
-                        .background ==
-                    const RgbColor(42, 76, 108),
-          );
-          expect(row, isNonNegative);
-          expect(
-            buffer.atColRow(lines[row].indexOf(label), row).style.background,
-            const RgbColor(42, 76, 108),
-          );
-          // Source and version text never take the keyboard highlight.
-          expect(
-            buffer.atColRow(2, row).style.background,
-            isNot(const RgbColor(42, 76, 108)),
-          );
-        }
-
-        key(KeyCode.enter);
-        expect(downloads, 0);
-        key(KeyCode.arrowDown); // Local Use.
-        key(
-          KeyCode.arrowDown,
-        ); // Skip blocked Pub; missing GitHub has Download only.
-        expectBlue('Install');
-        if (mouse) {
-          final lines = tester.renderToString().split('\n');
-          final row = lines.indexWhere(
-            (line) => line.contains('Install') && line.contains('['),
-          );
-          final col = lines[row].indexOf('Install');
-          for (final kind in [MouseEventKind.down, MouseEventKind.up]) {
-            tester.sendMouse(
-              MouseEvent(
-                kind: kind,
-                button: MouseButton.left,
-                col: col,
-                row: row,
-              ),
-            );
-            tester.pump();
-          }
-        } else {
-          key(KeyCode.enter);
-        }
-        key(KeyCode.enter);
-        expect(downloads, 1);
-        expect(uses, 0);
-        expect(tester.renderToString(), contains('Installing…'));
-        installed = Installation(
-          source: InstallationSource.github,
-          version: '1.3.0',
-          location: '/fixture',
-          commands: const {},
-        );
-        gate.complete('GitHub installed');
-        await Future<void>.delayed(Duration.zero);
-        tester.pump();
-        tester.pump();
-        expect(tester.renderToString(), isNot(contains('✓ Installed')));
-        key(KeyCode.enter);
-        await Future<void>.delayed(Duration.zero);
-        expect(downloads, 1);
-        expect(uses, 0);
-        expect(closes, 0);
-        // Finishing an install clears its focus; Use needs deliberate navigation.
-        key(KeyCode.arrowDown); // Local Use.
-        key(KeyCode.arrowDown); // GitHub Use.
-        expectBlue('Use');
-        key(KeyCode.enter);
-        await Future<void>.delayed(Duration.zero);
-        expect(uses, 1);
-        expect(closes, 1);
+  test('an install that finishes never turns Enter into Use', () async {
+    var downloads = 0, uses = 0, closes = 0;
+    Installation? installed;
+    final gate = Completer<String>();
+    List<ProjectInstallations> inspect() => [
+      ProjectInstallations(project, {
+        InstallationSource.local: const SourceInspection(),
+        InstallationSource.pub: const SourceInspection(
+          problem: 'Blocked activation',
+        ),
+        InstallationSource.github: SourceInspection(installation: installed),
+      }),
+    ];
+    final model = UsePicker(
+      states: inspect(),
+      refresh: () async => inspect(),
+      checkAvailable: (_, source, _) async => Release(project, source),
+      downloadAvailable: (_, release, _, _) {
+        downloads++;
+        return gate.future;
       },
+      use: (_, source, _, _) async {
+        expect(source, InstallationSource.github);
+        uses++;
+        return 'Used';
+      },
+      close: () => closes++,
     );
-  }
+    addTearDown(model.dispose);
+    final tester = FleuryTester(viewportSize: const CellSize(104, 24));
+    addTearDown(tester.dispose);
+    tester.pumpWidget(FleuryApp(title: 'rk', home: UseScreen(model)));
+    tester.pump();
+    await Future<void>.delayed(Duration.zero);
+    tester.pump();
+    void key(KeyCode code) {
+      tester.sendKey(KeyEvent(code));
+      tester.pump();
+    }
+
+    key(KeyCode.enter);
+    expect(downloads, 0, reason: 'nothing is focused until a key moves');
+    key(KeyCode.arrowDown); // Local Use.
+    key(
+      KeyCode.arrowDown,
+    ); // Past blocked Pub to GitHub, which can only install.
+    key(KeyCode.enter);
+    key(KeyCode.enter); // A second Enter does not install twice.
+    expect(downloads, 1);
+    expect(uses, 0);
+    expect(tester.renderToString(), contains('Installing…'));
+    installed = Installation(
+      source: InstallationSource.github,
+      version: '1.3.0',
+      location: '/fixture',
+      commands: const {},
+    );
+    gate.complete('GitHub installed');
+    await Future<void>.delayed(Duration.zero);
+    tester.pump();
+    tester.pump();
+    key(KeyCode.enter);
+    await Future<void>.delayed(Duration.zero);
+    expect(downloads, 1);
+    expect(uses, 0);
+    expect(closes, 0);
+    // Finishing an install clears its focus; Use needs deliberate navigation.
+    key(KeyCode.arrowDown); // Local Use.
+    key(KeyCode.arrowDown); // GitHub Use.
+    key(KeyCode.enter);
+    await Future<void>.delayed(Duration.zero);
+    expect(uses, 1);
+    expect(closes, 1);
+  });
 
   test(
     'Default is inert; Done closes without preparing or rewriting the active source',

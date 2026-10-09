@@ -8,6 +8,8 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
+import 'scripted_tools.dart';
+
 void main() {
   group('capability is discovered, not declared', () {
     final onAppleSilicon = HostCapabilities(
@@ -82,11 +84,7 @@ void main() {
               stdout: '',
               stderr: 'timed out',
             ),
-            'podman info': ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'not running',
-            ),
+            'podman info': failed('not running'),
           },
         );
 
@@ -107,12 +105,8 @@ void main() {
         final detected = HostCapabilities.detect(
           tools: RecordingTools(
             results: {
-              'docker info': ToolResult(
-                exitCode: 1,
-                stdout: '',
-                stderr: 'not running',
-              ),
-              'podman info': ToolResult(exitCode: 0, stdout: 'ok', stderr: ''),
+              'docker info': failed('not running'),
+              'podman info': ok('ok'),
             },
           ),
         );
@@ -125,9 +119,7 @@ void main() {
       'a container runtime is asked for only when a smoke test needs one',
       () async {
         final tools = RecordingTools(
-          answers: (key) => key.contains('--version')
-              ? ToolResult(exitCode: 0, stdout: '2.0.0', stderr: '')
-              : null,
+          answers: (key) => key.contains('--version') ? ok('2.0.0') : null,
         );
         final host = HostCapabilities.detect(tools: tools);
         final out = Directory.systemTemp.createTempSync('rk-lazy-probe-');
@@ -249,13 +241,7 @@ void main() {
       File('${sdk.path}/dartaotruntime').writeAsStringSync('RUNTIME');
       File('${sdk.parent.path}/LICENSE').writeAsStringSync('LICENSE');
       final tools = _TimeoutRecordingTools(
-        results: {
-          '${buildRoot.path}/keybay --version': ToolResult(
-            exitCode: 0,
-            stdout: 'keybay 0.2.0\n',
-            stderr: '',
-          ),
-        },
+        results: {'${buildRoot.path}/keybay --version': ok('keybay 0.2.0\n')},
       );
       final outcome =
           await DartCliBuilder(
@@ -289,10 +275,8 @@ void main() {
         final tools = _TimeoutRecordingTools(
           results: {
             'docker run --rm --platform linux/amd64 -v ${buildRoot.path}:/w:ro '
-                'debian:bookworm-slim /w/keybay --version': ToolResult(
-              exitCode: 0,
-              stdout: 'keybay 0.2.0\n',
-              stderr: '',
+                'debian:bookworm-slim /w/keybay --version': ok(
+              'keybay 0.2.0\n',
             ),
           },
         );
@@ -318,13 +302,7 @@ void main() {
 
     test('a binary reporting the wrong version is not accepted', () async {
       final tools = RecordingTools(
-        results: {
-          '${buildRoot.path}/keybay --version': ToolResult(
-            exitCode: 0,
-            stdout: 'keybay 0.1.0\n',
-            stderr: '',
-          ),
-        },
+        results: {'${buildRoot.path}/keybay --version': ok('keybay 0.1.0\n')},
       );
       final outcome =
           await DartCliBuilder(tools: tools, capabilities: capabilities).build(
@@ -338,21 +316,6 @@ void main() {
       expect(outcome.ok, isFalse);
       expect(outcome.problem, contains('0.1.0'));
     });
-
-    test(
-      'a platform this host cannot produce never reaches the builder',
-      () async {
-        // The guard lives at the caller, which refuses with RK-HOST-001 and a
-        // reason. The builder used to re-check and return a `blocked` outcome
-        // nothing read — two guards for one decision, the inner one
-        // unreachable.
-        expect(capabilities.resolve('macos-x64').canProduce, isFalse);
-        expect(
-          capabilities.resolve('macos-x64').reason,
-          contains('needs a macos-x64 host'),
-        );
-      },
-    );
   });
 
   group('archives are byte-reproducible', () {
@@ -426,9 +389,7 @@ void main() {
     // then failed the build on a command it does not have — a check that
     // passes where the act fails.
     final tools = RecordingTools(
-      answers: (key) => key.contains('--version')
-          ? ToolResult(exitCode: 0, stdout: '2.0.0', stderr: '')
-          : null,
+      answers: (key) => key.contains('--version') ? ok('2.0.0') : null,
     );
     final outcome =
         await DartCliBuilder(

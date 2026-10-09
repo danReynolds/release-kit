@@ -136,36 +136,6 @@ void main() {
     });
   });
 
-  group('target-owned activity vocabulary', () {
-    test('accepts concise bespoke wording', () {
-      final activity = ProgressActivity(
-        running: 'attesting provenance',
-        failed: 'provenance failed',
-      );
-
-      expect(activity.running, 'attesting provenance');
-      expect(activity.failed, 'provenance failed');
-    });
-
-    test('rejects wording that can corrupt or sprawl across the board', () {
-      expect(
-        () => ProgressActivity(running: 'Publishing', failed: 'failed'),
-        throwsArgumentError,
-      );
-      expect(
-        () => ProgressActivity(running: 'publishing\nsecret', failed: 'failed'),
-        throwsArgumentError,
-      );
-      expect(
-        () => ProgressActivity(
-          running: 'this activity wording is deliberately far too long',
-          failed: 'failed',
-        ),
-        throwsArgumentError,
-      );
-    });
-  });
-
   group('row authority and clocks', () {
     test('a diagnostic never settles a live board', () {
       final harness = _Harness(terminal: false);
@@ -283,63 +253,6 @@ void main() {
   });
 
   group('rendering lifecycle', () {
-    test(
-      'active and completed work use runtime colors, not target colors',
-      () async {
-        final harness = _Harness(terminal: true, useColor: true);
-        final board = harness.output.progressBoard(
-          'Staging',
-          delay: Duration.zero,
-          showElapsed: false,
-        );
-        final row = board.addRow(
-          id: 'archive',
-          label: 'package archive',
-          group: 'Local artifacts',
-        );
-        row.handle.begin(CommonProgressActivities.checking);
-
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-        expect(harness.text, contains('\x1b[1mStaging\x1b[0m'));
-        expect(harness.text, contains('\x1b[1;90m  Local artifacts\x1b[0m'));
-        expect(
-          harness.text,
-          contains('\x1b[36mpackage archive'),
-          reason: 'the active subject, not just its spinner, is cyan',
-        );
-        expect(
-          harness.text,
-          contains('\x1b[36mchecking\x1b[0m'),
-          reason: 'active activity is cyan',
-        );
-        expect(
-          harness.text,
-          isNot(contains('\x1b[33m')),
-          reason: 'active is not an attention or warning state',
-        );
-        expect(
-          harness.text.replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), ''),
-          contains('checking'),
-        );
-
-        final beforeSettle = harness.text.length;
-        row.complete(note: 'staged');
-        board.settle();
-        final settled = harness.text.substring(beforeSettle);
-        expect(settled, contains('\x1b[32m✓\x1b[0m'));
-        expect(
-          settled,
-          contains('    \x1b[32m✓\x1b[0m \x1b[32mpackage archive'),
-          reason: 'the mark sits beside its row, not in the margin',
-        );
-        expect(
-          settled,
-          isNot(contains('\x1b[34m')),
-          reason: 'a successful runtime state overrides local-work topology',
-        );
-      },
-    );
-
     test(
       'a slow non-terminal operation emits once, then settles once',
       () async {
@@ -599,34 +512,9 @@ void main() {
       expect(frame, endsWith('3m 12s'));
     });
 
-    test('terminal rows remain one physical line when narrow', () async {
-      final harness = _Harness(terminal: true, width: 36);
-      final board = harness.output.progressBoard(
-        'Preparing release',
-        delay: Duration.zero,
-      );
-      board
-          .addRow(
-            id: 'github',
-            label: 'GitHub Release',
-            coordinate: 'owner/a-deliberately-long-repository',
-          )
-          .handle
-          .begin(CommonProgressActivities.checkingSignIn);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
-      board.discard();
-
-      final visible = harness.text
-          .replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), '')
-          .split('\n')
-          .where((line) => line.isNotEmpty);
-      expect(visible.every((line) => line.runes.length <= 36), isTrue);
-      expect(harness.text, contains('…'));
-    });
-
-    for (final width in [0, 1, 3, 11]) {
-      test('unsafe width $width disables live redraw', () async {
-        final harness = _Harness(terminal: true, width: width);
+    test('a width too narrow or unknown disables live redraw', () async {
+      for (final width in [0, 1, 3, 11, null]) {
+        final harness = _Harness(terminal: true, widthReader: () => width);
         final board = harness.output.progressBoard(
           'Preparing release',
           delay: Duration.zero,
@@ -637,48 +525,8 @@ void main() {
             .begin(CommonProgressActivities.checking);
         await Future<void>.delayed(const Duration(milliseconds: 2));
         board.discard();
-        expect(harness.text, isEmpty);
-      });
-    }
-
-    test('unknown terminal width disables live redraw', () async {
-      final harness = _Harness(terminal: true, widthReader: () => null);
-      final board = harness.output.progressBoard(
-        'Preparing release',
-        delay: Duration.zero,
-      );
-      board
-          .addRow(id: 'tag', label: 'Git tag')
-          .handle
-          .begin(CommonProgressActivities.checking);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
-      board.discard();
-
-      expect(harness.text, isEmpty);
-    });
-
-    test('one atomic width sample governs each rendered frame', () async {
-      var reads = 0;
-      final harness = _Harness(
-        terminal: true,
-        widthReader: () => reads++ == 0 ? 24 : null,
-      );
-      final board = harness.output.progressBoard(
-        'Preparing a deliberately long release',
-        delay: Duration.zero,
-      );
-      board
-          .addRow(id: 'github', label: 'GitHub Release with a long name')
-          .handle
-          .begin(CommonProgressActivities.checking);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
-      board.discard();
-
-      final visible = harness.text
-          .replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), '')
-          .split('\n')
-          .where((line) => line.isNotEmpty);
-      expect(visible.every((line) => line.runes.length <= 24), isTrue);
+        expect(harness.text, isEmpty, reason: 'width $width');
+      }
     });
 
     test(

@@ -57,8 +57,6 @@ final class PubRegistryFixture {
   final Set<String> rejectUploads = {};
   final Set<String> loseFinalizeResponses = {};
   final Set<String> unavailableArchives = {};
-  final Set<String> hiddenCoordinates = {};
-  final Set<String> hiddenListings = {};
 
   Map<String, PubRegistryPackage> get committed => Map.unmodifiable(_committed);
 
@@ -110,7 +108,7 @@ final class PubRegistryFixture {
           path[1] == 'packages' &&
           path[3] == 'versions') {
         final package = _committed['${path[2]}@${path[4]}'];
-        if (package == null || hiddenCoordinates.contains(path[2])) {
+        if (package == null) {
           await _jsonError(request, HttpStatus.notFound, 'package not found');
           // Recovery scenarios may interrupt RK once this server has answered
           // its real confirmation read, without changing RK's
@@ -326,7 +324,7 @@ final class PubRegistryFixture {
             (a, b) =>
                 Version.parse(a.version).compareTo(Version.parse(b.version)),
           );
-    if (versions.isEmpty || hiddenListings.contains(name)) {
+    if (versions.isEmpty) {
       await _jsonError(request, HttpStatus.notFound, 'package not found');
       return;
     }
