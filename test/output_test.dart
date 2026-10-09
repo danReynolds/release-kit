@@ -34,6 +34,38 @@ String withoutControls(String text) =>
 final ansi = RegExp(r'\x1b\[[0-9;]*m');
 
 void main() {
+  test('deferred warnings are said in release order, whichever came first', () {
+    // Units staged side by side finish in any order; what a run says must
+    // not depend on which.
+    final buffer = StringBuffer();
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: false,
+      useColor: false,
+    );
+    output.deferWarning(
+      const Diagnostic(code: 'RK-PUB-012', message: 'for other', remedy: 'r'),
+      unit: 'other',
+    );
+    output.deferWarning(
+      const Diagnostic(code: 'RK-PUB-012', message: 'for core', remedy: 'r'),
+      unit: 'core',
+    );
+    output.flushWarnings(order: const ['core', 'other']);
+
+    final text = buffer.toString();
+    expect(text.indexOf('for core'), lessThan(text.indexOf('for other')));
+    final report =
+        jsonDecode(output.report.encode(exit: 0)) as Map<String, Object?>;
+    expect(
+      [
+        for (final warning in report['warnings'] as List)
+          (warning as Map)['unit'],
+      ],
+      ['core', 'other'],
+    );
+  });
+
   test('public steps preserve concrete target identity in JSON', () {
     final (out, _) = make();
     out.step(

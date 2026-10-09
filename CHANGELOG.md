@@ -107,8 +107,9 @@ published finishes with 0.1.14.
   when that is the command that works. With one edited file it reads the
   working tree once: about 0.2s and 32 MB on Fleury.
 - `rk stage` and `rk release` of several units say what they stage once: one
-  heading, one Warnings section, one summary and one next step. Piped output
-  is the same from one run to the next. A long unit name is shortened rather
+  heading, one Warnings section, one summary and one next step, with
+  warnings in release order whichever unit finishes first. Piped output
+  carries no times or counts. A long unit name is shortened rather
   than stopping the run, and a release says it acted only once something
   public changed.
 - `rk help [command]` prints a command's help. A flag a command does not take

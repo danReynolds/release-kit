@@ -326,8 +326,11 @@ class ReleaseCommand {
     ];
     Future<({int code, List<PublicationPlan> publications})> finish() async {
       final prepared = await _stage(stagings);
-      // The warnings every unit found while staging, said once.
-      output.flushWarnings();
+      // The warnings every unit found while staging, said once, in release
+      // order whichever unit finished first.
+      output.flushWarnings(
+        order: [for (final unit in units) unit.read.unit.name],
+      );
       // Every unit's staging is said, even past one that failed: once, for
       // all of them.
       var code = ExitCodes.ok;

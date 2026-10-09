@@ -182,7 +182,8 @@ final class OutputTheme {
 /// step expands and a finished one collapses; and a pipe sees the same words
 /// the terminal ends up showing, with no cursor movement. The one exception
 /// is time: a terminal's settled rows keep how long they ran, and a pipe's
-/// transcript does not, so it reads the same from one run to the next.
+/// transcript does not. A pipe hears of a step still running after ten
+/// seconds once, without a time or a count, and warnings in release order.
 class Output {
   Output({
     required this.sink,
@@ -897,7 +898,8 @@ class Output {
   }
 
   /// Warnings recorded but not yet shown: see [deferWarning].
-  final List<({Diagnostic diagnostic, String? unit})> _deferredWarnings = [];
+  final List<({Diagnostic diagnostic, String? unit, String? target})>
+  _deferredWarnings = [];
 
   /// Records a nonblocking diagnostic now, and shows it later with the run's
   /// other warnings, in one section: before the run's next problem, halt or
@@ -905,22 +907,33 @@ class Output {
   /// their own; said as they arrive, they made a section per unit and
   /// repeated the remedy they share under every one.
   void deferWarning(Diagnostic diagnostic, {String? unit, String? target}) {
-    report.warning(diagnostic, unit: unit, target: target);
-    _deferredWarnings.add((diagnostic: diagnostic, unit: unit));
+    _deferredWarnings.add((diagnostic: diagnostic, unit: unit, target: target));
   }
 
-  /// Shows every deferred warning under one heading. Warnings that share a
-  /// remedy are listed together, and the remedy is said once, after them.
-  void flushWarnings() {
+  /// Shows every deferred warning under one heading, and records it in the
+  /// report. Warnings that share a remedy are listed together, and the remedy
+  /// is said once, after them. [order] names units in the order their
+  /// warnings are said: units staged side by side finish in any order, and
+  /// the run reads the same either way.
+  void flushWarnings({List<String> order = const []}) {
     if (_deferredWarnings.isEmpty) return;
+    final rank = {for (final (index, unit) in order.indexed) unit: index};
+    final deferred = [..._deferredWarnings.indexed]
+      ..sort((a, b) {
+        final byUnit = (rank[a.$2.unit] ?? order.length).compareTo(
+          rank[b.$2.unit] ?? order.length,
+        );
+        return byUnit != 0 ? byUnit : a.$1.compareTo(b.$1);
+      });
+    _deferredWarnings.clear();
     final seen = <String>{};
     final byRemedy = <String?, List<Diagnostic>>{};
-    for (final (:diagnostic, :unit) in _deferredWarnings) {
+    for (final (_, (:diagnostic, :unit, :target)) in deferred) {
       final key = '$unit\u0000${diagnostic.code}\u0000${diagnostic.message}';
       if (!seen.add(key)) continue;
+      report.warning(diagnostic, unit: unit, target: target);
       byRemedy.putIfAbsent(diagnostic.remedy, () => []).add(diagnostic);
     }
-    _deferredWarnings.clear();
     blank();
     heading('Warnings');
     for (final MapEntry(key: remedy, value: warnings) in byRemedy.entries) {
@@ -1229,6 +1242,7 @@ final class LiveProgress {
   (String, String, RuntimeState, RuntimeState) _rowPresentation(
     ProgressRow row, {
     required bool active,
+    bool inPipe = false,
   }) {
     return switch (row.state) {
       ProgressRowState.pending => (
@@ -1241,7 +1255,9 @@ final class LiveProgress {
         active ? _frames[_spin % _frames.length] : '…',
         [
           row.activity!.running,
-          if (row.detail != null) row.detail!,
+          // A count such as `2/6` is wherever the step had got to when the
+          // row was written: a pipe gets the step, not the moment.
+          if (row.detail != null && !inPipe) row.detail!,
           if (active && showElapsed) formatDuration(row.elapsed),
         ].join(' · '),
         RuntimeState.active,
@@ -1420,6 +1436,7 @@ final class LiveProgress {
     var (glyph, status, glyphState, textState) = _rowPresentation(
       row,
       active: active && !inPipe,
+      inPipe: inPipe,
     );
     // A finished row that ran long enough for its counter to tick keeps its
     // total, on a terminal. A pipe's transcript stays the same every run.

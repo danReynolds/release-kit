@@ -317,7 +317,9 @@ void main() {
           label: 'package archive',
           group: 'core 1.0.0 · pub.dev · core',
         );
-        build.handle.begin(CommonProgressActivities.validating);
+        // A count is where the step had got to when the line was written,
+        // which differs from run to run.
+        build.handle.begin(CommonProgressActivities.validating, detail: '2/6');
         await Future<void>.delayed(const Duration(milliseconds: 30));
         expect(
           harness.text,
@@ -325,6 +327,7 @@ void main() {
         );
         expect(harness.text, contains('validating'));
         expect(harness.text, isNot(contains('0s')));
+        expect(harness.text, isNot(contains('2/6')));
         build.complete(note: 'staged');
         slow.settle();
       },
