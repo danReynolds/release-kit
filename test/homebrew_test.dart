@@ -371,11 +371,7 @@ binary_platforms = ["linux-x64"]
       final tools = RecordingTools(
         answers: (key) {
           if (key.startsWith('git push') && pushRejected) {
-            return ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'rejected: fetch first (non-fast-forward)',
-            );
+            return failed('rejected: fetch first (non-fast-forward)');
           }
           return null; // default ok
         },
@@ -475,12 +471,9 @@ binary_platforms = ["linux-x64"]
         final checkout = '${scratch.path}/tap';
         final tools = RecordingTools(
           answers: (key) => key.startsWith('git push')
-              ? ToolResult(
-                  exitCode: 1,
-                  stdout: '',
-                  stderr:
-                      'fatal: could not read Username\n'
-                      'remote: Support for password authentication was removed',
+              ? failed(
+                  'fatal: could not read Username\n'
+                  'remote: Support for password authentication was removed',
                 )
               : null,
           onRun: (key) {

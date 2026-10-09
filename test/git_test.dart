@@ -8,6 +8,8 @@ import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
+import 'scripted_tools.dart';
+
 /// `GitState.read` against real repositories.
 ///
 /// It had no test: `status_test.dart` fakes the whole object, so the parsing
@@ -474,14 +476,11 @@ void main() {
       const two = '2222222222222222222222222222222222222222';
       const three = '3333333333333333333333333333333333333333';
       final result = await latest(
-        ToolResult(
-          exitCode: 0,
-          stdout:
-              '$one\trefs/tags/v1.9.0\n'
-              '$two\trefs/tags/v1.10.0\n'
-              '$three\trefs/tags/v1.10.0^{}\n'
-              '$one\trefs/tags/docs\n',
-          stderr: '',
+        ok(
+          '$one\trefs/tags/v1.9.0\n'
+          '$two\trefs/tags/v1.10.0\n'
+          '$three\trefs/tags/v1.10.0^{}\n'
+          '$one\trefs/tags/docs\n',
         ),
       );
       expect(result.verdict, Verdict.exact);
@@ -489,9 +488,7 @@ void main() {
     });
 
     test('an empty matching history is absent', () async {
-      final result = await latest(
-        ToolResult(exitCode: 0, stdout: '', stderr: ''),
-      );
+      final result = await latest(ok());
       expect(result.verdict, Verdict.absent);
     });
 
@@ -502,29 +499,22 @@ void main() {
         // or hand-made tag, which must not block every release after it.
         const one = '1111111111111111111111111111111111111111';
         final result = await latest(
-          ToolResult(
-            exitCode: 0,
-            stdout:
-                '$one\trefs/tags/vnext\n'
-                '$one\trefs/tags/v1.0\n'
-                '$one\trefs/tags/v0.9.0\n',
-            stderr: '',
+          ok(
+            '$one\trefs/tags/vnext\n'
+            '$one\trefs/tags/v1.0\n'
+            '$one\trefs/tags/v0.9.0\n',
           ),
         );
         expect(result.verdict, Verdict.exact, reason: result.detail);
         expect(result.evidence['version'], '0.9.0');
 
-        final none = await latest(
-          ToolResult(exitCode: 0, stdout: '$one\trefs/tags/v1.0\n', stderr: ''),
-        );
+        final none = await latest(ok('$one\trefs/tags/v1.0\n'));
         expect(none.verdict, Verdict.absent, reason: none.detail);
       },
     );
 
     test('an unreadable origin is unknown', () async {
-      final result = await latest(
-        ToolResult(exitCode: 1, stdout: '', stderr: 'network unavailable'),
-      );
+      final result = await latest(failed('network unavailable'));
       expect(result.verdict, Verdict.unknown);
     });
   });
@@ -553,16 +543,10 @@ void main() {
     }) async {
       final tools = RecordingTools(
         results: {
-          'git ls-remote --tags origin': ToolResult(
-            exitCode: 0,
-            stdout: '$remote$commit\trefs/tags/v0.9.0\n',
-            stderr: '',
+          'git ls-remote --tags origin': ok(
+            '$remote$commit\trefs/tags/v0.9.0\n',
           ),
-          'git cat-file tag $object': ToolResult(
-            exitCode: 0,
-            stdout: objectBytes,
-            stderr: '',
-          ),
+          'git cat-file tag $object': ok(objectBytes),
           if (diff != null)
             'git --literal-pathspecs diff-tree --quiet -r $commit^{commit} '
                     '$expectedCommit -- ${sourcePaths.join(' ')}':

@@ -517,43 +517,25 @@ void main() {
           if (key.startsWith('gh api --paginate --slurp')) {
             draftReads++;
             if (unreadDraftsAfterCreate && draftReads > 1) {
-              return ToolResult(
-                exitCode: 1,
-                stdout: '',
-                stderr: 'GitHub could not be reached',
-              );
+              return failed('GitHub could not be reached');
             }
-            return ToolResult(exitCode: 0, stdout: slurp, stderr: '');
-          }
-          if (key.startsWith('gh api -X DELETE')) {
-            return ToolResult(exitCode: 0, stdout: '', stderr: '');
+            return ok(slurp);
           }
           if (key.contains(' -X POST repos/example/tool/releases --input ')) {
-            return ToolResult(
-              exitCode: createFailure == null ? 0 : 1,
-              stdout: createFailure == null ? jsonEncode({'id': 7}) : '',
-              stderr: createFailure ?? '',
-            );
+            return createFailure == null
+                ? ok(jsonEncode({'id': 7}))
+                : failed(createFailure);
           }
           if (key.contains('uploads.github.com')) {
             final fails = uploadFailure != null && uploadCount == 1;
-            return ToolResult(
-              exitCode: fails ? 1 : 0,
-              stdout: '',
-              stderr: fails ? uploadFailure : '',
-            );
-          }
-          if (exactSameTagDownloadAvailable &&
-              key.startsWith('gh release download ')) {
-            return ToolResult(exitCode: 0, stdout: '', stderr: '');
+            return fails ? failed(uploadFailure) : ok();
           }
           if (RegExp(
             r'^gh api repos/example/tool/releases/\d+$',
           ).hasMatch(key)) {
             final id = int.parse(key.split('/').last);
-            return ToolResult(
-              exitCode: 0,
-              stdout: jsonEncode({
+            return ok(
+              jsonEncode({
                 'tag_name': 'v1.0.0',
                 'draft': draft,
                 'prerelease': prerelease,
@@ -565,15 +547,10 @@ void main() {
                     draftAssetJson(assets.keys.elementAt(index), index),
                 ],
               }),
-              stderr: '',
             );
           }
           if (key.contains(' -X PATCH repos/example/tool/releases/7 ')) {
-            return ToolResult(
-              exitCode: patchFails ? 1 : 0,
-              stdout: '',
-              stderr: patchFails ? 'connection lost' : '',
-            );
+            return patchFails ? failed('connection lost') : ok();
           }
           return null;
         },

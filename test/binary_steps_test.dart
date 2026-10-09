@@ -16,6 +16,8 @@ import 'package:rk/src/engine/workspace.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
+import 'scripted_tools.dart';
+
 final _certificateSha1 = 'a' * 40;
 
 /// The certificate the preflight chose.
@@ -101,23 +103,11 @@ executables:
       answers: (key) {
         final shown = display?.call(key);
         if (shown != null) return shown;
-        if (key.startsWith('codesign -d -r-')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: designatedRequirement,
-            stderr: '',
-          );
-        }
+        if (key.startsWith('codesign -d -r-')) return ok(designatedRequirement);
         if (key.startsWith('xcrun notarytool submit')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"id": "abc-123", "status": "Accepted"}',
-            stderr: '',
-          );
+          return ok('{"id": "abc-123", "status": "Accepted"}');
         }
-        if (key.contains('--version')) {
-          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-        }
+        if (key.contains('--version')) return ok('1.0.0');
         return null;
       },
       onRun: (key) {
@@ -408,18 +398,10 @@ executables:
     final tools = BundleRecordingTools(
       answers: (key) {
         if (key.startsWith('xcrun notarytool submit')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"id": "s-9", "status": "Accepted"}',
-            stderr: '',
-          );
+          return ok('{"id": "s-9", "status": "Accepted"}');
         }
         if (key.startsWith('xcrun notarytool log')) {
-          return ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'log not available yet',
-          );
+          return failed('log not available yet');
         }
         return null;
       },
@@ -431,10 +413,10 @@ executables:
       workspace.write(file, utf8.encode('BINARY'));
     }
 
-    final ok = await chain(
+    final notarized = await chain(
       tools,
     ).notarizeStep(step(StepKind.notarize), project);
-    expect(ok.ok, isTrue, reason: buffer.toString());
+    expect(notarized.ok, isTrue, reason: buffer.toString());
     expect(
       tools.calls.where((call) => call.startsWith('xcrun notarytool log')),
       isEmpty,
@@ -445,18 +427,10 @@ executables:
     final tools = BundleRecordingTools(
       answers: (key) {
         if (key.startsWith('xcrun notarytool submit')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"id": "s-9", "status": "Invalid"}',
-            stderr: '',
-          );
+          return ok('{"id": "s-9", "status": "Invalid"}');
         }
         if (key.startsWith('xcrun notarytool log s-9')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"issues": [{"message": "The binary is not signed."}]}',
-            stderr: '',
-          );
+          return ok('{"issues": [{"message": "The binary is not signed."}]}');
         }
         return null;
       },
@@ -468,10 +442,10 @@ executables:
       workspace.write(file, utf8.encode('BINARY'));
     }
 
-    final ok = await chain(
+    final notarized = await chain(
       tools,
     ).notarizeStep(step(StepKind.notarize), project);
-    expect(ok.ok, isFalse);
+    expect(notarized.ok, isFalse);
     expect(
       output.report.attachments.values.join('\n'),
       contains('The binary is not signed.'),
