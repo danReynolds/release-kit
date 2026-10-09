@@ -2832,22 +2832,27 @@ void _phase23Fixes() {
   );
 
   test('a fully published unit ignores worktree state', () async {
-    final text = await statusOf(
+    final run = await statusRun(
       source: tree(),
       state: git(clean: false, tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.2.0'],
       }),
     );
-    expect(text, matches(RegExp(r'^\s+Published$', multiLine: true)));
+    expect(run.text, matches(RegExp(r'^\s+Published$', multiLine: true)));
     expect(
-      text,
-      isNot(contains('files are uncommitted')),
-      reason:
-          'the header still reports the tree; the unit is not blocked '
-          'by it, because a dirty tree only matters to a release that will '
-          'happen',
+      run.text.split('\n').first,
+      endsWith('1 uncommitted'),
+      reason: 'the header still reports the tree',
     );
+    expect(
+      run.report['problems'],
+      isEmpty,
+      reason:
+          'the unit is not blocked by the tree, because a dirty tree only '
+          'matters to a release that will happen',
+    );
+    expect(run.text, isNot(contains('prevents release')));
   });
 }
 
