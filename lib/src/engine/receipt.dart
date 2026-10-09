@@ -157,28 +157,39 @@ final class StagedFile {
   };
 }
 
-/// What a stage is, as [Stage.check] finds it.
+/// What a stage is, as [Stage.check] finds it: the barrier's [verdict],
+/// the [problem] status says, and whether a release [refuses] to build it
+/// again, for bytes an operator may have reviewed.
 enum StageState {
   /// No receipt: there is nothing to reuse.
-  absent,
+  absent(Verdict.absent),
 
   /// Interrupted, and every file it recorded intact: work resumes after it.
-  resumable,
+  resumable(Verdict.absent),
 
   /// Interrupted, and a file it recorded changed: it starts again.
-  broken,
+  broken(
+    Verdict.conflict,
+    'the incomplete release stage cannot be resumed safely',
+  ),
 
   /// The barrier is recorded, and every file the release publishes is
   /// recorded and intact.
-  complete,
+  complete(Verdict.exact),
 
   /// The barrier is recorded, and a file the release publishes is missing
   /// or changed: bytes the operator may have reviewed no longer hold.
-  changed,
+  changed(Verdict.conflict, 'the reviewed release stage no longer validates'),
 
   /// The receipt cannot be read: it is malformed, from another rk, or names
   /// another stage.
-  unreadable,
+  unreadable(Verdict.conflict, 'the release stage receipt is invalid');
+
+  const StageState(this.verdict, [this.problem]);
+
+  final Verdict verdict;
+  final String? problem;
+  bool get refuses => this == changed || this == unreadable;
 }
 
 /// One check of a stage against the release it is for.
@@ -209,16 +220,13 @@ final class StageCheck {
   /// interrupted stage is ordinary work. One that once completed and no
   /// longer validates is a conflict: publication must not silently replace
   /// bytes the operator may already have reviewed.
-  Inspection get asInspection => switch (state) {
-    StageState.complete => Inspection.exact(
+  Inspection get asInspection => switch (state.verdict) {
+    Verdict.exact => Inspection.exact(
       detail: 'staged and validated',
       evidence: {'stage id': receipt!.stage.id},
     ),
-    StageState.absent ||
-    StageState.resumable => Inspection.absent(detail: lines.join('; ')),
-    StageState.broken ||
-    StageState.changed ||
-    StageState.unreadable => Inspection.conflict(
+    Verdict.absent => Inspection.absent(detail: lines.join('; ')),
+    _ => Inspection.conflict(
       lines.join('; '),
       evidence: {
         for (final (index, line) in lines.indexed)

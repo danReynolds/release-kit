@@ -452,13 +452,7 @@ class StatusCommand {
     }
     final check = observed.stageCheck;
     if (check == null) return _StageResult(state: observed.stageState);
-    final message = switch (check.state) {
-      StageState.broken =>
-        'the incomplete release stage cannot be resumed safely',
-      StageState.changed => 'the reviewed release stage no longer validates',
-      StageState.unreadable => 'the release stage receipt is invalid',
-      StageState.absent || StageState.resumable || StageState.complete => null,
-    };
+    final message = check.state.problem;
     return _StageResult(
       check: check,
       state: observed.stageState,

@@ -48,17 +48,11 @@ final class StageRunner {
     StageCheck check, {
     required bool mayReplaceReviewed,
   }) {
-    if (mayReplaceReviewed ||
-        (check.state != StageState.changed &&
-            check.state != StageState.unreadable)) {
-      return null;
-    }
+    if (mayReplaceReviewed || !check.state.refuses) return null;
     final reviewed = check.state == StageState.changed;
     return Diagnostic(
       code: 'RK-STAGE-002',
-      message: reviewed
-          ? 'the reviewed release stage no longer validates'
-          : 'the release stage receipt is invalid',
+      message: check.state.problem!,
       remedy:
           '${check.lines.join('\n')}\n'
           '${reviewed ? 'rk will not silently replace reviewed bytes. ' : ''}'
