@@ -47,7 +47,7 @@ class GithubInstallationProvider
     }
     // Each download is a directory named by its version; the highest one is
     // the installation, read from disk rather than from a receipt.
-    final downloads = Directory('${store.projectRoot(project)}/downloads');
+    final downloads = Directory(store.downloads(project));
     final versions = [
       if (downloads.existsSync())
         for (final entry in downloads.listSync())
@@ -65,7 +65,7 @@ class GithubInstallationProvider
   }
 
   Installation _installation(ExecutableProject project, String version) {
-    final location = '${store.projectRoot(project)}/downloads/$version';
+    final location = '${store.downloads(project)}/$version';
     return Installation(
       source: source,
       version: version,
@@ -200,7 +200,8 @@ class GithubInstallationProvider
       bytes,
       project.commands.single,
     );
-    final parent = store.managedDirectory(project, 'downloads');
+    final parent = store.downloads(project);
+    Directory(parent).createSync(recursive: true);
     final destination = '$parent/$version';
     if (Directory(destination).existsSync()) {
       Directory(destination).deleteSync(recursive: true);
@@ -253,7 +254,7 @@ class GithubInstallationProvider
     ExecutableProject project,
     Installation installation,
   ) async {
-    final downloads = Directory('${store.projectRoot(project)}/downloads');
+    final downloads = Directory(store.downloads(project));
     if (downloads.existsSync()) downloads.deleteSync(recursive: true);
   }
 }

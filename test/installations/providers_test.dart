@@ -357,7 +357,7 @@ void main() {
         providers: {github.source: github, local.source: local},
         environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
       );
-      downloads = Directory('${store.projectRoot(project)}/downloads');
+      downloads = Directory(store.downloads(project));
     });
     Future<String> act(InstallationSource source, InstallationAction action) =>
         manager.act(project, source, action, progress: (_) {});
@@ -379,6 +379,29 @@ void main() {
         expect(downloads.listSync(), hasLength(1));
         await act(local.source, InstallationAction.use);
         await act(github.source, InstallationAction.uninstall);
+        expect(downloads.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'a renamed origin keeps its download, and uninstall still removes it',
+      () async {
+        await act(github.source, InstallationAction.use);
+        final renamed = ExecutableProject(
+          root: project.root,
+          unit: project.unit,
+          project: project.project,
+          entrypoints: project.entrypoints,
+          repository: 'owner/renamed',
+        );
+        Future<String> actRenamed(
+          InstallationSource source,
+          InstallationAction action,
+        ) => manager.act(renamed, source, action, progress: (_) {});
+        final state = await manager.inspect(renamed);
+        expect(state.sources[github.source]!.installation!.version, '1.1.0');
+        await actRenamed(local.source, InstallationAction.use);
+        await actRenamed(github.source, InstallationAction.uninstall);
         expect(downloads.existsSync(), isFalse);
       },
     );

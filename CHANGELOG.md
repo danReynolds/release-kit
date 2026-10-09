@@ -134,14 +134,15 @@ published finishes with 0.1.14.
 - A GitHub update replaces the previous download, uninstall removes every
   download, and a run interrupted after unpacking finishes on the next run.
 - rk reads the selection back from the launchers, each of which names its
-  project and source, so adding or renaming a project's GitHub remote no
-  longer makes rk refuse its own commands. rk still refuses a command it
-  selected for another project, and `rk uninstall` refuses a source any of
-  the project's commands runs, including through a launcher 0.1.14 wrote. A
-  selection made by 0.1.14 keeps running; run `rk use` once to move it to the
-  new launchers. What 0.1.14 kept under
-  `~/.local/share/rk` (`managers`, and each project's `current`,
-  `generations` and receipts) can be deleted.
+  project and source, and keeps GitHub downloads under
+  `~/.local/share/rk/downloads/<package>`, so adding or renaming a project's
+  GitHub remote no longer makes rk refuse its own commands or lose its
+  download. rk still refuses a command it selected for another project, and
+  `rk uninstall` refuses a source any of the project's commands runs,
+  including through a launcher 0.1.14 wrote. A selection made by 0.1.14 keeps
+  running; run `rk use` once to move it to the new launchers. Then what
+  0.1.14 kept under `~/.local/share/rk`, `managers` and `projects`, can be
+  deleted.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.
 - `rk use local` runs Dart commands whose dependencies have build hooks
   (native assets) from any directory, through a small bootstrap. Select

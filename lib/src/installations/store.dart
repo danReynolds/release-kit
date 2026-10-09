@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../engine/tools.dart';
-import '../transforms/digest.dart';
 import 'model.dart';
 import 'provider.dart';
 
@@ -24,11 +23,10 @@ class InstallationStore {
   final String root;
   final Tools tools;
   String get bin => '$root/bin';
-  String id(ExecutableProject project) => Sha256.hex(
-    utf8.encode('${project.repository ?? project.root}\u0000${project.name}'),
-  );
-  String projectRoot(ExecutableProject project) =>
-      '$root/projects/${id(project)}';
+
+  /// Where [project]'s GitHub downloads live, one directory per version.
+  String downloads(ExecutableProject project) =>
+      '$root/downloads/${project.name}';
 
   static String defaultRoot(Map<String, String> environment) {
     final data = environment['XDG_DATA_HOME'];
@@ -226,19 +224,13 @@ class InstallationStore {
   void retire(ExecutableProject project, Installation kept) {
     if (!kept.managed) return;
     final parent = Directory(kept.location).parent;
-    if (!parent.path.startsWith('${projectRoot(project)}/')) return;
+    if (parent.path != downloads(project)) return;
     final inUse = selected(project)?.location;
     for (final entry in parent.listSync(followLinks: false)) {
       if (entry.path != kept.location && entry.path != inUse) {
         entry.deleteSync(recursive: true);
       }
     }
-  }
-
-  String managedDirectory(ExecutableProject project, String name) {
-    final directory = '${projectRoot(project)}/$name';
-    Directory(directory).createSync(recursive: true);
-    return directory;
   }
 }
 

@@ -154,11 +154,12 @@ GitHub release; they are not independent publisher authentication.
 Command launchers live in `$XDG_DATA_HOME/rk/bin`, or `~/.local/share/rk/bin`.
 Each one names its project and source in a header, so rk reads the selection
 back from the launchers rather than storing it; the only other state is
-GitHub downloads. `use` replaces each command's launcher atomically. A failed
-prepare or a cancellation before the launchers are written leaves the old
-selection usable. Cancelling waits for the current package-manager operation
-to settle; an installation that already finished can remain installed without
-being selected.
+GitHub downloads, in `downloads/<package>/<version>` beside `bin`. `use`
+replaces each command's launcher atomically. A failed prepare or a
+cancellation before the launchers are written leaves the old selection
+usable. Cancelling waits for the current package-manager operation to settle;
+an installation that already finished can remain installed without being
+selected.
 
 On fish, `use` prepends this directory through `fish_add_path` using universal
 state. Existing fish sessions normally pick that up at their next prompt.
@@ -180,11 +181,11 @@ it.
 Removing a source any of the project's commands runs is refused: select
 another first. Local is the checkout itself, so there is nothing to uninstall.
 Uninstalling Pub or Homebrew removes that package manager's installation,
-including one installed outside RK.
-GitHub uninstall removes RK's downloads for that project. An update replaces
-the previous download once the new one is installed and routed. A download is
-recorded by its directory, so a run interrupted after unpacking finishes on
-the next run instead of refusing to overwrite it.
+including one installed outside RK. GitHub uninstall removes RK's downloads
+for that project. An update replaces the previous download once the new one is
+installed and routed. A download is recorded by its directory, so a run
+interrupted after unpacking finishes on the next run instead of refusing to
+overwrite it.
 
 If a checkout or native installation moves or disappears, launchers stop with
 repair instructions. They do not fall back to another source. Homebrew and Pub
