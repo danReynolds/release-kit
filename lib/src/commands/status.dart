@@ -797,11 +797,7 @@ class StatusCommand {
             ? Mark.blocked
             : agreed != null
             ? Mark.none
-            : switch (state.verdict) {
-                Verdict.exact => Mark.satisfied,
-                Verdict.conflict => Mark.blocked,
-                Verdict.absent || Verdict.unknown => Mark.none,
-              },
+            : Mark.of(state.verdict),
         note: [
           target.identity,
           if (!headerStatedMovement &&
@@ -1105,9 +1101,8 @@ class StatusCommand {
   }
 
   void _record(Step step, Inspection state) {
-    output.step(
+    output.record(
       step,
-      show: false,
       verdict: state.verdict,
       detail: state.detail,
       evidence: state.evidence,

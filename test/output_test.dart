@@ -81,14 +81,13 @@ void main() {
       MemorySourceTree({'pubspec.yaml': 'name: core\nversion: 1.2.3\n'}),
       diagnostics,
     )!;
-    out.step(
+    out.record(
       UnitRelease.derive(
         resolution.unit('core')!,
         resolution,
         repository: null,
         problems: diagnostics,
       ).packages.single,
-      show: false,
     );
 
     final document = out.report.encode(exit: 0);

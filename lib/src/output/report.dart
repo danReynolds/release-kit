@@ -198,10 +198,6 @@ class Report {
     _warnings.add(_record(diagnostic, unit: unit, target: target));
   }
 
-  /// Whether this run has warned about [unit].
-  bool warnedAbout(String unit) =>
-      _warnings.any((warning) => warning['unit'] == unit);
-
   /// Stable warning facts disclosed to this unit, including repository-wide
   /// warnings, for the disclosure that travels with the yes. Each distinct
   /// fact is listed once; evidence is its content, not an attachment's

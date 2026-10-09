@@ -1,3 +1,5 @@
+import 'output.dart' show oneLine;
+
 /// Long enough that a preparation board helps instead of flashing briefly.
 const briefPhase = Duration(milliseconds: 800);
 
@@ -8,9 +10,7 @@ const briefPhase = Duration(milliseconds: 800);
 /// the running label so a target cannot start an operation without saying how
 /// a definite failure of that operation reads.
 final class ProgressActivity {
-  ProgressActivity({required String running, required String failed})
-    : running = _label('running activity', running),
-      failed = _label('failed activity', failed);
+  ProgressActivity({required this.running, required this.failed});
 
   final String running;
   final String failed;
@@ -23,26 +23,7 @@ final class ProgressActivity {
 
   @override
   int get hashCode => Object.hash(running, failed);
-
-  static String _label(String field, String value) {
-    final text = value.trim();
-    if (text.isEmpty) throw ArgumentError('$field cannot be empty');
-    if (text != text.toLowerCase()) {
-      throw ArgumentError('$field must be lowercase: $text');
-    }
-    if (text.runes.length > 40) {
-      throw ArgumentError('$field is longer than 40 characters');
-    }
-    if (_unsafe.hasMatch(text)) {
-      throw ArgumentError('$field must be one printable line');
-    }
-    return text;
-  }
 }
-
-final RegExp _unsafe = RegExp(
-  r'[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
-);
 
 /// Conventional wording available to targets without closing the vocabulary.
 ///
@@ -168,10 +149,8 @@ final class ProgressRow {
     required this.group,
     required ProgressElapsed Function() clock,
     required void Function(ProgressRow row) changed,
-  }) : label = _text('progress label', label, max: 120),
-       coordinate = coordinate == null
-           ? null
-           : _text('progress coordinate', coordinate, max: 160),
+  }) : label = oneLine(label),
+       coordinate = coordinate == null ? null : oneLine(coordinate, max: 160),
        _clock = clock,
        _changed = changed;
 
@@ -219,7 +198,7 @@ final class ProgressRow {
     if (_state != ProgressRowState.pending) {
       throw StateError('only pending progress row $id can wait');
     }
-    _note = _text('progress wait', result, max: 120);
+    _note = oneLine(result);
     _changed(this);
   }
 
@@ -229,9 +208,7 @@ final class ProgressRow {
         _state == ProgressRowState.notAttempted) {
       throw StateError('settled progress row $id cannot become active');
     }
-    final safeDetail = detail == null
-        ? null
-        : _text('progress detail', detail, max: 120);
+    final safeDetail = detail == null ? null : oneLine(detail);
     if (_activity != next) _elapsed = _clock();
     _activeSince ??= _elapsed;
     _activity = next;
@@ -268,7 +245,7 @@ final class ProgressRow {
     required ProgressRowMark mark,
     required ProgressRowEmphasis emphasis,
   }) {
-    _note = _text('progress completion', result, max: 120);
+    _note = oneLine(result);
     _detail = null;
     _took = _activeSince?.call();
     _mark = mark;
@@ -284,7 +261,7 @@ final class ProgressRow {
     final failedActivity = activity ?? _activity;
     final result = note ?? failedActivity?.failed ?? 'failed';
     _activity = failedActivity;
-    _note = _text('progress failure', result, max: 120);
+    _note = oneLine(result);
     _detail = null;
     _took = _activeSince?.call();
     _mark = ProgressRowMark.none;
@@ -304,25 +281,11 @@ final class ProgressRow {
         'not attempted',
       );
     }
-    _note = _text('progress skipped result', result, max: 120);
+    _note = oneLine(result);
     // A drained lane's row did run, until the stop; its time stands.
     _took = _activeSince?.call();
     _state = ProgressRowState.notAttempted;
     _changed(this);
-  }
-
-  static String _text(String field, String value, {required int max}) {
-    final text = value.trim();
-    if (text.isEmpty) throw ArgumentError('$field cannot be empty');
-    if (_unsafe.hasMatch(text)) {
-      throw ArgumentError('$field must be one printable line');
-    }
-    // How much of a long name fits is a matter of display, never a reason
-    // to stop a release.
-    if (text.runes.length > max) {
-      return '${String.fromCharCodes(text.runes.take(max - 1))}…';
-    }
-    return text;
   }
 }
 
@@ -335,7 +298,7 @@ final class ProgressModel {
     required String title,
     required ProgressElapsed Function() clock,
     required void Function(ProgressRow row) changed,
-  }) : title = ProgressRow._text('progress title', title, max: 120),
+  }) : title = oneLine(title),
        _clock = clock,
        _changed = changed;
 
@@ -357,9 +320,7 @@ final class ProgressModel {
     if (_rows.any((row) => row.id == id)) {
       throw StateError('duplicate progress row $id');
     }
-    final safeGroup = group == null
-        ? null
-        : ProgressRow._text('progress group', group, max: 120);
+    final safeGroup = group == null ? null : oneLine(group);
     if (safeGroup != null && !_groups.contains(safeGroup)) {
       _groups.add(safeGroup);
     }

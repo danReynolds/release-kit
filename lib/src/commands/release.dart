@@ -473,13 +473,12 @@ class ReleaseCommand {
     await read.settle();
     for (final step in read.release.steps) {
       final state = read.states[step.id]!;
-      output.step(
+      output.record(
         step,
         verdict: state.verdict,
         detail: state.detail,
         evidence: state.evidence,
         action: run.actions[step]?.wire,
-        show: false,
       );
     }
 
@@ -618,12 +617,11 @@ class ReleaseCommand {
     if (!stageOnly && !localOnly) {
       return (ok: true, said: false, readyToPublish: false);
     }
-    output.step(
+    output.record(
       release.barrier,
       verdict: Verdict.exact,
       detail: 'staged and validated',
       evidence: {'stage id': stage.id.id, 'stage path': stage.relativePath},
-      show: false,
     );
     return (ok: true, said: true, readyToPublish: stageOnly && !localOnly);
   }

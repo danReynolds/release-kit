@@ -33,6 +33,21 @@ String terminalSafeText(String text) {
   return escaped + String.fromCharCodes(runes.sublist(start));
 }
 
+/// Control, bidirectional and zero-width characters: what would move the
+/// cursor or reorder a line rather than show in it.
+final invisibleCharacters = RegExp(
+  r'[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
+);
+
+/// [text] as one line of at most [max] characters: what is invisible
+/// becomes a space, and a longer line ends in '…'. How much of a provider's
+/// note fits is a matter of display, never a reason to stop a release.
+String oneLine(String text, {int max = 120}) {
+  final line = text.replaceAll(invisibleCharacters, ' ').trim();
+  if (line.runes.length <= max) return line;
+  return '${String.fromCharCodes(line.runes.take(max - 1))}…';
+}
+
 /// How a line reads at a glance.
 ///
 /// A small mark vocabulary rather than one per state: anything finer is carried by the
@@ -115,64 +130,12 @@ final class OutputSpan {
   const OutputSpan(
     this.text, {
     this.role = VisualRole.primary,
-    this.state = RuntimeState.neutral,
     this.strong = false,
   });
 
   final String text;
   final VisualRole role;
-  final RuntimeState state;
   final bool strong;
-}
-
-/// RK's complete terminal colour vocabulary.
-///
-/// Standard ANSI colours let the terminal theme choose contrast. Styling is
-/// applied per span and reset immediately; it never crosses a newline or
-/// leaks into a native command.
-final class OutputTheme {
-  const OutputTheme({required this.useColor});
-
-  final bool useColor;
-
-  String paint(
-    String text, {
-    VisualRole role = VisualRole.primary,
-    RuntimeState state = RuntimeState.neutral,
-    bool strong = false,
-  }) {
-    final safe = terminalSafeText(text);
-    if (!useColor || safe.isEmpty) return safe;
-    final color = switch (state) {
-      RuntimeState.neutral => switch (role) {
-        VisualRole.primary => null,
-        VisualRole.secondary => '90', // grey
-        VisualRole.localWork => '34', // blue
-        VisualRole.checkpoint => '35', // violet/magenta
-        VisualRole.requirement => '33', // amber/yellow
-        VisualRole.releaseTarget || VisualRole.operatorAction => '36', // cyan
-      },
-      RuntimeState.active => '36', // cyan
-      RuntimeState.satisfied => '90', // grey
-      RuntimeState.success => '32', // green
-      RuntimeState.attention => '33', // yellow
-      RuntimeState.failure => '31', // red
-    };
-    final codes = [if (strong) '1', if (color != null) color];
-    if (codes.isEmpty) return safe;
-    return '\x1b[${codes.join(';')}m$safe\x1b[0m';
-  }
-
-  String render(Iterable<OutputSpan> spans) => spans
-      .map(
-        (span) => paint(
-          span.text,
-          role: span.role,
-          state: span.state,
-          strong: span.strong,
-        ),
-      )
-      .join();
 }
 
 /// Everything rk prints goes through here, so terseness, collapse, and the
@@ -242,8 +205,6 @@ class Output {
   final bool isTerminal;
 
   final bool useColor;
-
-  OutputTheme get theme => OutputTheme(useColor: useColor);
 
   /// Columns available on an attached terminal.
   ///
@@ -336,7 +297,7 @@ class Output {
     if (endsWithNewline) lines.removeLast();
     for (final (index, line) in lines.indexed) {
       sink(prefix);
-      sink(theme.render(_helpSpans(line)));
+      sink(_render(_helpSpans(line)));
       if (index < lines.length - 1 || endsWithNewline) sink('\n');
     }
   }
@@ -432,77 +393,32 @@ class Output {
     );
   }
 
-  /// One step of a release, printed and recorded as one act.
+  /// Records what a run found at one step, for the document only.
   ///
-  /// Taking the [Step] rather than its parts is what makes the two surfaces
-  /// agree: there is no way to show a person one id and hand a caller another,
-  /// because there is only one call and it reads both from the same object.
-  ///
-  /// [show] records without printing, for a step collapse leaves off the
-  /// screen. The asymmetry runs one way only and deliberately: everything
-  /// printed is recorded, while the document may carry more than the terminal
-  /// shows. Terseness is a rule about a person's attention, and a caller
-  /// keying on step ids wants every step.
-  void step(
+  /// Taking the [Step] rather than its parts is what keeps a step's id,
+  /// kind and target in one place. A person reads the boards and lines that
+  /// say the same thing more briefly; a caller keying on step ids wants
+  /// every step.
+  void record(
     Step step, {
-    Mark mark = Mark.none,
-    String? note,
     Verdict verdict = Verdict.unknown,
     String? detail,
     Map<String, String> evidence = const {},
     String? action,
-    int depth = 1,
-    bool show = true,
-  }) {
-    report.step(
-      id: step.id,
-      unit: step.unit,
-      summary: step.summary,
-      verdict: verdict.name,
-      kind: step.kind.name,
-      target: step.target?.wireName,
-      detail: detail,
-      evidence: evidence,
-      permanent: step.isPermanent,
-      public: step.isPublic,
-      needs: [for (final need in step.needs) need.id],
-      action: action,
-    );
-    if (!show) return;
-    line(
-      step.summary,
-      mark: mark,
-      note: note ?? (step.isPermanent ? 'permanent' : null),
-      depth: depth,
-      labelWidth: 48,
-      role: switch (step.kind) {
-        StepKind.prerequisite => VisualRole.requirement,
-        StepKind.build ||
-        StepKind.notarize ||
-        StepKind.archive ||
-        StepKind.sourceSnapshot ||
-        StepKind.buildAssets ||
-        StepKind.targetStage => VisualRole.localWork,
-        StepKind.completeStage => VisualRole.checkpoint,
-        StepKind.tag ||
-        StepKind.publishRegistry ||
-        StepKind.publishRelease ||
-        StepKind.publishHomebrew => VisualRole.releaseTarget,
-      },
-      state: RuntimeState.of(verdict),
-      noteState: step.isPermanent ? RuntimeState.attention : null,
-    );
-    // The difference itself, not the fact of one — on the surface a person
-    // reads, not only in the document. status's live forge conflict printed
-    // a bare blocked line while the JSON carried the six-asset table.
-    for (final entry in evidence.entries) {
-      line(
-        '${entry.key}  ${entry.value}',
-        depth: depth + 1,
-        role: VisualRole.secondary,
-      );
-    }
-  }
+  }) => report.step(
+    id: step.id,
+    unit: step.unit,
+    summary: step.summary,
+    verdict: verdict.name,
+    kind: step.kind.name,
+    target: step.target?.wireName,
+    detail: detail,
+    evidence: evidence,
+    permanent: step.isPermanent,
+    public: step.isPublic,
+    needs: [for (final need in step.needs) need.id],
+    action: action,
+  );
 
   /// Ends the run's rendering.
   ///
@@ -548,7 +464,6 @@ class Output {
     bool strong = false,
     VisualRole noteRole = VisualRole.primary,
     RuntimeState? noteState,
-    bool noteStrong = false,
   }) {
     _yieldToProse();
     label = terminalSafeText(label);
@@ -556,7 +471,9 @@ class Output {
     final effectiveState = state ?? _stateForMark(mark);
     final effectiveNoteState = noteState ?? effectiveState;
     final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
-    final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark, effectiveState);
+    final paintedGlyph = mark == Mark.none
+        ? ' '
+        : _style(mark.glyph, state: effectiveState);
 
     // The mark sits beside its row, at the row's indent: a nested row's mark
     // reads as its bullet, not as a stray in the left margin. The text
@@ -593,7 +510,6 @@ class Output {
           continuationPrefix: continuationPrefix,
           role: noteRole,
           state: effectiveNoteState,
-          strong: noteStrong,
         );
       }
       return;
@@ -615,7 +531,7 @@ class Output {
       sink(
         '$glyph '
         '${_style(label, role: role, state: effectiveState, strong: strong)} '
-        '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
+        '${_style(note, role: noteRole, state: effectiveNoteState)}\n',
       );
       return;
     }
@@ -623,16 +539,46 @@ class Output {
     sink(
       '$glyph '
       '${_style(padded, role: role, state: effectiveState, strong: strong)} '
-      '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
+      '${_style(note, role: noteRole, state: effectiveNoteState)}\n',
     );
   }
 
+  /// RK's complete terminal colour vocabulary.
+  ///
+  /// Standard ANSI colours let the terminal theme choose contrast. Styling is
+  /// applied per span and reset immediately; it never crosses a newline or
+  /// leaks into a native command.
   String _style(
     String text, {
     VisualRole role = VisualRole.primary,
     RuntimeState state = RuntimeState.neutral,
     bool strong = false,
-  }) => theme.paint(text, role: role, state: state, strong: strong);
+  }) {
+    final safe = terminalSafeText(text);
+    if (!useColor || safe.isEmpty) return safe;
+    final color = switch (state) {
+      RuntimeState.neutral => switch (role) {
+        VisualRole.primary => null,
+        VisualRole.secondary => '90', // grey
+        VisualRole.localWork => '34', // blue
+        VisualRole.checkpoint => '35', // violet/magenta
+        VisualRole.requirement => '33', // amber/yellow
+        VisualRole.releaseTarget || VisualRole.operatorAction => '36', // cyan
+      },
+      RuntimeState.active => '36', // cyan
+      RuntimeState.satisfied => '90', // grey
+      RuntimeState.success => '32', // green
+      RuntimeState.attention => '33', // yellow
+      RuntimeState.failure => '31', // red
+    };
+    final codes = [if (strong) '1', if (color != null) color];
+    if (codes.isEmpty) return safe;
+    return '\x1b[${codes.join(';')}m$safe\x1b[0m';
+  }
+
+  String _render(Iterable<OutputSpan> spans) => spans
+      .map((span) => _style(span.text, role: span.role, strong: span.strong))
+      .join();
 
   /// Writes one pre-laid-out line made of semantic spans.
   ///
@@ -643,7 +589,7 @@ class Output {
     _yieldToProse();
     final values = List<OutputSpan>.unmodifiable(spans);
     assert(values.every((span) => !span.text.contains('\n')));
-    sink('${theme.render(values)}\n');
+    sink('${_render(values)}\n');
   }
 
   static int plainWidth(Iterable<OutputSpan> spans) =>
@@ -988,9 +934,6 @@ class Output {
     }
   }
 
-  String _paint(Mark mark, RuntimeState state) =>
-      _style(mark.glyph, state: state);
-
   static RuntimeState _stateForMark(Mark mark) => switch (mark) {
     Mark.done => RuntimeState.success,
     Mark.satisfied => RuntimeState.satisfied,
@@ -1106,10 +1049,7 @@ final class LiveProgress {
       }
       _nonTerminalScheduled.remove(row.id);
       _nonTerminalPrinted[row.id] = activity;
-      final attached = identical(_output._progressBoard, this);
-      if (attached) _output._progressBoard = null;
       _writeDurableRow(row, active: true, inPipe: true);
-      if (attached && !_closed) _output._progressBoard = this;
     });
   }
 
@@ -1154,7 +1094,6 @@ final class LiveProgress {
     final lines = <String>[
       _output._style(_fit(model.title, available), strong: true),
     ];
-    final grouped = model.groups.isNotEmpty;
     for (final group in model.groups) {
       lines.add(
         _output._style(
@@ -1168,7 +1107,7 @@ final class LiveProgress {
       }
     }
     for (final row in model.rows.where((row) => row.group == null)) {
-      lines.add(_transientRow(row, available, depth: grouped ? 1 : 1));
+      lines.add(_transientRow(row, available, depth: 1));
     }
     return lines;
   }
@@ -1310,14 +1249,11 @@ final class LiveProgress {
     _ticker?.cancel();
     _erase();
     _visible = false;
-    final attached = identical(_output._progressBoard, this);
-    if (attached) _output._progressBoard = null;
     for (final row in model.rows.where(
       (row) => row.state == ProgressRowState.active,
     )) {
       _writeDurableRow(row, active: true);
     }
-    if (attached) _output._progressBoard = this;
   }
 
   void resume({bool afterNativeOutput = false}) {

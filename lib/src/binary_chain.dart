@@ -112,12 +112,10 @@ class BinaryChain {
 
     if (signing == null) {
       if (built.unproven case final unproven?) {
-        output.step(
+        output.record(
           step,
           verdict: Verdict.exact,
           detail: 'built, not executed — $unproven',
-          note: 'built, not executed — $unproven',
-          show: false,
         );
       }
       return Produced(
@@ -227,13 +225,19 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      output.step(
-        step,
+      // The difference itself, not the fact of one: both requirements are
+      // printed as well as recorded.
+      final evidence = {'published': published, 'produced': requirement};
+      output.record(step, verdict: Verdict.conflict, evidence: evidence);
+      output.line(
+        step.summary,
         mark: Mark.blocked,
-        verdict: Verdict.conflict,
-        evidence: {'published': published, 'produced': requirement},
-        show: true,
+        depth: 1,
+        state: RuntimeState.failure,
       );
+      for (final MapEntry(:key, :value) in evidence.entries) {
+        output.line('$key  $value', depth: 2, role: VisualRole.secondary);
+      }
       return Produced.failed(
         output.report.actedPublicly
             ? HaltKind.actedAndUnfixable
@@ -327,12 +331,7 @@ class BinaryChain {
         );
         return const Produced.failed();
       }
-      output.step(
-        step,
-        verdict: Verdict.exact,
-        detail: 'notarized',
-        show: false,
-      );
+      output.record(step, verdict: Verdict.exact, detail: 'notarized');
       // Apple's verdict is about the signed files, which the archive step
       // packs as they are; a consumer asks Apple about the exact bytes.
       return Produced(
@@ -381,14 +380,7 @@ class BinaryChain {
 
     final name = ReleaseAssets.archivePath(project, platform);
     stage.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
-    output.step(
-      step,
-      show: false,
-      mark: Mark.done,
-      verdict: Verdict.exact,
-      detail: name,
-      note: name,
-    );
+    output.record(step, verdict: Verdict.exact, detail: name);
     return const Produced();
   }
 

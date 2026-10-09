@@ -357,11 +357,10 @@ final class StageRunner {
       return false;
     }
 
-    output.step(
+    output.record(
       release.barrier,
       verdict: Verdict.exact,
       detail: 'staged and validated',
-      show: false,
     );
     stageProgress
       ..restore(stage.receipt!.producers)

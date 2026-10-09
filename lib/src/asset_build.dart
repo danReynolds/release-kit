@@ -253,7 +253,7 @@ final class AssetBuild {
   static String? _readable(String line) {
     final text = _expandTabs(
       _withoutEscapes(line),
-    ).replaceAll(_invisible, ' ').trimRight();
+    ).replaceAll(invisibleCharacters, ' ').trimRight();
     if (text.trim().isEmpty) return null;
     final runes = text.runes.toList();
     return runes.length <= 300
@@ -268,12 +268,6 @@ final class AssetBuild {
       // A character set's designation, then any other escape.
       .replaceAll(RegExp(r'\x1b[()*+].'), '')
       .replaceAll(RegExp(r'\x1b[@-_]'), '');
-
-  /// Control, bidirectional and zero-width characters: what would move the
-  /// cursor or reorder a line rather than show in it.
-  static final _invisible = RegExp(
-    r'[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
-  );
 
   /// [line] with each tab widened to the next eighth column, as a terminal
   /// would show it, so what lines up under it still does.
@@ -297,9 +291,10 @@ final class AssetBuild {
   /// [line] as one short printable line, or null when nothing is left once
   /// terminal escapes and control characters are gone.
   static String? _printable(String line) {
-    final text = _withoutEscapes(
-      line,
-    ).replaceAll(_invisible, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = _withoutEscapes(line)
+        .replaceAll(invisibleCharacters, ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     if (text.isEmpty) return null;
     final runes = text.runes.toList();
     return runes.length <= 100
