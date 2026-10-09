@@ -192,15 +192,15 @@ final class StageSourceSnapshot implements SourceTree {
             : path.substring(0, path.length - '/pubspec.yaml'.length),
   };
 
-  /// The files a Dart build of the package at [directory] reads from this
-  /// source: that package, every other package in it, since a workspace, an
-  /// override, a path dependency or an analysis options include can reach
-  /// any of them, and the files directly inside each directory above
-  /// [directory], such as a workspace's pubspec, analysis options and
-  /// ignore rules. A package that encloses [directory], such as a workspace
-  /// root, adds its `lib/` rather than everything beneath it, which is the
-  /// rest of the repository. An export adds what links and analysis
-  /// options includes lead to (see [export]).
+  /// The files Pub reads from this source when it validates and archives
+  /// the package at [directory]: that package, every other package in it,
+  /// since a workspace, an override, a path dependency or an analysis
+  /// options include can reach any of them, and the files directly inside
+  /// each directory above [directory], such as a workspace's pubspec,
+  /// analysis options and ignore rules. A package that encloses
+  /// [directory], such as a workspace root, adds its `lib/` rather than
+  /// everything beneath it, which is the rest of the repository. An export
+  /// adds what links and analysis options includes lead to (see [export]).
   bool Function(String path) dartBuildInputs(String directory) {
     final own = _path(directory);
     final above = <String>{''};
@@ -357,8 +357,8 @@ StageSourceRefusal _withoutSubmodule(String submodule, String? reader) =>
             'a stage is made from this repository\'s commit, which records '
             'the submodule\'s commit and none of its files. Commit the files '
             'the build needs into this repository instead, or move the '
-            'submodule out of the Dart packages; a project\'s own build reads '
-            'the whole repository.',
+            'submodule out of the Dart packages; a binary or a project\'s own '
+            'build reads the whole repository.',
       ),
     );
 
@@ -375,7 +375,7 @@ StageSourceRefusal _outOfCommit(String link, String target, String? reader) =>
             'link and not what it leads to: the build would read this '
             'machine\'s file instead. Commit the file in place of the link, '
             'or link to a file in the repository by a relative path; a '
-            'project\'s own build reads the whole repository.',
+            'binary or a project\'s own build reads the whole repository.',
       ),
     );
 

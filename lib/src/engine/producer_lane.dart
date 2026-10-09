@@ -13,25 +13,19 @@ import 'stage_source.dart';
 final class ProducerLaneSource {
   ProducerLaneSource._(this.path);
 
-  /// Exports what [project]'s producers read from [source] into a new
-  /// directory of its own.
+  /// Exports [source] whole into a new directory of its own, for
+  /// [project]'s producers.
   ///
-  /// A project's own declared build may read anything, so it gets the whole
-  /// source. A Dart build gets what Dart reads (see
-  /// [StageSourceSnapshot.dartBuildInputs]).
+  /// A project's own declared build may read anything, and a binary's Dart
+  /// source can import any file in the repository by its path. Only Pub
+  /// bounds what it reads (see [StageSourceSnapshot.dartBuildInputs]).
   factory ProducerLaneSource.export(
     StageSourceSnapshot source, {
     required ResolvedProject project,
   }) {
     final directory = Directory.systemTemp.createTempSync('rk-lane-');
     try {
-      source.export(
-        directory.path,
-        only: project.buildsAssets
-            ? null
-            : source.dartBuildInputs(project.pubspec.directory),
-        reader: project.name,
-      );
+      source.export(directory.path, reader: project.name);
     } on Object {
       directory.deleteSync(recursive: true);
       rethrow;
