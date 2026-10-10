@@ -98,6 +98,9 @@ class LocalInstallationProvider implements InstallationProvider {
       source: source,
       version: record['version'] as String,
       checkout: record['checkout'] as String,
+      build: record['build'] == null
+          ? null
+          : LocalBuildInfo.fromJson(record['build'] as Map<String, dynamic>),
       location: location,
       commands: {
         for (final entry in (record['executables'] as Map).entries)
@@ -128,6 +131,7 @@ class LocalInstallationProvider implements InstallationProvider {
       'get',
     ], directory: project.directory);
     if (live) return _installation(project);
+    final source = await _buildSource(project);
 
     // Build away from the selected executables. A failed rebuild must leave
     // every old command usable, including rk rebuilding itself.
@@ -149,10 +153,12 @@ class LocalInstallationProvider implements InstallationProvider {
         if (defines.isEmpty ||
             hasDartBuildHooks(project.directory, project.root)) {
           final capabilities = HostCapabilities.detect();
+          final compiler = DartSdk.resolveExecutable(dartExecutable!);
+          final helper = Platform.environment['RK_DART_BUILD_TOOL'];
           final result = await buildDartNative(
             tools: tools,
             capabilities: capabilities,
-            compiler: DartSdk.resolveExecutable(dartExecutable!),
+            compiler: compiler,
             platform: capabilities.hostPlatform,
             directory: project.directory,
             repositoryRoot: project.root,
@@ -160,10 +166,22 @@ class LocalInstallationProvider implements InstallationProvider {
             output: '${build.path}/$name',
             defines: defines,
             locked: dartBuildIsLocked(project.directory, project.root),
-            helper: Platform.environment['RK_DART_BUILD_TOOL'],
+            helper: helper,
             separateAot: false,
           );
-          if (!result.ok) throw InstallationFailure(result.summary);
+          if (!result.ok) {
+            throw InstallationFailure.withEvidence(
+              result.summary,
+              remedy:
+                  'Fix the reported build error, then retry the same command.',
+              evidence: [
+                'Directory: ${project.directory}',
+                'Dart compiler: $compiler',
+                'Native build helper: ${helper ?? 'automatic (rk-dart-build if required)'}',
+                result.transcript,
+              ].join('\n'),
+            );
+          }
         } else {
           // Pure Dart does not need the native-build helper for declarations.
           File('${build.path}/$relative').parent.createSync(recursive: true);
@@ -184,20 +202,49 @@ class LocalInstallationProvider implements InstallationProvider {
         jsonEncode({
           'version': project.version,
           'checkout': project.directory,
+          'build': LocalBuildInfo(
+            builtAt: DateTime.now().toUtc(),
+            commit: source.commit,
+            dirty: source.dirty,
+          ).toJson(),
           'executables': executables,
         }),
       );
       record.renameSync('${build.path}/build.json');
       complete = true;
       return _readBuild(build.path)!;
-    } on InstallationFailure catch (error) {
-      throw InstallationFailure(
-        error.message,
-        '${error.remedy}\nFix the build and retry, or use rk use local --clean to run source with Dart.',
-      );
     } finally {
       if (!complete) build.deleteSync(recursive: true);
     }
+  }
+
+  /// One optional Git read before compilation. Missing Git, a non-repository,
+  /// or an unreadable checkout must not prevent a development build.
+  Future<({String? commit, bool? dirty})> _buildSource(
+    ExecutableProject project,
+  ) async {
+    try {
+      final result = await tools.run(
+        'git',
+        ['status', '--porcelain=v2', '--branch', '--untracked-files=normal'],
+        workingDirectory: project.root,
+        timeout: const Duration(seconds: 5),
+      );
+      if (result.ok) {
+        final lines = const LineSplitter().convert(result.stdout);
+        final oid = lines
+            .where((line) => line.startsWith('# branch.oid '))
+            .firstOrNull;
+        final commit = oid?.substring('# branch.oid '.length);
+        return (
+          commit: commit == '(initial)' ? null : commit,
+          dirty: lines.any((line) => !line.startsWith('#')),
+        );
+      }
+    } on ProcessException {
+      // Git is not required to compile a local checkout.
+    }
+    return (commit: null, dirty: null);
   }
 
   /// Only compiled copies are rk's to remove; a checkout is never deleted.

@@ -80,9 +80,14 @@ Future<ToolResult> checked(
     timeout: const Duration(minutes: 10),
   );
   if (!result.ok) {
-    throw InstallationFailure(
+    throw InstallationFailure.withEvidence(
       result.summary,
-      'Resolve the provider error, then check rk use --list before retrying.',
+      remedy: 'Fix the reported tool error, then retry the same command.',
+      evidence: [
+        'Directory: ${directory ?? Directory.current.path}',
+        'Command: ${[executable, ...arguments].map(shellQuote).join(' ')}',
+        result.transcript,
+      ].join('\n'),
     );
   }
   return result;

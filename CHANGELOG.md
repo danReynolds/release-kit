@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Compiled Local installations show their build time, source commit and whether
+  the checkout had edits when compilation began. Inventory reads use the saved
+  build record without checking Git or rebuilding.
+- Failed installation tools retain their complete output in JSON reports,
+  the picker's error details and `.rk/diagnosis`. Build errors now ask you to fix
+  the reported problem and retry rather than suggesting source execution.
+
 - The source-execution option is now `rk use local --clean`. It runs the
   checkout directly; it does not delete build caches.
 

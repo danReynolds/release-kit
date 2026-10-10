@@ -1,6 +1,7 @@
 @Timeout(Duration(minutes: 3))
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/engine/resolve.dart';
@@ -12,6 +13,7 @@ import 'package:rk/src/installations/store.dart';
 import 'package:test/test.dart';
 
 import 'fixtures.dart';
+import '../rk_process.dart';
 
 void main() {
   test(
@@ -40,6 +42,25 @@ void main() {
           "print(const String.fromEnvironment('identity'))",
         ),
       );
+      File(
+        '${project.root}/.gitignore',
+      ).writeAsStringSync('.dart_tool/\npubspec.lock\n');
+      expect(
+        Process.runSync('git', [
+          'init',
+          '-q',
+        ], workingDirectory: project.root).exitCode,
+        0,
+      );
+      Rk(project.root).commit();
+      final commit =
+          (Process.runSync('git', [
+                    'rev-parse',
+                    'HEAD',
+                  ], workingDirectory: project.root).stdout
+                  as String)
+              .trim();
+      final started = DateTime.now().toUtc();
       final store = InstallationStore(
         '${scratch.path}/data',
         const SystemTools(),
@@ -73,6 +94,20 @@ void main() {
       final prepared = (await provider.inspect(project)).installation!;
       expect(prepared.checkout, project.directory);
       expect(prepared.toJson()['mode'], 'compiled');
+      expect(prepared.build!.commit, commit);
+      expect(prepared.build!.dirty, isFalse);
+      expect(prepared.build!.builtAt.isBefore(started), isFalse);
+      expect(prepared.build!.builtAt.isAfter(DateTime.now().toUtc()), isFalse);
+      // Older records stay usable without invented provenance.
+      final record = File('${prepared.location}/build.json');
+      final originalRecord = record.readAsStringSync();
+      record.writeAsStringSync(
+        jsonEncode((jsonDecode(originalRecord) as Map)..remove('build')),
+      );
+      final legacy = (await provider.inspect(project)).installation!;
+      expect(legacy.build, isNull);
+      expect(legacy.commands.keys, prepared.commands.keys);
+      record.writeAsStringSync(originalRecord);
       await apply(InstallationAction.use);
       expect(Directory(prepared.location).existsSync(), isFalse);
       final selected = store.selected(project)!.location;
@@ -89,6 +124,11 @@ void main() {
         "void main(List<String> args) => print('edited');",
       );
       expect((await launch()).stdout, first.stdout);
+      expect(
+        (await provider.inspect(project)).installation!.build!.dirty,
+        isFalse,
+        reason: 'Inspection must show the selected build, not today’s edits.',
+      );
       // Preparing an updated copy does not replace the selected copy.
       await apply(InstallationAction.install);
       expect(store.selected(project)!.location, selected);
@@ -100,12 +140,26 @@ void main() {
 
       final second = File('${project.directory}/bin/orbit_admin_main.dart');
       final valid = second.readAsStringSync();
-      second.writeAsStringSync('invalid Dart source');
+      second.writeAsStringSync(
+        'void main() { print(missingOne); print(missingTwo); }',
+      );
       final builds = Directory(store.localBuilds(project));
       final before = builds.listSync().map((e) => e.path).toSet();
       await expectLater(
         apply(InstallationAction.use),
-        throwsA(isA<InstallationFailure>()),
+        throwsA(
+          isA<InstallationFailure>()
+              .having(
+                (e) => e.evidence,
+                'complete output',
+                allOf(
+                  contains('missingOne'),
+                  contains('missingTwo'),
+                  contains('Command:'),
+                ),
+              )
+              .having((e) => e.remedy, 'remedy', isNot(contains('--clean'))),
+        ),
       );
       expect(builds.listSync().map((e) => e.path).toSet(), before);
       expect(store.selected(project)!.location, selected);
@@ -115,6 +169,11 @@ void main() {
 
       await apply(InstallationAction.use);
       expect((await launch()).stdout, 'edited\n');
+      final rebuilt = (await provider.inspect(project)).installation!;
+      expect(rebuilt.version, prepared.version);
+      expect(rebuilt.build!.commit, commit);
+      expect(rebuilt.build!.dirty, isTrue);
+      expect(rebuilt.build!.builtAt.isAfter(prepared.build!.builtAt), isTrue);
       expect(Directory(selected).existsSync(), isFalse);
       expect(builds.listSync(), hasLength(1));
       // Even moving the checkout does not break the selected snapshot.

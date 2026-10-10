@@ -103,7 +103,13 @@ void main() {
             installation: Installation(
               source: InstallationSource.local,
               version: '1.0.0',
-              location: project.directory,
+              location: '/built-copy',
+              checkout: project.directory,
+              build: LocalBuildInfo(
+                builtAt: DateTime.utc(2026, 10, 10, 14, 30),
+                commit: '1234567890abcdef',
+                dirty: true,
+              ),
               commands: const {},
             ),
           ),
@@ -137,6 +143,9 @@ void main() {
     );
     tester.pump();
     final screen = tester.renderToString();
+    expect(screen, contains('Built 2026-10-10 14:30:00 UTC'));
+    expect(screen, contains('1234567'));
+    expect(screen, contains('dirty checkout'));
     expect(screen, contains('Already activated from a local path'));
     expect(screen, contains('dart pub global deactivate orbit_cli'));
   });

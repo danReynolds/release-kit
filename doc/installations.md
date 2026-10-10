@@ -152,7 +152,14 @@ The launched program keeps your working directory, arguments and stdio in
 both modes. Compiled programs see their executable as `Platform.script`;
 use `--clean` for programs that require source-relative files or JIT features.
 `--list --json` identifies Local's `mode`, original `checkout`, installed
-`version`, and artifact `location`.
+`version`, and artifact `location`. New compiled builds also record `build`:
+`built_at` (UTC completion time), `commit` and `dirty`. The table and `--list`
+show these saved observations, so two builds of the same version are distinct.
+Git state is read once after dependency resolution and before compilation;
+`dirty` includes tracked edits and untracked files across the repository.
+Unknown Git state is reported as unknown. Older builds remain usable without
+this information. These observations do not check whether the checkout has
+changed since compilation or identify edits made during the build.
 
 GitHub archives must use RK's current release manifest and supported single-file
 or Dart bundle layout. The installer checks the manifest's unit, version and
@@ -163,6 +170,15 @@ version before the installation is accepted. Checksums prove consistency
 with that GitHub release; they are not independent publisher authentication.
 
 ## Routing and recovery
+
+A failed build or package-manager command keeps a short error summary and the
+complete tool output. `--json` includes it in `attachments`, linked by the
+problem's `evidence` field. The picker shows it in scrollable error details.
+Exiting on the failure also writes the report and output under `.rk/diagnosis`
+and prints its path. RK never reads these diagnostic files back; they can be
+deleted. Native build failures include the Dart compiler path and configured
+helper. Fix the reported error and retry the same command; a failed Local
+rebuild leaves the previous selected commands usable.
 
 Command launchers live in `$XDG_DATA_HOME/rk/bin`, or `~/.local/share/rk/bin`.
 Each one names its project and source in a header, so rk reads the selection

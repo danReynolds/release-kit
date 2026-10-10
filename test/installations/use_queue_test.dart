@@ -220,9 +220,18 @@ void main() {
     final updating = model.download(state, InstallationSource.pub);
     model.requestRemoval(state, InstallationSource.github);
     expect(model.removal, isNotNull);
-    gate.completeError(const InstallationFailure('Update failed.'));
+    gate.completeError(
+      const InstallationFailure.withEvidence(
+        'Update failed.',
+        remedy: 'Fix the build and retry.',
+        evidence: 'First compiler error.\nSecond compiler error.',
+      ),
+    );
     await updating;
+    expect(model.message, 'Update failed. Fix the build and retry.');
     expect(model.details?.body, contains('Update failed.'));
+    expect(model.details?.body, contains('Second compiler error.'));
+    expect(model.failure?.evidence, contains('Second compiler error.'));
     expect(
       model.removal,
       isNull,

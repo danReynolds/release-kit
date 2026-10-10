@@ -87,6 +87,16 @@ void main() {
       final state = installations(used)['projects'].single;
       expect(state['selected'], 'local');
       expect(state['sources']['local']['mode'], 'compiled');
+      final build = state['sources']['local']['build'];
+      expect(DateTime.parse(build['built_at'] as String).isUtc, isTrue);
+      expect(build['commit'], isNull);
+      expect(build['dirty'], isNull);
+      final listing = Rk(project.directory)([
+        'use',
+        '--list',
+      ], environment: environment);
+      expect(listing.all, contains('Built '));
+      expect(listing.all, contains('Git state unknown'));
       expect(
         state['sources']['local']['checkout'],
         Directory(project.directory).resolveSymbolicLinksSync(),
@@ -101,6 +111,44 @@ void main() {
       );
       expect(result.exitCode, 0, reason: '${result.stderr}');
       expect(result.stdout, contains('dogfood'));
+    },
+  );
+
+  test(
+    'native compilation failures retain every error in JSON and saved diagnostics',
+    () {
+      final project = fixture(scratch, commands: ['orbit']);
+      File('${project.directory}/bin/orbit_main.dart').writeAsStringSync(
+        'void main() { print(missingOne); print(missingTwo); }',
+      );
+      final nested = Directory('${project.directory}/nested')..createSync();
+      final failed = rk(nested.path, ['install', 'local']);
+      expect(failed.code, 1, reason: failed.all);
+      final problem = failed.problems.single;
+      expect(problem['message'], contains('missingOne'));
+      expect(problem['message'], isNot(contains('missingTwo')));
+      expect(problem['remedy'], isNot(contains('--clean')));
+      final evidence = (failed.json['attachments'] as Map)[problem['evidence']];
+      expect(
+        evidence,
+        allOf(
+          contains('missingOne'),
+          contains('missingTwo'),
+          contains('Dart compiler:'),
+          contains('Native build helper:'),
+        ),
+      );
+      final saved = File('${failed.json['diagnosis']}/${problem['evidence']}');
+      expect(saved.readAsStringSync(), evidence);
+      expect(Directory('${nested.path}/.rk').existsSync(), isFalse);
+      final human = Rk(nested.path)([
+        'install',
+        'local',
+      ], environment: environment);
+      expect(human.code, 1, reason: human.all);
+      expect(human.all, contains('Full tool output:'));
+      expect(human.all, contains('/.rk/diagnosis/'));
+      expect(human.all, isNot(contains('--clean')));
     },
   );
 
