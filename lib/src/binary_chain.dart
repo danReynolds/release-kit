@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'builds/capability.dart';
+import 'builds/binary_artifact.dart';
 import 'builds/dart_cli.dart';
 import 'builds/macos_identity.dart';
 import 'engine/assets.dart';
@@ -66,7 +67,11 @@ class BinaryChain {
 
     final name = ReleaseAssets.binaryPath(project, platform);
 
-    File(stage.pathOf(name)).parent.createSync(recursive: true);
+    // Only unrecorded builds run. Discard their whole private output root so
+    // a failed hook/signing run cannot leave libraries in a later inventory.
+    final destination = File(stage.pathOf(name)).parent;
+    if (destination.existsSync()) destination.deleteSync(recursive: true);
+    destination.createSync(recursive: true);
     // Pub resolves the build in the lane's copy of the commit, through its
     // own cache and lockfile, as `dart compile` does anywhere.
     final built =
@@ -79,6 +84,7 @@ class BinaryChain {
           entryPoint: 'bin/$executable.dart',
           output: stage.pathOf(name),
           workingDirectory: project.directoryIn(repositoryRoot),
+          repositoryRoot: repositoryRoot,
           expectedVersion: project.version.canonical,
           defines: project.dartDefines,
           onProgress: (event) {
@@ -100,6 +106,12 @@ class BinaryChain {
       return const Produced.failed();
     }
 
+    final artifact = built.artifact!;
+    final outputs = [
+      for (final file in artifact.files)
+        '${ReleaseAssets.binaryRoot(project, platform)}/${file.path}',
+    ];
+
     // The proof's absence travels with the artifact. `built` alone would
     // read as "checked", which is the claim rk must not make for a binary
     // nothing here could run.
@@ -116,15 +128,13 @@ class BinaryChain {
         );
       }
       return Produced(
-        evidence: {
-          'smoke': smoke,
-          'artifact': ReleaseAssets.binaryArtifact(project, platform).toJson(),
-        },
+        outputs: outputs,
+        evidence: {'smoke': smoke, 'artifact': artifact.toJson()},
       );
     }
 
     progress?.begin((running: 'signing', failed: 'signing failed'));
-    return _sign(step, project, smoke, signing);
+    return _sign(step, project, artifact, outputs, smoke, signing);
   }
 
   /// The signing half of a macOS build.
@@ -137,11 +147,12 @@ class BinaryChain {
   Future<Produced> _sign(
     Work step,
     ResolvedProject project,
+    BinaryArtifact artifact,
+    List<String> outputs,
     Map<String, Object?> smoke,
     MacIdentity signing,
   ) async {
     final platform = step.platform!;
-    final artifact = ReleaseAssets.binaryArtifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
     final published = signing.publishedRequirement;
     Produced fail(String code, String message, {String? transcript}) {
@@ -256,6 +267,7 @@ class BinaryChain {
       );
     }
     return Produced(
+      outputs: outputs,
       evidence: {
         'artifact': artifact.toJson(),
         'smoke': smoke,
@@ -271,7 +283,10 @@ class BinaryChain {
 
   Future<Produced> notarizeStep(Work step, ResolvedProject project) async {
     final platform = step.platform!;
-    for (final path in ReleaseAssets.binaryOutputs(project, platform)) {
+    final artifact = _artifact(project, platform);
+    final root = ReleaseAssets.binaryRoot(project, platform);
+    for (final file in artifact.files) {
+      final path = '$root/${file.path}';
       if (!File(stage.pathOf(path)).existsSync()) {
         return _missingArtifact(step, path, 'the build step produces it');
       }
@@ -284,10 +299,7 @@ class BinaryChain {
     try {
       final root = ReleaseAssets.binaryRoot(project, platform);
       final payload = '${scratch.path}/payload';
-      for (final file in ReleaseAssets.binaryArtifact(
-        project,
-        platform,
-      ).files) {
+      for (final file in artifact.files) {
         final copy = File('$payload/${file.path}')
           ..parent.createSync(recursive: true);
         File(stage.pathOf('$root/${file.path}')).copySync(copy.path);
@@ -342,7 +354,7 @@ class BinaryChain {
 
   Future<Produced> archiveStep(Work step, ResolvedProject project) async {
     final platform = step.platform!;
-    final artifact = ReleaseAssets.binaryArtifact(project, platform);
+    final artifact = _artifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
     final entries = <ArchiveEntry>[];
     for (final file in artifact.files) {
@@ -373,6 +385,14 @@ class BinaryChain {
     stage.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
     output.report.step(step, verdict: Verdict.exact, detail: name);
     return const Produced();
+  }
+
+  BinaryArtifact _artifact(ResolvedProject project, String platform) {
+    final evidence =
+        stage.receipt?.producers['build:${project.name}:$platform'];
+    return evidence?['artifact'] == null
+        ? ReleaseAssets.binaryArtifact(project, platform)
+        : BinaryArtifact.fromJson(evidence!['artifact']);
   }
 
   Produced _missingArtifact(Work step, String name, String producedBy) {

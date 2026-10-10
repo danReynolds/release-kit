@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../../builds/binary_artifact.dart';
 import '../../engine/assets.dart';
 import '../../engine/git.dart';
 import '../../engine/release_manifest.dart';
@@ -51,7 +52,7 @@ class GithubInstallationProvider implements InstallationProvider {
                 entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty),
               )
               case final version?)
-            if (File('${entry.path}/${project.commands.single}').existsSync())
+            if (_entryPoint(entry.path, project.commands.single) != null)
               version,
     ]..sort();
     if (versions.isEmpty) return const SourceInspection();
@@ -68,10 +69,25 @@ class GithubInstallationProvider implements InstallationProvider {
       location: location,
       commands: {
         project.commands.single: LaunchCommand(
-          '$location/${project.commands.single}',
+          '$location/${_entryPoint(location, project.commands.single)!}',
         ),
       },
     );
+  }
+
+  String? _entryPoint(String location, String command) {
+    final manifest = File('$location/${BinaryArtifact.manifestName}');
+    try {
+      final artifact = manifest.existsSync()
+          ? BinaryArtifact.fromJson(jsonDecode(manifest.readAsStringSync()))
+          : BinaryArtifact.single(command);
+      return artifact.command == command &&
+              File('$location/${artifact.entryPoint}').existsSync()
+          ? artifact.entryPoint
+          : null;
+    } on FormatException {
+      return null;
+    }
   }
 
   @override
@@ -234,7 +250,7 @@ Future<ArchiveReader> decodeInstallationArchive(
 ) async {
   try {
     final archive = ArchiveReader.decode(compressed);
-    if (archive.artifact.entryPoint != command) {
+    if (archive.artifact.command != command) {
       throw const FormatException('The archive exports a different command.');
     }
     return archive;

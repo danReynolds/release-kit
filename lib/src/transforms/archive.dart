@@ -43,7 +43,30 @@ class ArchiveBuilder {
       write(value.toRadixString(8).padLeft(length - 1, '0'), offset, length);
     }
 
-    write(entry.name, 0, 100);
+    _requireSafeName(entry.name);
+    var name = entry.name;
+    var prefix = '';
+    if (utf8.encode(name).length > 100) {
+      final cuts = [
+        for (var i = 0; i < name.length; i++)
+          if (name[i] == '/') i,
+      ];
+      for (final cut in cuts.reversed) {
+        if (utf8.encode(name.substring(0, cut)).length <= 155 &&
+            utf8.encode(name.substring(cut + 1)).length <= 100) {
+          prefix = name.substring(0, cut);
+          name = name.substring(cut + 1);
+          break;
+        }
+      }
+      if (prefix.isEmpty) {
+        throw FormatException(
+          'artifact path is too long for ustar: ${entry.name}',
+        );
+      }
+    }
+    write(name, 0, 100);
+    write(prefix, 345, 155);
     writeOctal(entry.executable ? 0x1ed : 0x1a4, 100, 8); // 0755 or 0644
     writeOctal(0, 108, 8); // uid: a release is nobody's
     writeOctal(0, 116, 8); // gid

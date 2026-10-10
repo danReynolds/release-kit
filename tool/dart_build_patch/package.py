@@ -72,7 +72,8 @@ def main():
     (output / 'package_config.json').write_text(json.dumps(
         {'configVersion': 2, 'packages': mappings}, indent=2) + '\n')
     (output / 'PROVENANCE.json').write_text(json.dumps(
-        {'sdkVersion': '3.13.5', 'host': 'macos-arm64',
+        {'sdkVersion': '3.13.5',
+         'rebuildHosts': ['macos-arm64', 'linux-arm64', 'linux-x64'],
          'upstreamIssue': 'https://github.com/dart-lang/sdk/issues/64556',
          'packages': provenance}, indent=2) + '\n')
     (output / 'LICENSES.txt').write_text('\n\n'.join(

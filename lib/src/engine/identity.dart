@@ -198,7 +198,7 @@ class PublishedIdentity {
     Directory? extracted;
     try {
       final contents = ArchiveReader.decode(File(archive).readAsBytesSync());
-      if (contents.artifact.entryPoint != executable) {
+      if (contents.artifact.command != executable) {
         return const IdentityReading.unreadable(
           'the published archive names a different executable',
         );

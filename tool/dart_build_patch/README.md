@@ -1,6 +1,6 @@
 # Temporary Dart native-build helper
 
-An opt-in macOS ARM64 preview of the small SDK patch proposed in
+An opt-in preview of the small SDK patch proposed in
 [dart-lang/sdk#64556](https://github.com/dart-lang/sdk/issues/64556). It adds
 compile-time declarations and separate AOT output to Dart's existing
 hook-aware CLI builder. This is an RK-distributed patched command, not an
@@ -11,7 +11,9 @@ Download the binary or source archive from the
 Verify the downloaded archive against `SHA256SUMS` before extracting it.
 
 Only Dart **3.13.5**, SDK revision
-`04bcd1036cdc799ac6564988f159ee454d42c822`, on **macOS ARM64** is qualified.
+`04bcd1036cdc799ac6564988f159ee454d42c822`, is supported. The published binary
+is for **macOS ARM64**; the source also rebuilds on **Linux ARM64 and x64**
+using this checkout's updated wrapper and rebuild script.
 Use the official matching SDK from the
 [Dart archive](https://dart.dev/get-dart/archive). The helper refuses other
 versions and hosts. Keep your usual SDK and RK installation as they are.
@@ -40,9 +42,11 @@ For AOT output, the caller must supply the matching `dartaotruntime` in
 signing it, and preserve the relative layout. Signing, library constraints,
 notarization, archiving and installation belong to the release pipeline.
 
-**This helper does not yet add native release bundles to `rk stage` or
-`rk release`.** That integration remains separate work. The preview unblocks
-the SDK prerequisite; it is not a Keybay release or Linux qualification.
+RK uses this helper through `RK_DART_BUILD_TOOL`, falling back to
+`rk-dart-build` on `PATH` when the stock SDK lacks required options. See
+[CLI artifacts](../../doc/cli-artifacts.md) for native bundle releases and
+Linux image requirements. The helper by itself does not sign or release an
+application.
 Remove this directory and use the official command once the SDK supports both
 options and passes the same release checks. There is no automatic SDK manager,
 background update, startup hook or persistent helper cache.
@@ -65,6 +69,32 @@ cache, network resolution or the original SDK source checkout. Source
 rebuildability is promised; byte-identical AOT snapshots are not.
 The compiler/runtime come from the matching stock SDK. Applications still
 need their normal locked dependencies and native build tools.
+
+### Linux build images
+
+Use the source archive from the preview release. Its original scripts only
+allowed macOS; copy this checkout's `rk-dart-build` and `rebuild.sh` over those
+two files in the extracted source directory. Rebuild **inside each target
+environment** with its matching Linux Dart 3.13.5 SDK. Keep `build.aot` and the
+wrapper together, and put the wrapper on the image's `PATH`.
+
+For example, after verifying and extracting the source archive into `helper/`
+and copying the updated scripts, a build image can extend your existing
+Dart/native-tool image:
+
+```dockerfile
+FROM your-native-build-image
+COPY helper /opt/rk-dart-build
+RUN /opt/rk-dart-build/rebuild.sh /path/to/dart-sdk
+ENV PATH="/opt/rk-dart-build:$PATH"
+```
+
+Build that image for `linux/arm64` and `linux/amd64` (native builders or
+configured emulation), tag the results `my-dart-build:arm64` and
+`my-dart-build:amd64`, and set `RK_DART_BUILD_IMAGE='my-dart-build:{arch}'`.
+RK mounts its staged sources and output, runs locked resolution and hooks in
+the selected image, and removes the container after the build. There is no
+shared container package cache or image construction performed by RK.
 
 To prepare a new copy of this preview, check out the pinned SDK source and
 its `DEPS` revisions, apply `doc/archive/native-assets-sdk.patch`, compile
@@ -94,6 +124,8 @@ Observed on macOS ARM64, 2026-10-09:
 - RK formatting and analysis pass, along with 1,088 functional tests and
   8 publication tests (one environment-dependent functional test skipped).
 
-Actual Keybay upgrade identity,
-notarization, native Linux targets and Homebrew installation remain outside
-this preview's qualification.
+Subsequent RK integration qualification covers native fixture relocation on
+macOS ARM64 and both Linux architectures, plus a Homebrew install that preserves
+all code bytes and calls the native adapter. See
+[the integration record](../../doc/archive/native-bundle-integration.md) for
+release pipeline evidence and remaining application-level boundaries.

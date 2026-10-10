@@ -7,14 +7,19 @@ if [ "$#" -lt 1 ]; then
 fi
 sdk=$(CDPATH= cd -- "$1" && pwd -P)
 shift
-if [ "$(uname -s)-$(uname -m)" != Darwin-arm64 ] ||
-   [ "$(cat "$sdk/version")" != 3.13.5 ] ||
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) host=macos_arm64 ;;
+  Linux-aarch64|Linux-arm64) host=linux_arm64 ;;
+  Linux-x86_64) host=linux_x64 ;;
+  *) echo 'This preview supports macOS arm64 and Linux arm64/x64.' >&2; exit 64 ;;
+esac
+if [ "$(cat "$sdk/version")" != 3.13.5 ] ||
    [ "$(cat "$sdk/revision")" != 04bcd1036cdc799ac6564988f159ee454d42c822 ]; then
-  echo 'This preview requires Dart SDK 3.13.5 (04bcd1036cdc) on macOS arm64.' >&2
+  echo 'This preview requires Dart SDK 3.13.5 (04bcd1036cdc).' >&2
   exit 64
 fi
 case "$("$sdk/bin/dartaotruntime" --version 2>&1)" in
-  *'Dart SDK version: 3.13.5 '*'"macos_arm64"'*) ;;
+  *"Dart SDK version: 3.13.5 "*\""$host"\"*) ;;
   *) echo 'The SDK runtime does not match this preview.' >&2; exit 64 ;;
 esac
 bundle=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)

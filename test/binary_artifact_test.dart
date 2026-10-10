@@ -183,7 +183,7 @@ $metadata
             );
         expect(built.ok, isTrue);
         expect(
-          tools.calls.single,
+          tools.calls.singleWhere((call) => call.contains(' compile ')),
           contains('compile exe -Dkeybay.application_id=dev.example.tool'),
         );
       },

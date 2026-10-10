@@ -206,6 +206,7 @@ final class StageRunner {
           work,
           evidence: produced.evidence,
           warnings: produced.warnings,
+          outputs: produced.outputs,
         );
         rows.restore(stage.receipt!);
         return null;
