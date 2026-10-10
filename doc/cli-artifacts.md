@@ -31,7 +31,8 @@ rule works for Linux's single executable.
 
 ## Dart native code assets
 
-When a resolved dependency has `hook/build.dart`, rk uses `dart build cli`
+When the package or a resolved production dependency has `hook/build.dart`, rk
+uses `dart build cli`
 from the staged package. Dart runs the hooks and supplies the application and
 native libraries. rk preserves their relative paths and generates a schema-2
 `rk-artifact.json` from the build output. There is no library list to maintain
@@ -73,7 +74,9 @@ The machine needs a compatible build environment for each native target:
   `arm64`, for example `my-dart-build:{arch}`. With current Dart, an image also
   needs `rk-dart-build` on `PATH` when the project supplies Dart declarations.
   Each target builds in its own staged repository copy, using the selected
-  platform and an independent container Pub cache. The image must support
+  platform and an independent container Pub cache. On Linux hosts it runs as
+  the operator's UID/GID, with a temporary writable home/cache; Podman also
+  uses its `keep-id` user namespace. The image must support
   `sh`, `grep`, and `readlink -f`. Pin images for reproducible build environments.
 
 These are machine settings, not application-specific RK configuration. Once

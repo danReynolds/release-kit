@@ -42,8 +42,70 @@ void main() {
           ],
         }),
       );
+    File('${root.path}/.dart_tool/package_graph.json').writeAsStringSync(
+      jsonEncode({
+        'packages': [
+          {'name': 'native_fixture', 'dependencies': []},
+        ],
+      }),
+    );
   });
   tearDown(() => root.deleteSync(recursive: true));
+
+  test(
+    'locks belong to the package or its declared workspace, including overrides',
+    () {
+      final child = Directory('${root.path}/packages/child')
+        ..createSync(recursive: true);
+      final manifest = File('${child.path}/pubspec.yaml');
+      manifest.writeAsStringSync('name: child\n');
+      expect(dartBuildIsLocked(child.path, root.path), isFalse);
+      manifest.writeAsStringSync('name: child\nresolution: workspace\n');
+      expect(dartBuildIsLocked(child.path, root.path), isTrue);
+      File(
+        '${child.path}/pubspec_overrides.yaml',
+      ).writeAsStringSync('resolution: null\n');
+      expect(dartBuildIsLocked(child.path, root.path), isFalse);
+      File('${child.path}/pubspec.lock').writeAsStringSync('own lock');
+      expect(dartBuildIsLocked(child.path, root.path), isTrue);
+    },
+  );
+
+  test('only production dependencies select the native builder', () {
+    final child = Directory('${root.path}/packages/child')
+      ..createSync(recursive: true);
+    File(
+      '${child.path}/pubspec.yaml',
+    ).writeAsStringSync('name: child\nresolution: workspace\n');
+    final config = File('${root.path}/.dart_tool/package_config.json');
+    final json = jsonDecode(config.readAsStringSync()) as Map;
+    (json['packages'] as List).add({
+      'name': 'child',
+      'rootUri': child.uri.toString(),
+    });
+    config.writeAsStringSync(jsonEncode(json));
+    void graph(List<String> dependencies) =>
+        File('${root.path}/.dart_tool/package_graph.json').writeAsStringSync(
+          jsonEncode({
+            'packages': [
+              {
+                'name': 'child',
+                'dependencies': dependencies,
+                'devDependencies': ['native_fixture'],
+              },
+              {'name': 'native_fixture', 'dependencies': []},
+            ],
+          }),
+        );
+    graph([]);
+    expect(
+      hasDartBuildHooks(child.path, root.path),
+      isFalse,
+      reason: 'dev dependencies and other workspace members do not ship',
+    );
+    graph(['native_fixture']);
+    expect(hasDartBuildHooks(child.path, root.path), isTrue);
+  });
 
   test('native manifest keeps exact paths, roles and old layouts readable', () {
     for (final artifact in [
@@ -318,6 +380,42 @@ binary_platforms = ["macos-arm64"]
       expect(call, isNot(contains('--target-os')));
     },
   );
+
+  for (final runtime in ['docker', 'podman']) {
+    test(
+      '$runtime Linux builds preserve the caller ownership of bind mounts',
+      () async {
+        final tools = RecordingTools(
+          results: {
+            'id -u': ToolResult(exitCode: 0, stdout: '1000\n', stderr: ''),
+            'id -g': ToolResult(exitCode: 0, stdout: '1001\n', stderr: ''),
+          },
+        );
+        await buildDartNative(
+          tools: tools,
+          capabilities: HostCapabilities(
+            hostPlatform: 'linux-x64',
+            containerRuntime: runtime,
+          ),
+          compiler: '/sdk/bin/dart',
+          platform: 'linux-arm64',
+          directory: root.path,
+          repositoryRoot: root.path,
+          entryPoint: 'bin/probe.dart',
+          output: '${root.path}/output/build',
+          defines: {},
+          locked: true,
+          image: 'native-image',
+        );
+        final call = tools.calls.singleWhere(
+          (call) => call.startsWith('$runtime run'),
+        );
+        expect(call, contains('--user 1000:1001'));
+        expect(call.contains('--userns=keep-id'), runtime == 'podman');
+        expect(call, contains('-e HOME=/tmp -e PUB_CACHE=/tmp/rk-pub-cache'));
+      },
+    );
+  }
 }
 
 class _NativeTools extends BundleRecordingTools {

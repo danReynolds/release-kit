@@ -21,6 +21,58 @@ void main() {
   final platforms =
       Platform.environment['RK_NATIVE_TEST_PLATFORMS']?.split(',') ??
       [host.hostPlatform];
+  test(
+    'an independent nested CLI ignores parent locks and development hooks',
+    () async {
+      final root = Directory.systemTemp.createTempSync('rk-independent-cli-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      File('${root.path}/pubspec.yaml').writeAsStringSync('name: parent\n');
+      final parentLock = File('${root.path}/pubspec.lock')
+        ..writeAsStringSync('unrelated lock');
+      final child = Directory('${root.path}/packages/child')
+        ..createSync(recursive: true);
+      File('${child.path}/pubspec.yaml').writeAsStringSync('''
+name: child
+environment:
+  sdk: ^3.10.4
+dev_dependencies:
+  hook_fixture:
+    path: hook_fixture
+''');
+      File('${child.path}/bin/child.dart')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync("void main() => print('1.2.3');\n");
+      File('${child.path}/hook_fixture/pubspec.yaml')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync(
+          'name: hook_fixture\nenvironment:\n  sdk: ^3.10.4\n',
+        );
+      File('${child.path}/hook_fixture/hook/build.dart')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync(
+          "void main() => throw StateError('development hook must not run');\n",
+        );
+      final built =
+          await DartCliBuilder(
+            tools: const SystemTools(),
+            capabilities: host,
+            compilerExecutable: compiler,
+            nativeBuildTool: '/no-helper-needed',
+          ).build(
+            platform: host.hostPlatform,
+            entryPoint: 'bin/child.dart',
+            output: '${root.path}/built/child',
+            workingDirectory: child.path,
+            repositoryRoot: root.path,
+            expectedVersion: '1.2.3',
+          );
+      expect(built.ok, isTrue, reason: '${built.problem}\n${built.transcript}');
+      expect(parentLock.readAsStringSync(), 'unrelated lock');
+      expect(File('${child.path}/pubspec.lock').existsSync(), isTrue);
+      expect(built.artifact!.layout, Platform.isMacOS ? 'dart-aot' : 'single');
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
   for (final platform in platforms) {
     test(
       '$platform native hooks survive archive relocation and call the adapter',

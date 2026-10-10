@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:yaml/yaml.dart';
+
 import '../engine/tools.dart';
 import 'capability.dart';
 
-/// The resolved package map is Dart's inventory of dependencies. Reading only
-/// their hook entry points selects the compiler; Dart still owns hook execution.
+/// Use Pub's production dependency graph, like Dart's build command. A hook in
+/// a dev dependency or unrelated workspace member must not change this build.
 bool hasDartBuildHooks(String directory, String repositoryRoot) {
   final config = dartBuildFile(
     directory,
@@ -15,12 +17,37 @@ bool hasDartBuildHooks(String directory, String repositoryRoot) {
   if (config == null) return false;
   final packages =
       (jsonDecode(config.readAsStringSync()) as Map)['packages'] as List;
-  return packages.any((package) {
-    final root = Directory.fromUri(
-      config.uri.resolve(package['rootUri'] as String),
-    ).uri;
-    return File.fromUri(root.resolve('hook/build.dart')).existsSync();
-  });
+  final roots = {
+    for (final package in packages)
+      package['name'] as String: Directory.fromUri(
+        config.uri.resolve(package['rootUri'] as String),
+      ).uri,
+  };
+  final graph =
+      jsonDecode(
+            File.fromUri(
+              config.uri.resolve('package_graph.json'),
+            ).readAsStringSync(),
+          )
+          as Map;
+  final dependencies = {
+    for (final package in graph['packages'] as List)
+      package['name'] as String: (package['dependencies'] as List)
+          .cast<String>(),
+  };
+  final pubspec = dartBuildFile(directory, repositoryRoot, 'pubspec.yaml')!;
+  final name = (loadYaml(pubspec.readAsStringSync()) as Map)['name'] as String;
+  final pending = [name];
+  final visited = <String>{};
+  while (pending.isNotEmpty) {
+    final package = pending.removeLast();
+    if (!visited.add(package)) continue;
+    if (File.fromUri(roots[package]!.resolve('hook/build.dart')).existsSync()) {
+      return true;
+    }
+    pending.addAll(dependencies[package] ?? const []);
+  }
+  return false;
 }
 
 File? dartBuildFile(String directory, String repositoryRoot, String name) {
@@ -31,6 +58,40 @@ File? dartBuildFile(String directory, String repositoryRoot, String name) {
     if (file.existsSync()) return file;
     if (current.path == root || current.parent.path == current.path) {
       return null;
+    }
+    current = current.parent;
+  }
+}
+
+/// Pub owns the lock beside the nearest pubspec whose resolution is not
+/// `workspace`. An independent nested package must not inherit a parent's lock.
+bool dartBuildIsLocked(String directory, String repositoryRoot) {
+  var current = Directory(directory).absolute;
+  final root = Directory(repositoryRoot).absolute.path;
+  while (true) {
+    final pubspec = File('${current.path}/pubspec.yaml');
+    if (pubspec.existsSync()) {
+      try {
+        final manifest = loadYaml(pubspec.readAsStringSync());
+        final overrides = File('${current.path}/pubspec_overrides.yaml');
+        final override = overrides.existsSync()
+            ? loadYaml(overrides.readAsStringSync())
+            : null;
+        final resolution = override is Map && override.containsKey('resolution')
+            ? override['resolution']
+            : manifest is Map
+            ? manifest['resolution']
+            : null;
+        if (resolution != 'workspace') {
+          return File('${current.path}/pubspec.lock').existsSync();
+        }
+      } on YamlException {
+        // Let Pub report the malformed manifest in its normal build output.
+        return false;
+      }
+    }
+    if (current.path == root || current.parent.path == current.path) {
+      return false;
     }
     current = current.parent;
   }
@@ -115,11 +176,35 @@ Future<ToolResult> buildDartNative({
       'the native build directory must be inside the staged repository',
     );
   }
+  // Linux bind mounts retain container ownership. Run as the operator so the
+  // output and hook cache remain removable by RK after success or failure.
+  String? user;
+  if (capabilities.hostPlatform.startsWith('linux-')) {
+    final ids = await Future.wait([
+      tools.run('id', const ['-u']),
+      tools.run('id', const ['-g']),
+    ]);
+    if (ids.any(
+      (id) => !id.ok || !RegExp(r'^\d+$').hasMatch(id.stdout.trim()),
+    )) {
+      return _failure('could not determine the Linux build user and group');
+    }
+    user = ids.map((id) => id.stdout.trim()).join(':');
+  }
   return tools.run(runtime, [
     'run',
     '--rm',
     '--platform',
     'linux/${platform.endsWith('-x64') ? 'amd64' : 'arm64'}',
+    if (user != null) ...[
+      '--user',
+      user,
+      if (runtime == 'podman') '--userns=keep-id',
+      '-e',
+      'HOME=/tmp',
+      '-e',
+      'PUB_CACHE=/tmp/rk-pub-cache',
+    ],
     '-v',
     '$root:/src',
     '-v',

@@ -45,8 +45,7 @@ class DartCliBuilder {
     // reaching here, so this asks only *how* to produce it.
     final capability = capabilities.resolve(platform);
     final sourceRoot = repositoryRoot ?? workingDirectory;
-    final locked =
-        dartBuildFile(workingDirectory, sourceRoot, 'pubspec.lock') != null;
+    final locked = dartBuildIsLocked(workingDirectory, sourceRoot);
     if (dartBuildFile(workingDirectory, sourceRoot, 'pubspec.yaml') != null) {
       final resolved = await tools.run(compilerExecutable, [
         'pub',

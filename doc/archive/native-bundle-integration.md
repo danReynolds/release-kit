@@ -17,7 +17,7 @@ operator supplies. Its shell script is fixed; application arguments remain
 separate positional arguments.
 
 An explicit locked Pub resolution lets RK discover dependency hooks from Dart's
-package map before choosing the compiler. This adds a Pub invocation to fresh
+production dependency graph before choosing the compiler. This adds a Pub invocation to fresh
 builds; completed stages do not resolve, discover hooks or build again. In the
 real three-target Keybay stage, those three host resolutions took 1.95 seconds
 in aggregate and ran in concurrent build lanes. Container targets also resolve
@@ -40,6 +40,8 @@ while changing it before completion makes the stage broken.
 | Homebrew native fixture | Installed through a temporary tap, all code bytes unchanged, native adapter returned 42 through the installed command; probe tap and keg removed |
 | GitHub installation tests | Schema-1 and schema-2 archives extract with exact modes; a native Linux `bin/` entry remains launchable when rediscovered |
 | Interrupted stage tests | Dynamic outputs survive producer recording, library changes refuse reuse, notarization and archives contain exactly the inventory |
+| Review regressions | An independent nested CLI builds despite an unrelated parent lock and a failing dev-only hook; workspace resolution overrides select the correct lock; Linux build arguments preserve caller ownership |
+| Non-root Linux helper | Built and ran the native C fixture as UID 1000/GID 1001 with temporary HOME/Pub cache, verified output ownership and removed build/hook outputs successfully |
 
 The Keypass worker probe submits an invalid operation; it does not create,
 unlock or change a vault, request a passkey, or interact with a security key.
@@ -94,9 +96,18 @@ RK_NATIVE_TEST_PLATFORMS=macos-arm64,linux-arm64,linux-x64 \
 RK_BREW_INSTALL_TEST=1 dart test test/homebrew_install_test.dart
 ```
 
-Formatting, analysis, 1,095 functional tests and eight publication tests passed
+Formatting, analysis, 1,100 functional tests and eight publication tests passed
 locally. The normal Mac suite skipped two environment-dependent checks; native
 relocation and Homebrew were additionally enabled and passed as described above.
+
+Independent review found and prompted fixes for unrelated ancestor lockfiles,
+development-only hook discovery and Linux container output ownership. Pub's
+own dependency graph now scopes hook discovery. Lock selection follows Pub's
+workspace-resolution rule including overrides. Linux containers use the
+operator's UID/GID and temporary home/cache; Podman's documented
+[`keep-id` mapping](https://docs.podman.io/en/latest/markdown/podman-run.1.html#userns-mode)
+preserves those IDs under rootless operation. The Podman argument path is
+covered deterministically; a live rootless Podman run was not qualified here.
 
 Application gates remain separate: actual Keybay credential migration and vault
 operations, a published upgrade, and broader Linux distribution compatibility
