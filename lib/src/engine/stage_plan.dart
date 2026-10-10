@@ -24,6 +24,9 @@ final class DartSdk {
       _ambient ??= read(path: Platform.environment['PATH'] ?? '');
   static DartSdk? _ambient;
 
+  /// Resolve the selected SDK or Flutter/version-manager wrapper for a builder.
+  static String resolveExecutable(String selected) => _sdkExecutable(selected);
+
   Map<String, Object?> toJson() => {
     'executable': executable,
     'version': version,

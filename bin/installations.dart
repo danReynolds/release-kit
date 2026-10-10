@@ -29,7 +29,7 @@ rk uninstall [source] [-p project] remove an inactive installation
 Sources: local, homebrew, pub, github — only those configured for this project.
 No source: open the matrix in a terminal, or list sources when redirected.
 --latest        install: get the latest compatible version; keep the selected source
---live          use/install local: run source directly; default Local compiles a snapshot
+--clean         use/install local: run source directly; default Local compiles a snapshot
 --list          inspect available sources and current selection; no changes
 -p, --project   package name; required for an explicit source in a multi-app repo
 --json          one structured report, no TUI or prompts
@@ -92,7 +92,7 @@ _arguments(List<String> args, String command) {
     switch (arg) {
       case '--latest':
         latest = true;
-      case '--live':
+      case '--clean':
         live = true;
       case '--list':
         list = true;
@@ -127,7 +127,7 @@ _arguments(List<String> args, String command) {
   }
   if (latest && source == 'local') error = followsCheckout;
   if (live && (source != 'local' || command == 'uninstall' || list)) {
-    error = '--live needs rk use local or rk install local.';
+    error = '--clean needs rk use local or rk install local.';
   }
   if (yes && (command != 'uninstall' || source == null || list)) {
     error = '--yes needs an explicit rk uninstall source.';

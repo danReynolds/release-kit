@@ -11,9 +11,13 @@ import 'package:test/test.dart';
 import 'fixtures.dart';
 
 void main() {
-  for (final live in [true, false]) {
+  for (final (live, configured) in [
+    (true, true),
+    (false, false),
+    (false, true),
+  ]) {
     test(
-      '${live ? 'live' : 'compiled'} Local keeps native hooks, cwd, arguments, stdin, stderr and exit status',
+      '${live ? 'live' : 'compiled'} Local with defines=$configured keeps native hooks, cwd, arguments, stdin, stderr and exit status',
       () async {
         final scratch = Directory.systemTemp.createTempSync(
           'rk hooks dollar\$ ',
@@ -28,7 +32,7 @@ void main() {
             unitName: original.project.unitName,
             config: original.project.config,
             pubspec: original.project.pubspec,
-            dartDefines: live
+            dartDefines: configured
                 ? {'probe.identity': r'identity $literal'}
                 : const {},
           ),
@@ -81,9 +85,26 @@ Future<void> main(List<String> args) async {
           '${scratch.path}/data',
           const SystemTools(),
         );
+        var compiler = Platform.resolvedExecutable;
+        if (!live && configured) {
+          // A Flutter-style wrapper must resolve to its SDK before the helper
+          // receives the SDK directory; a wrapper's parent is not an SDK.
+          final bin = Directory('${scratch.path}/flutter/bin')
+            ..createSync(recursive: true);
+          Link('${bin.path}/cache/dart-sdk')
+            ..parent.createSync(recursive: true)
+            ..createSync(File(compiler).parent.parent.path);
+          final wrapper = File('${bin.path}/dart');
+          wrapper.writeAsStringSync(
+            '#!/bin/sh\nexec "\$(dirname "\$0")/cache/dart-sdk/bin/dart" "\$@"\n',
+          );
+          final mode = await Process.run('chmod', ['+x', wrapper.path]);
+          expect(mode.exitCode, 0);
+          compiler = wrapper.path;
+        }
         final provider = LocalInstallationProvider(
           const SystemTools(),
-          Platform.resolvedExecutable,
+          compiler,
           store,
           live: live,
         );
@@ -127,30 +148,9 @@ Future<void> main(List<String> args) async {
         expect(result['args'], ['space value', r'$literal', 'nonzero']);
         expect(result['input'], 'caller stdin\n');
         expect(result['native'], 41);
-        expect(result['identity'], live ? r'identity $literal' : '');
+        expect(result['identity'], configured ? r'identity $literal' : '');
         expect(first.$3, contains('app stderr'));
         if (!live) {
-          final incompatible = ExecutableProject(
-            root: project.root,
-            unit: project.unit,
-            entrypoints: project.entrypoints,
-            project: ResolvedProject(
-              unitName: project.project.unitName,
-              config: project.project.config,
-              pubspec: project.project.pubspec,
-              dartDefines: {'probe.identity': 'must not be dropped'},
-            ),
-          );
-          await expectLater(
-            provider.install(incompatible, null, (_) {}),
-            throwsA(
-              isA<InstallationFailure>().having(
-                (e) => e.remedy,
-                'remedy',
-                contains('--live'),
-              ),
-            ),
-          );
           // The bundled library still works without the source or hook cache.
           root.deleteSync(recursive: true);
           native.deleteSync(recursive: true);
@@ -159,7 +159,13 @@ Future<void> main(List<String> args) async {
           expect((jsonDecode(detached.$2) as Map)['native'], 41);
         }
       },
-      skip: Platform.isWindows,
+      skip: Platform.isWindows
+          ? 'native fixture needs a Unix compiler'
+          : !live &&
+                configured &&
+                Platform.environment['RK_DART_BUILD_TOOL'] == null
+          ? 'set RK_DART_BUILD_TOOL to exercise native assets with declarations'
+          : false,
       timeout: const Timeout(Duration(minutes: 3)),
     );
   }

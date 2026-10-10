@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The source-execution option is now `rk use local --clean`. It runs the
+  checkout directly; it does not delete build caches.
+
+- Compiled Local builds now support native hooks together with configured Dart
+  declarations, using the same optional SDK helper as native releases.
+- Binary archives and installations retain `THIRD_PARTY_NOTICES.txt` beside
+  their license and README when the application package supplies it.
+
 - `rk stage` and `rk release` carry Dart native code assets through signing,
   notarization, archives, GitHub installation and Homebrew. Dart hooks derive
   the library inventory; no library lists or application-specific plugin is
@@ -17,9 +25,8 @@
 
 - `rk use local` compiles the checkout for fast command startup. Run it again
   after source edits to rebuild; a failed build keeps the previous commands
-  usable. `--live` preserves direct source execution during development.
-  Local builds retain native hook libraries; hooks combined with configured
-  Dart defines currently require `--live` because of a Dart SDK limitation.
+  usable. `--clean` preserves direct source execution during development.
+  Local builds retain native hook libraries and configured Dart defines.
 
 - Binary archives use fixed gzip level 6: measured roughly three times
   faster than level 9, with about 0.2% larger archives on Keybay and rk.

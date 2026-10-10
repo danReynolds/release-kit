@@ -266,7 +266,7 @@ class DartCliBuilder {
           '$root/${BinaryArtifact.manifestName}',
         ).writeAsStringSync(artifact.manifest);
       }
-      return _finish(
+      return await _finish(
         platform,
         artifact,
         root,

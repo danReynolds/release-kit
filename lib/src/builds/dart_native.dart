@@ -112,8 +112,11 @@ Future<ToolResult> buildDartNative({
   required bool locked,
   String? helper,
   String? image,
+  bool separateAot = true,
 }) async {
-  final macos = platform.startsWith('macos-');
+  // Signed macOS releases separate the runtime and AOT module. Development
+  // snapshots use the SDK's ordinary executable bundle on every host.
+  final macos = platform.startsWith('macos-') && separateAot;
   List<String> arguments(String destination) => [
     if (macos) '--format=aot-snapshot',
     for (final name in defines.keys.toList()..sort())

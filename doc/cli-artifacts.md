@@ -96,6 +96,10 @@ an `@rpath/app.aot` install name, and the generated formula declares
 Homebrew 4.6.17 or later. The formula has no bottle, so Homebrew installs it as
 a source build and needs the Xcode Command Line Tools.
 
+The application package may supply `THIRD_PARTY_NOTICES.txt` beside its
+`LICENSE` and `README.md`. RK includes it in binary archives and preserves it
+through installation. It is documentation, never signed or loaded as code.
+
 ## One release contract
 
 `BinaryArtifact` describes the entry point, relative paths, modes and files that

@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../builds/capability.dart';
+import '../builds/dart_native.dart';
+import '../engine/stage_plan.dart';
 import '../engine/tools.dart';
 import 'model.dart';
 import 'provider.dart';
@@ -143,20 +146,26 @@ class LocalInstallationProvider implements InstallationProvider {
         progress('Compiling $name from this checkout…');
         final relative = '$name/bundle/bin/$name';
         final defines = project.project.dartDefines;
-        if (defines.isEmpty) {
-          // Let Dart build and bundle native hook outputs beside the executable.
-          await checked(tools, dartExecutable!, [
-            '--suppress-analytics',
-            'build',
-            'cli',
-            '--target',
-            'bin/$name.dart',
-            '--output',
-            '${build.path}/$name',
-          ], directory: project.directory);
+        if (defines.isEmpty ||
+            hasDartBuildHooks(project.directory, project.root)) {
+          final capabilities = HostCapabilities.detect();
+          final result = await buildDartNative(
+            tools: tools,
+            capabilities: capabilities,
+            compiler: DartSdk.resolveExecutable(dartExecutable!),
+            platform: capabilities.hostPlatform,
+            directory: project.directory,
+            repositoryRoot: project.root,
+            entryPoint: 'bin/$name.dart',
+            output: '${build.path}/$name',
+            defines: defines,
+            locked: dartBuildIsLocked(project.directory, project.root),
+            helper: Platform.environment['RK_DART_BUILD_TOOL'],
+            separateAot: false,
+          );
+          if (!result.ok) throw InstallationFailure(result.summary);
         } else {
-          // The SDK bundler does not accept -D. The ordinary compiler does;
-          // it also refuses hooks rather than silently omitting native assets.
+          // Pure Dart does not need the native-build helper for declarations.
           File('${build.path}/$relative').parent.createSync(recursive: true);
           await checked(tools, dartExecutable!, [
             '--suppress-analytics',
@@ -184,7 +193,7 @@ class LocalInstallationProvider implements InstallationProvider {
     } on InstallationFailure catch (error) {
       throw InstallationFailure(
         error.message,
-        '${error.remedy}\nFix the build and retry, or use rk use local --live to run source with Dart.',
+        '${error.remedy}\nFix the build and retry, or use rk use local --clean to run source with Dart.',
       );
     } finally {
       if (!complete) build.deleteSync(recursive: true);

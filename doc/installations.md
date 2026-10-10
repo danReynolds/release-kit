@@ -6,7 +6,7 @@ From a project with `release.toml`:
 rk use                          # compare sources and available updates
 rk use --list                   # inspect without opening the TUI
 rk use local                    # compile this checkout, then select it
-rk use local --live             # run source directly while editing
+rk use local --clean             # run source directly while editing
 rk install homebrew             # install without changing the selection
 rk install homebrew --latest    # install the latest compatible version
 rk use homebrew                 # select it; install first if missing
@@ -123,7 +123,7 @@ from any directory.
 
 | Source | When offered | Preparation and execution |
 | --- | --- | --- |
-| Local | Package declares executables | Resolve dependencies and compile this checkout; launch the compiled snapshot (`--live` runs source with Dart) |
+| Local | Package declares executables | Resolve dependencies and compile this checkout; launch the compiled snapshot (`--clean` runs source with Dart) |
 | Homebrew | Project publishes to Homebrew | Install the configured tap/formula with `--skip-link`; launch it through Homebrew's `opt` link, which follows upgrades |
 | Pub | Project publishes to pub.dev | Activate the package with `--no-executables`; run its native global activation |
 | GitHub | Project publishes native binaries through GitHub Releases | Download the latest stable release matching the unit's tag pattern and the current platform |
@@ -146,11 +146,11 @@ not pull source or check it for changes on every launch.
 
 `rk install local` builds without switching, keeping the currently selected
 copy usable. `rk use local` always rebuilds before selecting. Both accept
-`--live` to retain direct Dart source execution, where edits take effect on
+`--clean` to retain direct Dart source execution, where edits take effect on
 the next invocation. A live checkout counts as installed only while selected.
 The launched program keeps your working directory, arguments and stdio in
 both modes. Compiled programs see their executable as `Platform.script`;
-use `--live` for programs that require source-relative files or JIT features.
+use `--clean` for programs that require source-relative files or JIT features.
 `--list --json` identifies Local's `mode`, original `checkout`, installed
 `version`, and artifact `location`.
 
@@ -214,7 +214,7 @@ Compiled Local keeps working if source edits break compilation. A failed
 `rk use local` leaves the previous compiled commands selected. A successful
 rebuild retires older copies, except copies still used by any launcher.
 
-With `rk use local --live`, `rk` runs the source itself: while that checkout
+With `rk use local --clean`, `rk` runs the source itself: while that checkout
 does not compile, `rk use` cannot run to switch back. Fix the source, or run
 an already installed rk by its path from the checkout:
 
@@ -260,13 +260,16 @@ checks run when installations were built.
 
 Compiled Local uses `dart build cli` to bundle native libraries alongside each
 executable. The bundle remains usable if the checkout or hook cache moves.
-For configured Dart defines, RK uses `dart compile exe`, which supports `-D`
-but refuses hooks. The SDK's native bundler currently does not accept `-D`:
-projects needing both hooks and configured defines must use `--live`. Failed
-builds report the compiler diagnostic and the live-source remedy; RK never
-silently drops defines or native libraries.
+Projects with native hooks and configured Dart defines use the same hook-aware
+compiler selection as releases. Until the stock SDK supports declarations,
+install the matching [Dart build helper](../tool/dart_build_patch/README.md)
+and set `RK_DART_BUILD_TOOL` (or put `rk-dart-build` on PATH). Local snapshots
+use executable output on every platform; signed macOS releases retain their
+separate runtime and AOT module. Pure Dart projects can use `dart compile exe`
+for declarations without the helper. Failed builds leave the selected command
+usable and never silently drop declarations or native libraries.
 
-With `--live`, for a package whose resolved dependencies contain `hook/build.dart`, RK
+With `--clean`, for a package whose resolved dependencies contain `hook/build.dart`, RK
 starts Dart in the owning package so a cold launch prepares its native assets.
 A generated bootstrap then starts the original entrypoint in an isolate with
 the caller's working directory. Arguments, stdin, exit status and Platform.script

@@ -232,10 +232,14 @@ final class ArchiveReader {
       for (final file in artifact.files) file.path,
       'LICENSE',
       'README.md',
+      'THIRD_PARTY_NOTICES.txt',
     };
     for (final name in modes.keys) {
       if (!allowed.contains(name) ||
-          ((name == 'LICENSE' || name == 'README.md') && executable(name))) {
+          ((name == 'LICENSE' ||
+                  name == 'README.md' ||
+                  name == 'THIRD_PARTY_NOTICES.txt') &&
+              executable(name))) {
         throw FormatException('unexpected artifact file: $name');
       }
     }

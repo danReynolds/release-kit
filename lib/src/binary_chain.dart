@@ -371,10 +371,14 @@ class BinaryChain {
         ),
       );
     }
-    // LICENSE and README travel with the binary by convention, not by
+    // Documentation and dependency notices travel by convention, not by
     // configuration.
     final directory = project.directoryIn(repositoryRoot);
-    for (final extra in const ['LICENSE', 'README.md']) {
+    for (final extra in const [
+      'LICENSE',
+      'README.md',
+      'THIRD_PARTY_NOTICES.txt',
+    ]) {
       final file = File('$directory/$extra');
       if (file.existsSync()) {
         entries.add(ArchiveEntry(name: extra, bytes: file.readAsBytesSync()));
