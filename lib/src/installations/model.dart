@@ -94,6 +94,7 @@ class Installation {
     required this.commands,
     required this.location,
     this.checkout,
+    this.build,
     this.exportedPaths = const [],
   });
   final InstallationSource source;
@@ -101,6 +102,7 @@ class Installation {
 
   /// Original source directory of a compiled Local snapshot.
   final String? checkout;
+  final LocalBuildInfo? build;
   final Map<String, LaunchCommand> commands;
 
   /// Native package-manager entrypoints, used to detect active external installs.
@@ -114,12 +116,43 @@ class Installation {
     if (source == InstallationSource.local) ...{
       'mode': checkout == null ? 'live' : 'compiled',
       'checkout': checkout ?? location,
+      if (build != null) 'build': build!.toJson(),
     },
     'exported_paths': exportedPaths,
     'commands': {
       for (final entry in commands.entries) entry.key: entry.value.toJson(),
     },
   };
+}
+
+/// Build-time observations, never a freshness check against today's checkout.
+class LocalBuildInfo {
+  const LocalBuildInfo({required this.builtAt, this.commit, this.dirty});
+  final DateTime builtAt;
+  final String? commit;
+  final bool? dirty;
+
+  factory LocalBuildInfo.fromJson(Map<String, dynamic> json) => LocalBuildInfo(
+    builtAt: DateTime.parse(json['built_at'] as String),
+    commit: json['commit'] as String?,
+    dirty: json['dirty'] as bool?,
+  );
+
+  Map<String, Object?> toJson() => {
+    'built_at': builtAt.toUtc().toIso8601String(),
+    'commit': commit,
+    'dirty': dirty,
+  };
+
+  String get description => [
+    'Built ${builtAt.toUtc().toIso8601String().substring(0, 19).replaceFirst('T', ' ')} UTC',
+    if (commit != null) commit!.substring(0, commit!.length.clamp(0, 7)),
+    switch (dirty) {
+      true => 'dirty checkout',
+      false => 'clean checkout',
+      null => 'Git state unknown',
+    },
+  ].join(' · ');
 }
 
 class SourceInspection {
@@ -172,8 +205,14 @@ class ProjectInstallations {
 }
 
 class InstallationFailure implements Exception {
-  const InstallationFailure(this.message, [this.remedy = '']);
+  const InstallationFailure(this.message, [this.remedy = '']) : evidence = null;
+  const InstallationFailure.withEvidence(
+    this.message, {
+    this.remedy = '',
+    required this.evidence,
+  });
   final String message, remedy;
+  final String? evidence;
   @override
   String toString() => message;
 }

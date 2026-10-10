@@ -10,6 +10,7 @@ A terminal emulator supplies cursor reports and checks actual visible content.
 import argparse
 import codecs
 import fcntl
+import json
 import os
 from pathlib import Path
 import pty
@@ -231,6 +232,29 @@ def main():
         result = subprocess.check_output([str(home / 'data/rk/bin/orbit')], text=True)
         assert result.strip() == 'local dogfood'
         print('use: selected command runs; result retained; inline restored', flush=True)
+
+        for cause, expected in [('escape', 1), ('ctrl-c', 130)]:
+            home = root / f'failed-build-{cause}'
+            project = fixture(home, True)
+            (project / 'bin/orbit.dart').write_text(
+                'void main() { print(missingOne); print(missingTwo); }\n')
+            with Terminal(executable, 'use', project, home) as terminal:
+                terminal.activate('Use')
+                terminal.wait('Could not switch source', timeout=60)
+                if cause == 'ctrl-c':
+                    terminal.send(b'\x03')
+                else:
+                    terminal.send(b'\x1b')  # Error details back to the picker.
+                    terminal.wait('Choose what runs locally.')
+                    terminal.send(b'\x1b')
+                terminal.finish(expected)
+                assert 'Full tool output:' in terminal.text(), terminal.text()
+            diagnosis = next((project / '.rk/diagnosis').glob('*/run.json'))
+            report = json.loads(diagnosis.read_text())
+            assert report['exit'] == expected, report
+            evidence = report['attachments'][report['problems'][0]['evidence']]
+            assert 'missingOne' in evidence and 'missingTwo' in evidence, evidence
+        print('failed build: Escape and Ctrl+C retain full compiler output and exit status', flush=True)
 
         home = root / 'init'
         project = fixture(home, False)

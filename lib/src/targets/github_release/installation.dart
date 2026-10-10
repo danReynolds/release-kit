@@ -222,9 +222,10 @@ class GithubInstallationProvider implements InstallationProvider {
         timeout: const Duration(minutes: 2),
       );
       if (!smoke.ok || !smoke.stdout.contains(version)) {
-        throw InstallationFailure(
+        throw InstallationFailure.withEvidence(
           'The downloaded command did not report $version.',
-          smoke.summary,
+          remedy: smoke.summary,
+          evidence: smoke.transcript,
         );
       }
       temporary.renameSync(destination);

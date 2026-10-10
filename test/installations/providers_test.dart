@@ -229,6 +229,42 @@ void main() {
     },
   );
 
+  test('a downloaded command failure retains all of its output', () async {
+    final project = fixture(scratch, commands: ['orbit'], binary: true);
+    final store = InstallationStore(
+      '${scratch.path}/store',
+      const SystemTools(),
+    );
+    final provider = GithubInstallationProvider(
+      TestTools((exe, args, cwd, env) async {
+        expect(args, ['--version']);
+        return ToolResult(
+          exitCode: 1,
+          stdout: 'Loading native adapter.',
+          stderr: 'Missing native library.\nSearched installed bundle.',
+        );
+      }),
+      store,
+      'linux-x64',
+      fetch: FakeReleases(project, ['1.1.0']).fetch,
+    );
+    await expectLater(
+      provider.install(project, null, (_) {}),
+      throwsA(
+        isA<InstallationFailure>().having(
+          (e) => e.evidence,
+          'full output',
+          allOf(
+            contains('Loading native adapter.'),
+            contains('Missing native library.'),
+            contains('Searched installed bundle.'),
+          ),
+        ),
+      ),
+    );
+    expect((await provider.inspect(project)).installation, isNull);
+  });
+
   for (final native in [false, true]) {
     test(
       'GitHub installs and reuses every ${native ? 'native' : 'legacy'} bundle file',

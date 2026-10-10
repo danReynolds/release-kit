@@ -47,14 +47,7 @@ Future<void> installationMain(List<String> args, String command) async {
     code = await _run(args, command, output, json);
   } on Exception catch (error) {
     final failure = installationFailure(error);
-    output.problem(
-      Diagnostic(
-        code: 'RK-USE-001',
-        message: failure.message,
-        remedy: failure.remedy,
-      ),
-    );
-    code = ExitCodes.refused;
+    code = _reportFailure(output, failure);
   } on Object catch (error) {
     output.problem(
       Diagnostic(
@@ -70,6 +63,43 @@ Future<void> installationMain(List<String> args, String command) async {
   Timings.report(stderr);
   exitCode = code;
   if (json) stdout.write(output.report.encode(exit: code));
+}
+
+int _reportFailure(
+  Output output,
+  InstallationFailure failure, {
+  int code = ExitCodes.refused,
+}) {
+  output.problem(
+    Diagnostic(
+      code: 'RK-USE-001',
+      message: failure.message,
+      remedy: failure.remedy,
+      evidence: failure.evidence,
+    ),
+  );
+  if (failure.evidence != null) {
+    try {
+      final root = _installationRoot();
+      if (root != null) {
+        final at = output.report.writeDiagnosis(
+          root,
+          stamp: DateTime.now().toUtc().toIso8601String().replaceAll(':', '-'),
+          exit: code,
+        );
+        output.say('Full tool output: $at');
+      } else {
+        output.say(failure.evidence!);
+      }
+    } on FileSystemException {
+      // Keep the original failure useful even in a read-only checkout.
+      output.say(failure.evidence!);
+      output.say(
+        'Could not save the diagnosis; --json also includes the full output.',
+      );
+    }
+  }
+  return code;
 }
 
 /// What [args] ask of rk [command], with the first usage error among them.
@@ -145,6 +175,25 @@ _arguments(List<String> args, String command) {
   );
 }
 
+String? _installationRoot() {
+  Directory? directory = Directory.current.absolute;
+  String? root;
+  while (directory != null) {
+    if (File('${directory.path}/release.toml').existsSync()) {
+      root = directory.resolveSymbolicLinksSync();
+      break;
+    }
+    // Do not cross a nested repository into another application's config.
+    if (FileSystemEntity.typeSync('${directory.path}/.git') !=
+        FileSystemEntityType.notFound) {
+      break;
+    }
+    final parent = directory.parent;
+    directory = parent.path == directory.path ? null : parent;
+  }
+  return root;
+}
+
 Future<int> _run(
   List<String> args,
   String command,
@@ -172,21 +221,7 @@ Future<int> _run(
       'Installation switching currently supports macOS and Linux.',
     );
   }
-  Directory? directory = Directory.current.absolute;
-  String? root;
-  while (directory != null) {
-    if (File('${directory.path}/release.toml').existsSync()) {
-      root = directory.resolveSymbolicLinksSync();
-      break;
-    }
-    // Do not cross a nested repository into another application's config.
-    if (FileSystemEntity.typeSync('${directory.path}/.git') !=
-        FileSystemEntityType.notFound) {
-      break;
-    }
-    final parent = directory.parent;
-    directory = parent.path == directory.path ? null : parent;
-  }
+  final root = _installationRoot();
   if (root == null) {
     throw const InstallationFailure(
       'No rk setup found in this directory.',
@@ -330,8 +365,14 @@ Future<int> _run(
     for (final message in outcomes) {
       _result(output, message);
     }
+    if (result.failure case final failure?) {
+      return _reportFailure(
+        output,
+        failure,
+        code: result.exitCode == 0 ? ExitCodes.refused : result.exitCode,
+      );
+    }
     if (result.exitCode != 0) return result.exitCode;
-    if (result.failure case final failure?) throw InstallationFailure(failure);
     if (outcomes.isEmpty) output.say('No installations changed.');
   } else if (source == null) {
     _list(output, states);
@@ -407,6 +448,9 @@ void _list(Output output, List<ProjectInstallations> states) {
           depth: 2,
           role: VisualRole.secondary,
         );
+        if (e.value.installation!.build case final build?) {
+          output.line(build.description, depth: 2, role: VisualRole.secondary);
+        }
       }
     }
     for (final problem in state.routing) {

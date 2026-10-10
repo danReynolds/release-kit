@@ -57,6 +57,7 @@ class UsePicker extends Notifier {
   bool get busy => _queue.isNotEmpty;
   bool failed = false, closing = false, _disposed = false;
   String message = '';
+  InstallationFailure? failure;
   ({String title, String body})? details;
   final outcomes = <String>[];
 
@@ -256,6 +257,7 @@ class UsePicker extends Notifier {
   Future<bool> _perform(Operation operation) async {
     final wording = _wording(operation);
     failed = false;
+    failure = null;
     message = wording.footer;
     notify();
     void progress(String value) {
@@ -268,7 +270,10 @@ class UsePicker extends Notifier {
       outcomes.add(message);
     } on Object catch (error) {
       failed = true;
-      message = _describe(error);
+      failure = error is Exception
+          ? installationFailure(error)
+          : InstallationFailure('$error');
+      message = _describe(failure!);
     }
     // A final single-project switch needs no further scan before restoring the
     // terminal. Queued operations must still drain before a successful close.
@@ -291,7 +296,13 @@ class UsePicker extends Notifier {
     if (failed && !closing) {
       if (_queue.length > 1) message += '\nQueued actions cancelled.';
       removal = null;
-      details = (title: failureTitle, body: message);
+      details = (
+        title: failureTitle,
+        body: [
+          message,
+          if (failure?.evidence case final evidence?) evidence,
+        ].join('\n\n'),
+      );
       // Resolve a failure before starting another queued mutation.
       _cancelQueued();
     }
@@ -356,7 +367,7 @@ String _describe(Object error) {
 
 /// Runs the picker until it closes. [failure] is the last operation's error
 /// when it closed on one.
-Future<({int exitCode, String? failure})> runUsePicker({
+Future<({int exitCode, InstallationFailure? failure})> runUsePicker({
   required List<ProjectInstallations> states,
   required Future<List<ProjectInstallations>> Function() refresh,
   required Future<AvailableInstallation> Function(
@@ -382,7 +393,15 @@ Future<({int exitCode, String? failure})> runUsePicker({
       interrupt: model.interrupt,
       mouse: true,
     );
-    return (exitCode: code, failure: model.failed ? model.message : null);
+    return (
+      exitCode: code,
+      failure: model.failed
+          ? InstallationFailure.withEvidence(
+              model.message,
+              evidence: model.failure?.evidence,
+            )
+          : null,
+    );
   } finally {
     model.dispose();
   }
@@ -721,6 +740,15 @@ class _UseScreenState extends State<UseScreen> {
                     const MatrixRule(),
                     for (final source in state.sources.keys) ...[
                       _layout(state, source, wide),
+                      if (state.sources[source]?.installation?.build
+                          case final build?)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 2),
+                          child: Text(
+                            terminalSafeText(build.description),
+                            style: mutedText,
+                          ),
+                        ),
                       if (state.sources[source]?.problem case final problem?)
                         Padding(
                           padding: const EdgeInsets.only(left: 2),
