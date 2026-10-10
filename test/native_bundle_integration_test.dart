@@ -52,6 +52,7 @@ dev_dependencies:
         ..writeAsStringSync(
           "void main() => throw StateError('development hook must not run');\n",
         );
+      Directory('${root.path}/built').createSync();
       final built =
           await DartCliBuilder(
             tools: const SystemTools(),
