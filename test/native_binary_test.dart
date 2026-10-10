@@ -214,6 +214,9 @@ void main() {
   test(
     'a native build records, signs, notarizes and archives its actual inventory',
     () async {
+      File(
+        '${root.path}/THIRD_PARTY_NOTICES.txt',
+      ).writeAsStringSync('Native notices');
       final diagnostics = Diagnostics();
       final config = ReleaseConfig.parse(
         '''
@@ -309,6 +312,16 @@ binary_platforms = ["macos-arm64"]
         archive.files['lib/probe/lib/libanswer.dylib'],
         utf8.encode('LIBRARY'),
       );
+      expect(
+        archive.files['THIRD_PARTY_NOTICES.txt'],
+        utf8.encode('Native notices'),
+      );
+      final unpacked = Directory('${root.path}/unpacked')..createSync();
+      archive.extractTo(unpacked);
+      expect(
+        File('${unpacked.path}/THIRD_PARTY_NOTICES.txt').readAsStringSync(),
+        'Native notices',
+      );
       for (final piece in release.work) {
         if (piece == release.barrier ||
             stage.receipt!.producers.containsKey(piece.name)) {
@@ -327,6 +340,36 @@ binary_platforms = ["macos-arm64"]
         reason:
             'completed stages verify the public archive, not unpacked libraries',
       );
+    },
+  );
+
+  test(
+    'compiled Local preserves declarations with executable native output',
+    () async {
+      final tools = RecordingTools();
+      await buildDartNative(
+        tools: tools,
+        capabilities: HostCapabilities(
+          hostPlatform: 'macos-arm64',
+          containerRuntime: null,
+        ),
+        compiler: '/sdk/bin/dart',
+        platform: 'macos-arm64',
+        directory: root.path,
+        repositoryRoot: root.path,
+        entryPoint: 'bin/probe.dart',
+        output: '${root.path}/local',
+        defines: {'identity': 'configured=value'},
+        locked: true,
+        helper: '/helper/rk-dart-build',
+        separateAot: false,
+      );
+      expect(
+        tools.calls.single,
+        contains('/helper/rk-dart-build /sdk -Didentity=configured=value'),
+      );
+      expect(tools.calls.single, isNot(contains('--format=aot-snapshot')));
+      expect(tools.calls.single, isNot(contains('compile exe')));
     },
   );
 

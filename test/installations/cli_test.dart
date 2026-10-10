@@ -38,9 +38,9 @@ void main() {
         ['use', 'local', 'extra'],
         ['use', 'pub', '--latest'],
         ['install', 'pub', '--yes'],
-        ['use', 'pub', '--live'],
-        ['use', '--live'],
-        ['uninstall', 'local', '--live'],
+        ['use', 'pub', '--clean'],
+        ['use', '--clean'],
+        ['uninstall', 'local', '--clean'],
       ]) {
         expect(rk(project.directory, args).code, 2, reason: '$args');
       }
@@ -103,6 +103,24 @@ void main() {
       expect(result.stdout, contains('dogfood'));
     },
   );
+
+  test('--clean selects source execution and observes the next edit', () async {
+    final project = fixture(scratch, commands: ['orbit']);
+    final used = rk(project.directory, ['use', 'local', '--clean']);
+    expect(used.code, 0, reason: used.all);
+    final state = installations(used)['projects'].single;
+    expect(state['sources']['local']['mode'], 'live');
+    File(
+      '${project.directory}/bin/orbit_main.dart',
+    ).writeAsStringSync("void main() => print('edited after selection');");
+    final launched = await Process.run(
+      '${installations(used)['managed_bin']}/orbit',
+      [],
+      environment: environment,
+    );
+    expect(launched.exitCode, 0, reason: '${launched.stderr}');
+    expect(launched.stdout, 'edited after selection\n');
+  });
 
   test('a changelog rk cannot read is no installation\'s business', () {
     final project = fixture(scratch);

@@ -329,7 +329,7 @@ manifest of what was built.
 ```sh
 rk use                     # compare installed and available versions; choose a source
 rk use local               # compile and select this checkout; rerun after edits
-rk use local --live        # run source directly; edits work on the next run
+rk use local --clean        # run source directly; edits work on the next run
 rk install pub             # prepare without switching
 rk use --list              # sources, installation state and PATH resolution
 ```
