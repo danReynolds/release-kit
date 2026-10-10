@@ -236,15 +236,22 @@ final class StageRun {
 /// warnings a reused stage says again; or that it failed, having said why,
 /// and why the stage stops.
 final class Produced {
-  const Produced({this.evidence = const {}, this.warnings = const []})
-    : halt = null;
+  const Produced({
+    this.evidence = const {},
+    this.warnings = const [],
+    this.outputs,
+  }) : halt = null;
 
   const Produced.failed([Stop this.halt = Stop.partway])
     : evidence = const {},
-      warnings = const [];
+      warnings = const [],
+      outputs = null;
 
   final Map<String, Object?> evidence;
   final List<Diagnostic> warnings;
+
+  /// The actual inventory when a builder produces more than the planned files.
+  final List<String>? outputs;
   final Stop? halt;
 
   bool get ok => halt == null;

@@ -8,7 +8,7 @@ there is no single-file versus bundle setting to maintain.
 | Linux x64 / ARM64 | One compiled executable | `tool …` |
 | macOS ARM64 | Native launcher, matching Dart runtime, signed AOT module | `tool …` |
 
-Linux uses `dart compile exe`. macOS uses `dart compile aot-snapshot` and
+Without native hooks, Linux uses `dart compile exe`. macOS uses `dart compile aot-snapshot` and
 copies `dartaotruntime` from that same SDK. It needs Xcode command-line tools
 to compile the small launcher. A macOS archive looks like this:
 
@@ -28,6 +28,66 @@ arguments, environment, process identity, signals and exit status. Keep the
 extracted directory together when installing manually. Homebrew installs the
 archive under `libexec` and links the command into `bin`; the same installation
 rule works for Linux's single executable.
+
+## Dart native code assets
+
+When the package or a resolved production dependency has `hook/build.dart`, rk
+uses `dart build cli`
+from the staged package. Dart runs the hooks and supplies the application and
+native libraries. rk preserves their relative paths and generates a schema-2
+`rk-artifact.json` from the build output. There is no library list to maintain
+in `release.toml`. Packages without hooks retain their existing layouts, and
+schema-1 archives and stages remain readable.
+
+Native Linux bundles contain `bin/tool`, `lib/<generated libraries>` and the
+manifest. macOS retains its signed launcher and separate runtime:
+
+```text
+tool
+lib/tool/bin/dartaotruntime
+lib/tool/bin/app.aot
+lib/tool/lib/<generated libraries>
+lib/tool/LICENSE.dart
+rk-artifact.json
+```
+
+The copied runtime has an `@executable_path/..` rpath so Dart finds those
+libraries after installation. Homebrew preserves the complete directory under
+`libexec` and links either the root launcher or `bin/tool`. GitHub installation
+uses the manifest's entry point. Manual installs must keep the bundle together.
+
+The machine needs a compatible build environment for each native target:
+
+- Install the native tools and libraries required by the package hooks. rk
+  resolves dependencies with `pub get --enforce-lockfile` when the staged
+  package or workspace contains a lockfile. Commit that lockfile for locked
+  releases; otherwise Pub performs normal resolution.
+- Until Dart supports both separate AOT output and compile-time declarations
+  in `build cli`, macOS native releases need the matching
+  [temporary build helper](../tool/dart_build_patch/README.md). Set
+  `RK_DART_BUILD_TOOL=/path/to/rk-dart-build`, or place it on `PATH`. Use the
+  stock Dart 3.13.5 SDK that helper requires for rk's compiler. An upstream SDK
+  exposing the required options will be used directly when no override is set.
+- To build native Linux targets from another OS or architecture, start Docker
+  or Podman and set `RK_DART_BUILD_IMAGE` to an image containing Dart and the
+  package's hook prerequisites. `{arch}` in the name expands to `amd64` or
+  `arm64`, for example `my-dart-build:{arch}`. With current Dart, an image also
+  needs `rk-dart-build` on `PATH` when the project supplies Dart declarations.
+  Each target builds in its own staged repository copy, using the selected
+  platform and an independent container Pub cache. On Linux hosts it runs as
+  the operator's UID/GID, with a temporary writable home/cache; Podman also
+  uses its `keep-id` user namespace. The image must support
+  `sh`, `grep`, and `readlink -f`. Pin images for reproducible build environments.
+
+These are machine settings, not application-specific RK configuration. Once
+prepared, the workflow remains `rk stage <unit>` and `rk release <unit>`.
+Missing native build environments fail the build with a remedy; rk does not
+silently try Dart's pure-code cross-compiler for native hooks.
+
+The smoke test still invokes the application's `--version`; it is not a
+functional native-adapter test. Applications should additionally exercise a
+native call from a relocated archive with development libraries unavailable.
+RK's integration fixture does this on each qualified target.
 
 Homebrew rewrites each library's install name to its keg path and re-signs the
 library ad hoc, which the signed runtime would refuse. The module therefore has
@@ -54,8 +114,8 @@ Previous single-file rk archives remain readable as the signing baseline.
 
 Library validation admits any library signed by the same team, so a signed
 runtime would otherwise run any module signed with that team's certificates.
-rk signs the module first, then signs the runtime with a library load
-constraint that admits only the module's code directory hash. macOS's own
+rk signs the module and all bundled native libraries first, then signs the runtime with a library load
+constraint that admits their code directory hashes. macOS's own
 libraries are exempt. codesign refuses a constraint it cannot evaluate, the
 signed smoke test proves the module still loads, and the receipt records both
 hashes. The pin protects runtimes signed from this change on. A runtime
@@ -67,6 +127,12 @@ the program identity would stop the release.
 
 rk runs the signed command and notarizes the whole payload. The archive holds
 the signed files byte for byte, and the receipt binds every companion file.
+The artifact manifest stores paths, modes and signing roles, without a second
+hash inventory. Final signed outputs enter the existing stage receipt once;
+resuming an interrupted stage checks those recorded files. A completed stage
+checks its public archives, without rehashing expanded libraries. Same-run
+hash reuse remains in place, and command startup gains no new file hashing.
+
 The stage is named by the commit and the unit's configuration, not by the
 Dart SDK or Xcode tools that built it, so updating either does not orphan a
 stage that a partly published release still needs.

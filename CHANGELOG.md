@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+- `rk stage` and `rk release` carry Dart native code assets through signing,
+  notarization, archives, GitHub installation and Homebrew. Dart hooks derive
+  the library inventory; no library lists or application-specific plugin is
+  needed. Native cross-target builds use an operator-supplied Linux image.
+  See [CLI artifacts](doc/cli-artifacts.md) for the temporary SDK helper and
+  build environment requirements. Existing stage hashing and reuse boundaries
+  remain unchanged.
+
 - An opt-in [Dart native-build preview](tool/dart_build_patch/README.md) carries
   the SDK patch for compile-time declarations and separate AOT output while
   upstream support is pending. It uses stock Dart 3.13.5 on macOS ARM64;
-  native bundle support in `rk stage` and `rk release` remains separate work.
+  the source helper can also be rebuilt for Linux ARM64 and x64.
 
 - `rk use local` compiles the checkout for fast command startup. Run it again
   after source edits to rebuild; a failed build keeps the previous commands

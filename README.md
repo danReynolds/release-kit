@@ -34,7 +34,9 @@ it finishes a release that stopped anywhere, and publishes nothing twice.
   set, as git does; a signing key alone does not sign it.
 - **Final bytes checked.** Linux executables and macOS Dart bundles use one
   artifact contract. Every macOS code file is signed, and the installed
-  command is run before it is archived. See [CLI artifacts](doc/cli-artifacts.md)
+  command is run before it is archived. Dart dependency hooks supply native
+  libraries automatically, carried intact through installation.
+  See [CLI artifacts](doc/cli-artifacts.md)
   for layouts, signing and compile-time metadata.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.

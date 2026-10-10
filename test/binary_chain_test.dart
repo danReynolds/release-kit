@@ -258,14 +258,17 @@ void main() {
 
       expect(outcome.ok, isTrue, reason: outcome.problem);
       expect(
-        tools.calls.first,
+        tools.calls.firstWhere((call) => call.contains(' compile ')),
         startsWith('${sdk.path}/dart compile aot-snapshot'),
       );
       expect(
         File('${buildRoot.path}/lib/keybay/dartaotruntime').readAsStringSync(),
         'RUNTIME',
       );
-      expect(tools.calls.first, isNot(contains('--target-os')));
+      expect(
+        tools.calls.firstWhere((call) => call.contains(' compile ')),
+        isNot(contains('--target-os')),
+      );
       expect(tools.timeouts.last, const Duration(minutes: 2));
     });
 
@@ -293,8 +296,14 @@ void main() {
             );
 
         expect(outcome.ok, isTrue, reason: outcome.problem);
-        expect(tools.calls.first, contains('--target-os=linux'));
-        expect(tools.calls.first, contains('--target-arch=x64'));
+        expect(
+          tools.calls.firstWhere((call) => call.contains(' compile ')),
+          contains('--target-os=linux'),
+        );
+        expect(
+          tools.calls.firstWhere((call) => call.contains(' compile ')),
+          contains('--target-arch=x64'),
+        );
         expect(tools.calls.last, contains('docker run'));
         expect(tools.timeouts.last, const Duration(minutes: 2));
       },
@@ -446,8 +455,14 @@ void main() {
 
       expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
       expect(outcome.unproven, contains('container runtime'));
-      expect(tools.calls.first, contains('--target-os=linux'));
-      expect(tools.calls.first, contains('--target-arch=x64'));
+      expect(
+        tools.calls.firstWhere((call) => call.contains(' compile ')),
+        contains('--target-os=linux'),
+      );
+      expect(
+        tools.calls.firstWhere((call) => call.contains(' compile ')),
+        contains('--target-arch=x64'),
+      );
       expect(
         tools.calls.any((c) => c.contains('--version')),
         isFalse,

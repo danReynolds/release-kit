@@ -31,6 +31,16 @@ void main() {
       for (final artifact in [
         BinaryArtifact.single('orbit'),
         BinaryArtifact.dartBundle('orbit'),
+        BinaryArtifact.nativeBundle(
+          'orbit',
+          macos: true,
+          libraries: ['libnative.dylib'],
+        ),
+        BinaryArtifact.nativeBundle(
+          'orbit',
+          macos: false,
+          libraries: ['libnative.so'],
+        ),
       ]) {
         final encoded = ArchiveBuilder.gzip(
           ArchiveBuilder.tar([
@@ -90,11 +100,19 @@ void main() {
           ArchiveEntry(name: 'orbit', bytes: [1]),
         ],
       ]) {
+        // Build deliberately unsafe input independently of RK's writer,
+        // which now refuses unsafe names before creating an archive.
+        final malformed = OutputMemoryStream();
+        final encoder = TarEncoder()..start(malformed);
+        for (final file in files) {
+          encoder.add(
+            ArchiveFile(file.name, file.bytes.length, file.bytes)
+              ..mode = file.executable ? 0x1ed : 0x1a4,
+          );
+        }
+        encoder.finish();
         await expectLater(
-          decodeInstallationArchive(
-            ArchiveBuilder.gzip(ArchiveBuilder.tar(files)),
-            'orbit',
-          ),
+          decodeInstallationArchive(gzip.encode(malformed.getBytes()), 'orbit'),
           throwsA(isA<InstallationFailure>()),
         );
       }
@@ -211,50 +229,73 @@ void main() {
     },
   );
 
-  test('GitHub installs every bundle file with its validated mode', () async {
-    final project = fixture(scratch, commands: ['orbit'], binary: true);
-    final artifact = BinaryArtifact.dartBundle('orbit');
-    final entries = [
-      for (final file in artifact.files)
-        ArchiveEntry(
-          name: file.path,
-          executable: file.executable,
-          bytes: utf8.encode(
-            file.path == BinaryArtifact.manifestName
-                ? artifact.manifest
-                : file.path == 'orbit'
-                ? '#!/bin/sh\nprintf "1.1.0\\n"\n'
-                : 'bundle fixture',
+  for (final native in [false, true]) {
+    test(
+      'GitHub installs and reuses every ${native ? 'native' : 'legacy'} bundle file',
+      () async {
+        final project = fixture(scratch, commands: ['orbit'], binary: true);
+        final artifact = native
+            ? BinaryArtifact.nativeBundle(
+                'orbit',
+                macos: false,
+                libraries: ['libnative.so'],
+              )
+            : BinaryArtifact.dartBundle('orbit');
+        final entries = [
+          for (final file in artifact.files)
+            ArchiveEntry(
+              name: file.path,
+              executable: file.executable,
+              bytes: utf8.encode(
+                file.path == BinaryArtifact.manifestName
+                    ? artifact.manifest
+                    : file.path == artifact.entryPoint
+                    ? '#!/bin/sh\nprintf "1.1.0\\n"\n'
+                    : 'bundle fixture',
+              ),
+            ),
+          ArchiveEntry(name: 'LICENSE', bytes: utf8.encode('license')),
+          ArchiveEntry(name: 'README.md', bytes: utf8.encode('readme')),
+        ];
+        final bytes = Uint8List.fromList(
+          ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)),
+        );
+        final provider = GithubInstallationProvider(
+          const SystemTools(),
+          InstallationStore('${scratch.path}/store', const SystemTools()),
+          native ? 'linux-x64' : 'macos-arm64',
+          fetch: (_, __, {check}) async => bytes,
+        );
+        final installed = await provider.install(
+          project,
+          AvailableInstallation(
+            '1.1.0',
+            url: Uri.parse('https://example.invalid/orbit.tar.gz'),
+            size: bytes.length,
+            sha256: Sha256.hex(bytes),
           ),
-        ),
-      ArchiveEntry(name: 'LICENSE', bytes: utf8.encode('license')),
-      ArchiveEntry(name: 'README.md', bytes: utf8.encode('readme')),
-    ];
-    final bytes = Uint8List.fromList(
-      ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)),
+          (_) {},
+        );
+        expect(
+          installed.commands['orbit']!.executable,
+          '${installed.location}/${artifact.entryPoint}',
+        );
+        final inspected = await provider.inspect(project);
+        expect(
+          inspected.installation!.commands['orbit']!.executable,
+          installed.commands['orbit']!.executable,
+        );
+        for (final entry in entries) {
+          final file = File('${installed.location}/${entry.name}');
+          expect(file.readAsBytesSync(), entry.bytes);
+          expect(
+            file.statSync().mode & 0x1ff,
+            entry.executable ? 0x1ed : 0x1a4,
+          );
+        }
+      },
     );
-    final provider = GithubInstallationProvider(
-      const SystemTools(),
-      InstallationStore('${scratch.path}/store', const SystemTools()),
-      'macos-arm64',
-      fetch: (_, __, {check}) async => bytes,
-    );
-    final installed = await provider.install(
-      project,
-      AvailableInstallation(
-        '1.1.0',
-        url: Uri.parse('https://example.invalid/orbit.tar.gz'),
-        size: bytes.length,
-        sha256: Sha256.hex(bytes),
-      ),
-      (_) {},
-    );
-    for (final entry in entries) {
-      final file = File('${installed.location}/${entry.name}');
-      expect(file.readAsBytesSync(), entry.bytes);
-      expect(file.statSync().mode & 0x1ff, entry.executable ? 0x1ed : 0x1a4);
-    }
-  });
+  }
 
   test(
     'Pub recognizes hosted activations and refuses path activations',

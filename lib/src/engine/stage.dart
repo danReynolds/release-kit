@@ -225,6 +225,7 @@ final class Stage {
     Work work, {
     Map<String, Object?> evidence = const {},
     Iterable<Diagnostic> warnings = const [],
+    Iterable<String>? outputs,
   }) {
     final progress = _receipt;
     if (progress == null || progress.complete) {
@@ -234,7 +235,10 @@ final class Stage {
       progress.recording(
         work.name,
         {...evidence, ...Receipt.keeping(warnings)},
-        {for (final file in work.outputs) file: _capture(file, work.name)},
+        {
+          for (final file in outputs ?? work.outputs)
+            file: _capture(file, work.name),
+        },
       ),
     );
   }

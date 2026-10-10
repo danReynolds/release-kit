@@ -5,6 +5,7 @@ import '../engine/tools.dart';
 import 'binary_artifact.dart';
 import 'capability.dart';
 import 'dart_launcher.dart';
+import 'dart_native.dart';
 
 /// Builds a Dart executable for one platform, and runs what it produced.
 ///
@@ -17,6 +18,8 @@ class DartCliBuilder {
     required this.tools,
     required this.capabilities,
     this.compilerExecutable = 'dart',
+    this.nativeBuildTool,
+    this.nativeBuildImage,
   });
 
   final Tools tools;
@@ -24,6 +27,8 @@ class DartCliBuilder {
 
   /// The SDK's `dart`; beside it, the runtime a bundle ships.
   final String compilerExecutable;
+  final String? nativeBuildTool;
+  final String? nativeBuildImage;
 
   /// Compiles [entryPoint] for [platform], writing to [output].
   Future<BuildOutcome> build({
@@ -31,6 +36,7 @@ class DartCliBuilder {
     required String entryPoint,
     required String output,
     required String workingDirectory,
+    String? repositoryRoot,
     required String expectedVersion,
     Map<String, String> defines = const {},
     void Function(DartBuildEvent event)? onProgress,
@@ -38,6 +44,34 @@ class DartCliBuilder {
     // The caller refuses an unproducible platform with a diagnostic before
     // reaching here, so this asks only *how* to produce it.
     final capability = capabilities.resolve(platform);
+    final sourceRoot = repositoryRoot ?? workingDirectory;
+    final locked = dartBuildIsLocked(workingDirectory, sourceRoot);
+    if (dartBuildFile(workingDirectory, sourceRoot, 'pubspec.yaml') != null) {
+      final resolved = await tools.run(compilerExecutable, [
+        'pub',
+        'get',
+        if (locked) '--enforce-lockfile',
+      ], workingDirectory: workingDirectory);
+      if (!resolved.ok) {
+        return BuildOutcome.failed(
+          resolved.summary,
+          transcript: resolved.transcript,
+        );
+      }
+    }
+    if (hasDartBuildHooks(workingDirectory, sourceRoot)) {
+      return _buildNative(
+        platform: platform,
+        entryPoint: entryPoint,
+        output: output,
+        directory: workingDirectory,
+        repositoryRoot: sourceRoot,
+        expectedVersion: expectedVersion,
+        defines: defines,
+        locked: locked,
+        onProgress: onProgress,
+      );
+    }
 
     final target = _target(platform);
     final artifact = BinaryArtifact.forPlatform(_fileNameOf(output), platform);
@@ -103,6 +137,19 @@ class DartCliBuilder {
       }
     }
 
+    return _finish(platform, artifact, root, expectedVersion, onProgress);
+  }
+
+  Future<BuildOutcome> _finish(
+    String platform,
+    BinaryArtifact artifact,
+    String root,
+    String expectedVersion,
+    void Function(DartBuildEvent)? onProgress, {
+    String? image,
+  }) async {
+    final capability = capabilities.resolve(platform);
+    final output = '$root/${artifact.entryPoint}';
     // Another platform's binary runs in a container, when one answers.
     final runtime =
         capability.capability == Capability.native || !capability.canProve
@@ -115,6 +162,7 @@ class DartCliBuilder {
       return BuildOutcome.built(
         output,
         unproven: capability.reason ?? noContainerRuntime,
+        artifact: artifact,
       );
     }
 
@@ -122,12 +170,121 @@ class DartCliBuilder {
     final smoke = await _smokeTest(
       platform: platform,
       binary: output,
+      root: root,
       runtime: runtime,
+      image: image,
       expectedVersion: expectedVersion,
     );
     if (smoke != null) return smoke;
 
-    return BuildOutcome.built(output);
+    return BuildOutcome.built(output, artifact: artifact);
+  }
+
+  Future<BuildOutcome> _buildNative({
+    required String platform,
+    required String entryPoint,
+    required String output,
+    required String directory,
+    required String repositoryRoot,
+    required String expectedVersion,
+    required Map<String, String> defines,
+    required bool locked,
+    void Function(DartBuildEvent)? onProgress,
+  }) async {
+    final scratch = Directory.systemTemp.createTempSync('rk-native-build-');
+    try {
+      final compiler = compilerExecutable == 'dart'
+          ? DartSdk.ambient().executable
+          : compilerExecutable;
+      final image =
+          (nativeBuildImage ?? Platform.environment['RK_DART_BUILD_IMAGE'])
+              ?.replaceAll(
+                '{arch}',
+                platform.endsWith('-x64') ? 'amd64' : 'arm64',
+              );
+      final result = await buildDartNative(
+        tools: tools,
+        capabilities: capabilities,
+        compiler: compiler,
+        platform: platform,
+        directory: directory,
+        repositoryRoot: repositoryRoot,
+        entryPoint: entryPoint,
+        output: '${scratch.path}/build',
+        defines: defines,
+        locked: locked,
+        helper: nativeBuildTool ?? Platform.environment['RK_DART_BUILD_TOOL'],
+        image: image,
+      );
+      if (!result.ok) {
+        return BuildOutcome.failed(
+          result.summary,
+          transcript: result.transcript,
+        );
+      }
+      final macos = platform.startsWith('macos-');
+      final bundle = '${scratch.path}/build/bundle';
+      final sourceName = _fileNameOf(
+        entryPoint,
+      ).replaceFirst(RegExp(r'\.dart$'), '');
+      final sourceEntry = 'bin/$sourceName${macos ? '.aot' : ''}';
+      final libraries = dartNativeLibraries(bundle, sourceEntry);
+      final artifact = BinaryArtifact.nativeBundle(
+        _fileNameOf(output),
+        macos: macos,
+        libraries: libraries,
+      );
+      final root = _directoryOf(output);
+      void copy(String from, String to) {
+        final target = File('$root/$to')..parent.createSync(recursive: true);
+        File('$bundle/$from').copySync(target.path);
+      }
+
+      copy(sourceEntry, macos ? artifact.module : artifact.entryPoint);
+      for (final name in libraries) {
+        copy(
+          'lib/$name',
+          macos ? 'lib/${artifact.command}/lib/$name' : 'lib/$name',
+        );
+      }
+      if (macos) {
+        final named = await tools.run('/usr/bin/install_name_tool', [
+          '-id',
+          '@rpath/app.aot',
+          '$root/${artifact.module}',
+        ]);
+        if (!named.ok) {
+          return BuildOutcome.failed(
+            named.summary,
+            transcript: named.transcript,
+          );
+        }
+        final assembled = await _assembleBundle(artifact, root);
+        if (assembled != null) return assembled;
+      } else {
+        File(
+          '$root/${BinaryArtifact.manifestName}',
+        ).writeAsStringSync(artifact.manifest);
+      }
+      return _finish(
+        platform,
+        artifact,
+        root,
+        expectedVersion,
+        onProgress,
+        image: image,
+      );
+    } on FileSystemException catch (error) {
+      return BuildOutcome.failed(
+        'the native Dart bundle could not be assembled: $error',
+      );
+    } on FormatException catch (error) {
+      return BuildOutcome.failed('$error');
+    } on DartSdkUnavailable catch (error) {
+      return BuildOutcome.failed('$error');
+    } finally {
+      if (scratch.existsSync()) scratch.deleteSync(recursive: true);
+    }
   }
 
   Future<BuildOutcome?> _assembleBundle(
@@ -145,10 +302,38 @@ class DartCliBuilder {
     File(
       '${File(compiler).parent.parent.path}/LICENSE',
     ).copySync('$root/lib/${artifact.entryPoint}/LICENSE.dart');
+    if (artifact.layout == 'dart-aot-native') {
+      final rpath = await tools.run('/usr/bin/install_name_tool', [
+        '-add_rpath',
+        '@executable_path/..',
+        '$root/${artifact.identityFile}',
+      ]);
+      if (!rpath.ok) {
+        return BuildOutcome.failed(rpath.summary, transcript: rpath.transcript);
+      }
+      final signed = await tools.run('/usr/bin/codesign', [
+        '--force',
+        '--sign',
+        '-',
+        '$root/${artifact.identityFile}',
+      ]);
+      if (!signed.ok) {
+        return BuildOutcome.failed(
+          signed.summary,
+          transcript: signed.transcript,
+        );
+      }
+    }
     final scratch = Directory.systemTemp.createTempSync('rk-dart-launcher-');
     final source = File('${scratch.path}/launcher.c');
     try {
-      source.writeAsStringSync(dartLauncherSource(artifact.entryPoint));
+      source.writeAsStringSync(
+        dartLauncherSource(
+          artifact.command,
+          runtimePath: artifact.identityFile,
+          modulePath: artifact.module,
+        ),
+      );
       // Xcode's clang shim finds the SDK itself.
       final launcher = await tools.run('/usr/bin/clang', [
         '-O2',
@@ -182,7 +367,9 @@ class DartCliBuilder {
   Future<BuildOutcome?> _smokeTest({
     required String platform,
     required String binary,
+    required String root,
     required String? runtime,
+    String? image,
     required String expectedVersion,
   }) async {
     final ToolResult result;
@@ -198,9 +385,9 @@ class DartCliBuilder {
         '--platform',
         'linux/${target.arch == 'x64' ? 'amd64' : 'arm64'}',
         '-v',
-        '${_directoryOf(binary)}:/w:ro',
-        'debian:bookworm-slim',
-        '/w/${_fileNameOf(binary)}',
+        '$root:/w:ro',
+        image ?? 'debian:bookworm-slim',
+        '/w/${binary.substring(root.length + 1)}',
         '--version',
       ], timeout: _smokeTimeout);
     }
@@ -249,15 +436,20 @@ class BuildOutcome {
     this.problem, {
     this.unproven,
     this.transcript,
+    this.artifact,
   });
 
-  const BuildOutcome.built(String path, {String? unproven})
-    : this._(path, null, unproven: unproven);
+  const BuildOutcome.built(
+    String path, {
+    String? unproven,
+    BinaryArtifact? artifact,
+  }) : this._(path, null, unproven: unproven, artifact: artifact);
   const BuildOutcome.failed(String problem, {String? transcript})
     : this._(null, problem, transcript: transcript);
 
   final String? path;
   final String? problem;
+  final BinaryArtifact? artifact;
 
   /// The whole of what the tool said, carried to whoever reports this.
   ///
