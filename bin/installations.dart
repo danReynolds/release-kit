@@ -29,7 +29,7 @@ rk uninstall [source] [-p project] remove an inactive installation
 Sources: local, homebrew, pub, github — only those configured for this project.
 No source: open the matrix in a terminal, or list sources when redirected.
 --latest        install: get the latest compatible version; keep the selected source
---clean         use/install local: run source directly; default Local compiles a snapshot
+--clean         use/install local: run source directly; default Local reuses a stage or builds
 --list          inspect available sources and current selection; no changes
 -p, --project   package name; required for an explicit source in a multi-app repo
 --json          one structured report, no TUI or prompts
@@ -37,6 +37,7 @@ No source: open the matrix in a terminal, or list sources when redirected.
 
 Run inside a directory containing release.toml, or one of its descendants.
 SDK packages are not installations. A project's commands switch together.
+Local reuses a completed host-platform stage of this clean checkout, or builds it.
 ''';
 
 Future<void> installationMain(List<String> args, String command) async {
@@ -306,6 +307,7 @@ Future<int> _run(
         dart,
         store,
         live: asked.live,
+        platform: platform,
       ),
       InstallationSource.pub: PubInstallationProvider(tools, dart, environment),
       InstallationSource.homebrew: HomebrewInstallationProvider(

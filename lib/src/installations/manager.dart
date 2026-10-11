@@ -142,9 +142,9 @@ class InstallationManager {
           );
         }
       }
-      // Local preparation rebinds this exact checkout and refreshes its native
-      // dependency graph. Other installed providers are reused, never
-      // upgraded. A checked release installs unless that version is there: an
+      // Local preparation selects a matching stage or builds this checkout.
+      // Other installed providers are reused, never upgraded. A checked
+      // release installs unless that version is there: an
       // update of the selected source that stopped before routing finishes.
       if (installation == null ||
           source == InstallationSource.local ||
@@ -176,7 +176,17 @@ class InstallationManager {
       }
       final path = await store.putFirstOnPath(project, environment);
       return [
-        '${project.name} → ${source.label} · ${installation.version}${source == InstallationSource.local ? (installation.checkout == null ? ' · live source' : ' · compiled') : ''}',
+        [
+          '${project.name} → ${source.label}',
+          installation.version,
+          if (source == InstallationSource.local)
+            if (installation.checkout == null)
+              'live source'
+            else if (installation.build?.stage != null)
+              'staged release'
+            else
+              'compiled',
+        ].join(' · '),
         if (installation.checkout != null)
           'After source edits, run rk use local again to rebuild.',
         ?path,

@@ -145,7 +145,7 @@ version = "0.1.0"
 ''',
           'native/parser/CHANGELOG.md': '## 0.1.0\n',
         });
-        return stagePlanFor(resolution.units.single, git());
+        return stagePlanFor(resolution.units.single, git().originUrl);
       }
 
       final base = planFor('["make"]', '["dist/*"]');

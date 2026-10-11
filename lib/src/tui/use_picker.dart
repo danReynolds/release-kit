@@ -501,7 +501,7 @@ class _UseScreenState extends State<UseScreen> {
             )
           else
             _SourceAction.use: (
-              local && model.isDefault(state, source) ? 'Rebuild' : 'Use',
+              'Use',
               model.canUse(state, source)
                   ? () => unawaited(model.choose(state, source))
                   : null,

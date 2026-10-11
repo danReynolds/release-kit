@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'git.dart';
 import 'resolve.dart';
 import 'timings.dart';
 
@@ -71,7 +70,7 @@ class DartSdkUnavailable implements Exception {
 /// build a stage do not name it: a stage built before a toolchain update is
 /// still the same release of the same commit, and a partly published release
 /// must still find it afterwards.
-Map<String, Object?> stagePlanFor(ResolvedUnit unit, GitState git) => {
+Map<String, Object?> stagePlanFor(ResolvedUnit unit, String? repository) => {
   'unit': {
     'name': unit.name,
     'version': unit.version.canonical,
@@ -80,7 +79,7 @@ Map<String, Object?> stagePlanFor(ResolvedUnit unit, GitState git) => {
     'homebrew_tap': unit.homebrewTap,
     'targets': unit.publish.map((target) => target.configName).toList()..sort(),
   },
-  'repository': git.originUrl,
+  'repository': repository,
   'projects': [
     for (final project in unit.projects)
       {

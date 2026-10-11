@@ -3,8 +3,12 @@ import 'dart:io';
 
 import '../builds/capability.dart';
 import '../builds/dart_native.dart';
+import '../engine/assets.dart';
+import '../engine/source_tree.dart';
+import '../engine/stage.dart';
 import '../engine/stage_plan.dart';
 import '../engine/tools.dart';
+import 'archive.dart';
 import 'model.dart';
 import 'provider.dart';
 import 'store.dart';
@@ -15,11 +19,13 @@ class LocalInstallationProvider implements InstallationProvider {
     this.dartExecutable,
     this.store, {
     this.live = false,
-  });
+    String? platform,
+  }) : platform = platform ?? HostCapabilities.inspect().hostPlatform;
   final Tools tools;
   final String? dartExecutable;
   final InstallationStore store;
   final bool live;
+  final String platform;
   @override
   InstallationSource get source => InstallationSource.local;
 
@@ -73,21 +79,21 @@ class LocalInstallationProvider implements InstallationProvider {
               location: selected.location,
               commands: const {},
             );
-    } else if (builds.existsSync()) {
-      final entries = builds.listSync(followLinks: false)
-        ..sort((a, b) => b.path.compareTo(a.path));
-      for (final entry in entries.whereType<Directory>()) {
-        installation = _readBuild(entry.path);
-        if (installation != null) break;
-      }
+    } else {
+      installation = _builds(project).firstOrNull;
     }
-    if (dartExecutable == null || !File(dartExecutable!).existsSync()) {
-      return SourceInspection(
-        installation: installation,
-        problem: 'Dart is not available on PATH.',
-      );
-    }
+    // A completed stage runs without Dart. Only a source build needs the SDK.
     return SourceInspection(installation: installation);
+  }
+
+  Iterable<Installation> _builds(ExecutableProject project) sync* {
+    final directory = Directory(store.localBuilds(project));
+    if (!directory.existsSync()) return;
+    final entries = directory.listSync(followLinks: false)
+      ..sort((a, b) => b.path.compareTo(a.path));
+    for (final entry in entries.whereType<Directory>()) {
+      if (_readBuild(entry.path) case final installation?) yield installation;
+    }
   }
 
   Installation? _readBuild(String location) {
@@ -121,7 +127,11 @@ class LocalInstallationProvider implements InstallationProvider {
     AvailableInstallation? release,
     void Function(String) progress,
   ) async {
-    if (dartExecutable == null) {
+    if (!live) {
+      final staged = await _installStaged(project, progress);
+      if (staged != null) return staged;
+    }
+    if (dartExecutable == null || !File(dartExecutable!).existsSync()) {
       throw const InstallationFailure('Dart is required for the local source.');
     }
     progress('Preparing ${project.name} from this checkout…');
@@ -197,25 +207,133 @@ class LocalInstallationProvider implements InstallationProvider {
           ], directory: project.directory);
         }
       }
-      final record = File('${build.path}/.build.json');
-      record.writeAsStringSync(
-        jsonEncode({
-          'version': project.version,
-          'checkout': project.directory,
-          'build': LocalBuildInfo(
-            builtAt: DateTime.now().toUtc(),
-            commit: source.commit,
-            dirty: source.dirty,
-          ).toJson(),
-          'executables': executables,
-        }),
+      final installation = _completeBuild(
+        project,
+        build,
+        executables,
+        LocalBuildInfo(
+          builtAt: DateTime.now().toUtc(),
+          commit: source.commit,
+          dirty: source.dirty,
+        ),
       );
-      record.renameSync('${build.path}/build.json');
       complete = true;
-      return _readBuild(build.path)!;
+      return installation;
     } finally {
       if (!complete) build.deleteSync(recursive: true);
     }
+  }
+
+  /// A release already prepared from this clean checkout is also a Local
+  /// build. Read only its receipt and host archive, without release preflight,
+  /// credentials, dependency resolution or another build.
+  Future<Installation?> _installStaged(
+    ExecutableProject project,
+    void Function(String) progress,
+  ) async {
+    if (!project.project.binaryPlatforms.contains(platform)) return null;
+    final builds = _builds(project).toList();
+    final stages = Stages(project.root);
+    if (!Directory(stages.path).existsSync() &&
+        !builds.any((b) => b.build?.stage != null)) {
+      return null;
+    }
+    final source = await _buildSource(project);
+    if (source.commit == null || source.dirty != false) return null;
+    final tree = await tools.run(
+      'git',
+      ['rev-parse', '${source.commit}^{tree}'],
+      workingDirectory: project.root,
+      timeout: const Duration(seconds: 5),
+    );
+    if (!tree.ok) return null;
+    final plan = stagePlanFor(project.unit, project.repository);
+    final stage = Stage(
+      root: project.root,
+      id: StageId.of(
+        commit: source.commit!,
+        tree: tree.stdout.trim(),
+        plan: plan,
+      ),
+      plan: plan,
+      source: WorkingTree(project.root, git: false),
+    );
+    final receipt = stage.completedReceipt();
+    final path = ReleaseAssets.archivePath(project.project, platform);
+    final recorded = receipt?.files[path];
+    // The installed copy is independent of stage cleanup. A newly prepared
+    // archive at the same commit still replaces it when its digest differs.
+    for (final installed in builds) {
+      if (installed.build?.stage == stage.id.id &&
+          installed.build!.archiveSha256 != null &&
+          (recorded == null ||
+              installed.build!.archiveSha256 == recorded.sha256) &&
+          installed.commands.values.every(
+            (c) => File(c.executable).existsSync(),
+          )) {
+        progress('Reusing ${project.name} from its staged release…');
+        return installed;
+      }
+    }
+    if (recorded == null) return null;
+    final archive = File(stage.pathOf(path));
+    if (!archive.existsSync()) return null;
+    progress('Installing ${project.name} from its staged release…');
+    final decoded = await decodeInstallationArchive(
+      await archive.readAsBytes(),
+      project.commands.single,
+      size: recorded.size,
+      sha256: recorded.sha256,
+    );
+    final parent = Directory(store.localBuilds(project))
+      ..createSync(recursive: true);
+    final build = parent.createTempSync(
+      '${DateTime.now().microsecondsSinceEpoch}-',
+    );
+    var complete = false;
+    try {
+      final artifact = await installArchive(
+        archive: decoded,
+        version: project.version,
+        directory: Directory('${build.path}/bundle'),
+        tools: tools,
+      );
+      final installation = _completeBuild(
+        project,
+        build,
+        {project.commands.single: 'bundle/${artifact.entryPoint}'},
+        LocalBuildInfo(
+          builtAt: DateTime.now().toUtc(),
+          commit: source.commit,
+          dirty: false,
+          stage: stage.id.id,
+          archiveSha256: recorded.sha256,
+        ),
+      );
+      complete = true;
+      return installation;
+    } finally {
+      if (!complete) build.deleteSync(recursive: true);
+    }
+  }
+
+  Installation _completeBuild(
+    ExecutableProject project,
+    Directory directory,
+    Map<String, String> executables,
+    LocalBuildInfo info,
+  ) {
+    final record = File('${directory.path}/.build.json');
+    record.writeAsStringSync(
+      jsonEncode({
+        'version': project.version,
+        'checkout': project.directory,
+        'build': info.toJson(),
+        'executables': executables,
+      }),
+    );
+    record.renameSync('${directory.path}/build.json');
+    return _readBuild(directory.path)!;
   }
 
   /// One optional Git read before compilation. Missing Git, a non-repository,
