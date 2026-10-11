@@ -40,14 +40,12 @@ class InstallationManager {
     }
     // Each command runs what its own launcher names: another project's
     // launcher, or one left from an earlier selection, is not this selection.
-    final launchers = store.launchers(project);
-    final paths = {
-      for (final command in project.commands)
-        command: findExecutable(command, environment),
-    };
+    final (:launchers, :paths, :problems) = store.routing(project, environment);
     final current = <String, InstallationSource?>{};
     for (final entry in paths.entries) {
-      current[entry.key] = store.routes(entry.key, environment)
+      current[entry.key] =
+          entry.value != null &&
+              sameFile(entry.value!, '${store.bin}/${entry.key}')
           ? launchers[entry.key]?.source
           : states.entries
                 .where(
@@ -67,7 +65,7 @@ class InstallationManager {
       selected: launchers.values.firstOrNull?.source,
       resolvedCommands: paths,
       currentSources: current,
-      routing: store.routingProblems(project, environment),
+      routing: problems,
     );
   }
 

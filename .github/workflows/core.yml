@@ -64,6 +64,33 @@ jobs:
           .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-ci
           .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-ci
 
+  native-macos:
+    name: Native macOS bundles
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # The temporary helper requires this exact SDK. Keep the main test
+      # matrix on stable; remove this setup when the stock builder supports it.
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.13.5
+      - run: dart pub get
+      - name: Install the pinned native-build helper
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP"
+          curl --fail --location --retry 3 \
+            https://github.com/danReynolds/release-kit/releases/download/dart-build-patch-3.13.5-1/rk-dart-build-3.13.5-1-macos-arm64.tar.gz \
+            --output native-helper.tar.gz
+          echo 'd6d703aacab40b2627beb6dec84cdd47e55915ba7e9f524415633b265d570d3e  native-helper.tar.gz' | shasum -a 256 --check
+          tar -xzf native-helper.tar.gz
+          echo "RK_DART_BUILD_TOOL=$RUNNER_TEMP/rk-dart-build-3.13.5-1-macos-arm64/rk-dart-build" >> "$GITHUB_ENV"
+      - name: Exercise relocated release bundles and Local native commands
+        run: dart test test/native_bundle_integration_test.dart test/installations/local_hooks_test.dart --concurrency=1 --reporter=expanded
+
   publication:
     name: Native publication qualification
     runs-on: ubuntu-latest

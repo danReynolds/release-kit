@@ -21,6 +21,7 @@ class GithubRelease {
     required this.tools,
     required this.repository,
     required this.workingDirectory,
+    this.observations,
   });
 
   final Tools tools;
@@ -29,6 +30,10 @@ class GithubRelease {
   final String repository;
 
   final String workingDirectory;
+
+  /// Only initial snapshot readers share observations. Publication readers
+  /// omit this map so every check observes the forge again.
+  final Map<String, Future<GithubReleaseObservation>>? observations;
 
   /// How the release for [tag] stands.
   ///
@@ -89,7 +94,7 @@ class GithubRelease {
     if (!observed.inspection.isExact) {
       return GithubAssetDigestRead._(observed.inspection, const {});
     }
-    final release = observed.release!;
+    final release = observed._release!;
     final surface = _compareRelease(
       release,
       tag: tag,
@@ -147,7 +152,7 @@ class GithubRelease {
     final observed = await _readRelease(tag);
     if (!observed.inspection.isExact) return observed.inspection;
     final surface = _compareRelease(
-      observed.release!,
+      observed._release!,
       tag: tag,
       expectedAssets: expectedAssets,
       expectedPrerelease: expectedPrerelease,
@@ -157,33 +162,40 @@ class GithubRelease {
       return _inspectAssetBytes(
         tag,
         expectedDigests,
-        release: observed.release,
+        release: observed._release,
       );
     }
     return surface;
   }
 
-  Future<_ReleaseObservation> _readRelease(String tag) async {
+  Future<GithubReleaseObservation> _readRelease(String tag) =>
+      observations?.putIfAbsent(
+        '$repository/$tag',
+        () => _observeRelease(tag),
+      ) ??
+      _observeRelease(tag);
+
+  Future<GithubReleaseObservation> _observeRelease(String tag) async {
     final lookup = await _view(tag);
     switch (lookup) {
       case _NotFound():
-        return const _ReleaseObservation.failed(Inspection.absent());
+        return const GithubReleaseObservation._failed(Inspection.absent());
       case _Unreadable(:final why):
-        return _ReleaseObservation.failed(Inspection.unknown(why));
+        return GithubReleaseObservation._failed(Inspection.unknown(why));
       case _Found(:final release):
         if (release.isDraft) {
-          return _ReleaseObservation.failed(
+          return GithubReleaseObservation._failed(
             Inspection.absent(detail: 'a draft exists with ${release.id}'),
           );
         }
         if (release.assets == null) {
-          return const _ReleaseObservation.failed(
+          return const GithubReleaseObservation._failed(
             Inspection.unknown(
               'the release exists but its assets could not be listed',
             ),
           );
         }
-        return _ReleaseObservation.exact(release);
+        return GithubReleaseObservation._exact(release);
     }
   }
 
@@ -1069,17 +1081,17 @@ class GithubAssetDigestRead {
 }
 
 /// The public facts needed to verify a release after its local stage is gone.
-class _ReleaseObservation {
-  const _ReleaseObservation._(this.inspection, this.release);
+class GithubReleaseObservation {
+  const GithubReleaseObservation._(this.inspection, this._release);
 
-  const _ReleaseObservation.failed(Inspection inspection)
+  const GithubReleaseObservation._failed(Inspection inspection)
     : this._(inspection, null);
 
-  _ReleaseObservation.exact(_Release release)
+  GithubReleaseObservation._exact(_Release release)
     : this._(const Inspection.exact(detail: 'published'), release);
 
   final Inspection inspection;
-  final _Release? release;
+  final _Release? _release;
 }
 
 bool _isSha256(String value) => RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value);

@@ -289,6 +289,7 @@ class FixedInspector extends Inspector {
     Target target,
     ResolvedUnit unit, {
     Stage? stage,
+    TargetReadContext? reads,
   }) async => (
     state: answers[target.kind] ?? answer,
     history: await _history(target, unit),
@@ -368,9 +369,10 @@ class CoordinatedInspector extends Inspector {
     Target target,
     ResolvedUnit unit, {
     Stage? stage,
+    TargetReadContext? reads,
   }) async {
     // The history as the target reads it; the state as the test says.
-    final history = super.read(target, unit, stage: stage);
+    final history = super.read(target, unit, stage: stage, reads: reads);
     final gate = _gates.putIfAbsent(target.kind, Completer<void>.new);
     started++;
     active++;

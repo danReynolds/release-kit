@@ -146,12 +146,12 @@ class LocalInstallationProvider implements InstallationProvider {
         for (final entry in project.entrypoints.entries)
           entry.key: '${entry.value}/bundle/bin/${entry.value}',
       };
+      final defines = project.project.dartDefines;
+      final native = hasDartBuildHooks(project.directory, project.root);
       for (final name in project.entrypoints.values.toSet()) {
         progress('Compiling $name from this checkout…');
         final relative = '$name/bundle/bin/$name';
-        final defines = project.project.dartDefines;
-        if (defines.isEmpty ||
-            hasDartBuildHooks(project.directory, project.root)) {
+        if (native) {
           final capabilities = HostCapabilities.detect();
           final compiler = DartSdk.resolveExecutable(dartExecutable!);
           final helper = Platform.environment['RK_DART_BUILD_TOOL'];

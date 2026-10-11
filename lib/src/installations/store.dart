@@ -156,17 +156,27 @@ class InstallationStore {
       for (final entry in installation.commands.entries)
         entry.key: _launcher(project, installation, entry.value),
     };
-    beforeCommit?.call();
-    for (final entry in scripts.entries) {
-      // Made executable beside the launcher, then renamed over it: a command
-      // started meanwhile runs the old launcher or the new one, never neither.
-      final temporary = File('$bin/.${entry.key}.$pid.tmp');
-      try {
-        temporary.writeAsStringSync(entry.value, flush: true);
-        await checked(tools, '/bin/chmod', ['700', temporary.path]);
-        temporary.renameSync('$bin/${entry.key}');
-      } finally {
-        if (temporary.existsSync()) temporary.deleteSync();
+    final temporary = {
+      for (final command in scripts.keys)
+        command: File('$bin/.$command.$pid.tmp'),
+    };
+    try {
+      for (final entry in temporary.entries) {
+        entry.value.writeAsStringSync(scripts[entry.key]!, flush: true);
+      }
+      await checked(tools, '/bin/chmod', [
+        '700',
+        for (final file in temporary.values) file.path,
+      ]);
+      beforeCommit?.call();
+      // All preparation succeeded. Each rename preserves a runnable command;
+      // the set of renames is not a filesystem transaction.
+      for (final entry in temporary.entries) {
+        entry.value.renameSync('$bin/${entry.key}');
+      }
+    } finally {
+      for (final file in temporary.values) {
+        if (file.existsSync()) file.deleteSync();
       }
     }
   }
@@ -197,23 +207,44 @@ class InstallationStore {
     return '$script';
   }
 
-  List<String> routingProblems(
-    ExecutableProject project,
-    Map<String, String> environment,
-  ) {
-    final launchers = this.launchers(project);
-    final selected = launchers.values.firstOrNull;
-    return [
+  /// Read launchers and PATH once, so selection and warnings agree.
+  ({
+    Map<String, Launcher> launchers,
+    Map<String, String?> paths,
+    List<String> problems,
+  })
+  routing(ExecutableProject project, Map<String, String> environment) {
+    final all = {
       for (final command in project.commands)
-        if (launcher(command)?.project case final owner?
-            when owner != project.name)
-          '$command is selected for $owner, not ${project.name}.'
-        else if (selected != null &&
-            launchers[command]?.source != selected.source)
-          '$command is not switched to ${selected.source.label}; run rk use ${selected.source.name} again.'
-        else if (selected != null && !routes(command, environment))
-          '$command resolves to ${findExecutable(command, environment) ?? 'nothing'}; put $bin first in PATH.',
-    ];
+        if (launcher(command) case final found?) command: found,
+    };
+    final launchers = {
+      for (final entry in all.entries)
+        if ((entry.value.project ?? project.name) == project.name)
+          entry.key: entry.value,
+    };
+    final paths = {
+      for (final command in project.commands)
+        command: findExecutable(command, environment),
+    };
+    final selected = launchers.values.firstOrNull;
+    return (
+      launchers: launchers,
+      paths: paths,
+      problems: [
+        for (final command in project.commands)
+          if (all[command]?.project case final owner?
+              when owner != project.name)
+            '$command is selected for $owner, not ${project.name}.'
+          else if (selected != null &&
+              launchers[command]?.source != selected.source)
+            '$command is not switched to ${selected.source.label}; run rk use ${selected.source.name} again.'
+          else if (selected != null &&
+              (paths[command] == null ||
+                  !sameFile(paths[command]!, '$bin/$command')))
+            '$command resolves to ${paths[command] ?? 'nothing'}; put $bin first in PATH.',
+      ],
+    );
   }
 
   /// A child cannot edit its parent's environment. Fish can persist a
@@ -224,7 +255,7 @@ class InstallationStore {
     ExecutableProject project,
     Map<String, String> environment,
   ) async {
-    if (routingProblems(project, environment).isEmpty) return null;
+    if (routing(project, environment).problems.isEmpty) return null;
     final shell = environment['SHELL'] ?? '';
     if (shell.split('/').last == 'fish' && shell.startsWith('/')) {
       try {
@@ -239,13 +270,6 @@ class InstallationStore {
       }
     }
     return 'Selection saved. Put the managed commands first in this shell: export PATH=${shellQuote(bin)}:"\$PATH"';
-  }
-
-  /// Whether [command] on [environment]'s PATH is its launcher, however PATH
-  /// spells the directory: with a trailing slash, or through a link.
-  bool routes(String command, Map<String, String> environment) {
-    final found = findExecutable(command, environment);
-    return found != null && sameFile(found, '$bin/$command');
   }
 
   /// Once [kept] is installed and routed, removes what it replaced: rk's own

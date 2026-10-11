@@ -48,6 +48,7 @@ final class GithubReleaseTargetModule extends TargetModule {
       tools: tools,
       repository: repository,
       workingDirectory: context.git.root,
+      observations: context.githubReleases,
     );
     if (stage == null) {
       return destination.inspect(

@@ -120,6 +120,7 @@ final class HomebrewTargetModule extends TargetModule {
           tools: context.tools!,
           repository: repository,
           workingDirectory: context.git.root,
+          observations: context.githubReleases,
         ).readAssetDigests(
           tag: tag,
           expectedAssets: ReleaseAssets.expectedForUnit(unit).toSet(),
