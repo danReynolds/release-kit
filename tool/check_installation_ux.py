@@ -93,9 +93,9 @@ def main():
         # A selected compiled checkout can be rebuilt without switching away.
         with Terminal(executable, 'use', project, home,
                       environment={'PATH': str(home / 'data/rk/bin') + os.pathsep + os.environ['PATH']}) as terminal:
-            terminal.wait('Rebuild')
+            terminal.wait('Use')
             assert '✓ Default' in terminal.text()
-            terminal.focus('Rebuild')
+            terminal.focus('Use')
             terminal.send(b'\r')
             terminal.finish()
         # An incomplete Pub activation gives an inspectable unavailable choice.
