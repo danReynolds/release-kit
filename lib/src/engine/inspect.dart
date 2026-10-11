@@ -94,13 +94,17 @@ class Inspector {
   /// What [target]'s destination holds, and what its lane is already at.
   /// [stage] is the unit's complete stage, if it has one: a target that
   /// publishes staged bytes compares what is public with them.
-  Future<TargetRead> read(Target target, ResolvedUnit unit, {Stage? stage}) =>
-      Timings.span(
-        'check ${target.id}',
-        () => targets
-            .moduleFor(target.target)
-            .read(targetReads, unit, target, stage: stage),
-      );
+  Future<TargetRead> read(
+    Target target,
+    ResolvedUnit unit, {
+    Stage? stage,
+    TargetReadContext? reads,
+  }) => Timings.span(
+    'check ${target.id}',
+    () => targets
+        .moduleFor(target.target)
+        .read(reads ?? targetReads, unit, target, stage: stage),
+  );
 
   /// What [step]'s destination holds: a target's, a package another unit
   /// publishes, or for local work, nothing rk has looked at yet.

@@ -11,6 +11,7 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/unit_release.dart';
+import 'package:rk/src/engine/unit_snapshot.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/targets/target_module.dart';
 import 'package:test/test.dart';
@@ -207,6 +208,82 @@ executables:
 
 /// How each target's public state is read, and what that reading blocks.
 void targetReads() {
+  for (final readable in [true, false]) {
+    test('snapshot shares GitHub absence with Homebrew (readable=$readable), '
+        'but later reads observe changes', () async {
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!;
+      var published = false;
+      const releaseRead = 'gh api repos/example/tool/releases/tags/v1.0.0';
+      const repoRead = 'gh repo view example/tool --json name';
+      final tools = RecordingTools(
+        answers: (key) => switch (key) {
+          releaseRead =>
+            published
+                ? ok(
+                    jsonEncode({
+                      'id': 1,
+                      'tag_name': 'v1.0.0',
+                      'draft': false,
+                      'prerelease': false,
+                      'assets': [
+                        for (final name in ReleaseAssets.expectedForUnit(unit))
+                          {'name': name, 'digest': 'sha256:${'a' * 64}'},
+                      ],
+                    }),
+                  )
+                : failed('Not Found (HTTP 404)'),
+          repoRead => readable ? ok('{}') : failed('repository unreadable'),
+          _ when key.contains('/contents/') => failed('Not Found (HTTP 404)'),
+          _ when key.startsWith('gh repo view') => ok('{}'),
+          _ => null,
+        },
+      );
+      final inspector = Inspector(
+        registry: FakeRegistry({}),
+        git: GitState.none('/repo'),
+        tools: tools,
+        repository: 'example/tool',
+      );
+      UnitSnapshot snapshot() => UnitSnapshot.start(
+        unit,
+        resolution: resolution,
+        inspector: inspector,
+        repository: 'example/tool',
+        hasCommit: false,
+      );
+      final initial = snapshot();
+      await initial.settle();
+      final github = initial.targets.singleWhere(
+        (t) => t.target == PublishTarget.githubRelease,
+      );
+      final homebrew = initial.targets.singleWhere(
+        (t) => t.target == PublishTarget.homebrew,
+      );
+      expect(
+        initial.states[github.id]!.verdict,
+        readable ? Verdict.absent : Verdict.unknown,
+      );
+      expect(tools.calls.where((c) => c == releaseRead), hasLength(1));
+      expect(tools.calls.where((c) => c == repoRead), hasLength(1));
+
+      published = true;
+      // The ordinary read used around publication does not reuse the snapshot.
+      expect((await inspector.read(github, unit)).state.isExact, isTrue);
+      expect(
+        (await inspector.read(homebrew, unit)).state.recoversWithoutStage,
+        isTrue,
+      );
+      expect(tools.calls.where((c) => c == releaseRead), hasLength(3));
+      // Even another snapshot using this same inspector owns fresh observations.
+      final next = snapshot();
+      await next.settle();
+      expect(next.states[github.id]!.isExact, isTrue);
+      expect(next.states[homebrew.id]!.recoversWithoutStage, isTrue);
+      expect(tools.calls.where((c) => c == releaseRead), hasLength(4));
+    });
+  }
+
   group('a tag released from an earlier commit', () {
     Future<List<Diagnostic>> guardsFor({
       required bool finished,
@@ -648,6 +725,7 @@ class _LatestInspector extends Inspector {
     Target target,
     ResolvedUnit unit, {
     Stage? stage,
+    TargetReadContext? reads,
   }) async => (state: const Inspection.absent(), history: _history(target));
 
   TargetHistory? _history(Target target) {

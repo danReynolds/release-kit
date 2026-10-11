@@ -115,7 +115,7 @@ void main() {
   );
 
   test(
-    'native compilation failures retain every error in JSON and saved diagnostics',
+    'Local compilation failures retain every error in JSON and saved diagnostics',
     () {
       final project = fixture(scratch, commands: ['orbit']);
       File('${project.directory}/bin/orbit_main.dart').writeAsStringSync(
@@ -134,8 +134,8 @@ void main() {
         allOf(
           contains('missingOne'),
           contains('missingTwo'),
-          contains('Dart compiler:'),
-          contains('Native build helper:'),
+          contains('Command:'),
+          contains("'compile' 'exe'"),
         ),
       );
       final saved = File('${failed.json['diagnosis']}/${problem['evidence']}');

@@ -59,6 +59,28 @@ void main() {
     },
   );
 
+  test('shared observations retain each reader’s asset expectations', () async {
+    final tools = RecordingTools(answers: (_) => ok(view()));
+    final observations = <String, Future<GithubReleaseObservation>>{};
+    GithubRelease reader() => GithubRelease(
+      tools: tools,
+      repository: 'example/tool',
+      workingDirectory: '/repo',
+      observations: observations,
+    );
+    final states = await Future.wait([
+      reader().inspect('v1.0.0', {
+        'tool-1.0.0-macos-arm64.tar.gz',
+      }, prerelease: false),
+      reader().inspect('v1.0.0', {'different.tar.gz'}, prerelease: false),
+    ]);
+    expect(states.map((state) => state.verdict), [
+      Verdict.exact,
+      Verdict.conflict,
+    ]);
+    expect(tools.calls, ['gh api repos/example/tool/releases/tags/v1.0.0']);
+  });
+
   test('prerelease maturity is part of exact release identity', () async {
     final exact = await inspect([
       (code: 0, out: view(prerelease: true), err: ''),

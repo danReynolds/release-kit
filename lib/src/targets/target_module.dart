@@ -10,6 +10,7 @@ import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
+import 'github_release/client.dart';
 
 /// What one read of a target finds: the state of this release there, and
 /// the lane's public history. Null history means the target keeps none: its
@@ -171,6 +172,7 @@ final class TargetReadContext {
     required this.tools,
     required this.repository,
     this.shared,
+    this.githubReleases,
   });
 
   final RegistryReader? registry;
@@ -178,6 +180,20 @@ final class TargetReadContext {
   final GitState git;
   final Tools? tools;
   final String? repository;
+
+  /// Mutable public state is shared only during one initial unit snapshot.
+  /// Ordinary reads before and after publication have no observation map.
+  final Map<String, Future<GithubReleaseObservation>>? githubReleases;
+
+  TargetReadContext forSnapshot() => TargetReadContext(
+    registry: registry,
+    pubDev: pubDev,
+    git: git,
+    tools: tools,
+    repository: repository,
+    shared: shared,
+    githubReleases: {},
+  );
 
   /// Reads several targets share within one run, by key.
   final Map<String, Future<Object?>>? shared;

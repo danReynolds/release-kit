@@ -151,6 +151,24 @@ Future<void> main(List<String> args) async {
         expect(result['identity'], configured ? r'identity $literal' : '');
         expect(first.$3, contains('app stderr'));
         if (!live) {
+          entry.writeAsStringSync(
+            'void main() { print(missingOne); print(missingTwo); }',
+          );
+          await expectLater(
+            provider.install(project, null, (_) {}),
+            throwsA(
+              isA<InstallationFailure>().having(
+                (e) => e.evidence,
+                'native compiler output',
+                allOf(
+                  contains('missingOne'),
+                  contains('missingTwo'),
+                  contains('Dart compiler:'),
+                  contains('Native build helper:'),
+                ),
+              ),
+            ),
+          );
           // The bundled library still works without the source or hook cache.
           root.deleteSync(recursive: true);
           native.deleteSync(recursive: true);

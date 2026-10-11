@@ -17,6 +17,50 @@ import '../rk_process.dart';
 
 void main() {
   test(
+    'pure Local without declarations ignores development-only hooks',
+    () async {
+      final scratch = Directory.systemTemp.createTempSync('rk-pure-local-');
+      addTearDown(() => scratch.deleteSync(recursive: true));
+      final project = fixture(scratch, commands: ['orbit']);
+      final hook = Directory('${project.directory}/dev_hook')..createSync();
+      File(
+        '${hook.path}/pubspec.yaml',
+      ).writeAsStringSync('name: dev_hook\nenvironment:\n  sdk: ^3.10.4\n');
+      File('${hook.path}/hook/build.dart')
+        ..parent.createSync()
+        ..writeAsStringSync(
+          "void main() => throw StateError('development hook must not run');",
+        );
+      final manifest = File('${project.directory}/pubspec.yaml');
+      manifest.writeAsStringSync(
+        '${manifest.readAsStringSync()}\ndev_dependencies:\n  dev_hook:\n    path: dev_hook\n',
+      );
+      final store = InstallationStore(
+        '${scratch.path}/data',
+        const SystemTools(),
+      );
+      final provider = LocalInstallationProvider(
+        const SystemTools(),
+        Platform.resolvedExecutable,
+        store,
+      );
+      final installation = await provider.install(project, null, (_) {});
+      await store.activate(project, installation);
+      final result = await Process.run(
+        '${store.bin}/orbit',
+        ['hello'],
+        workingDirectory: scratch.path,
+        environment: {'PATH': '/usr/bin:/bin'},
+      );
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      expect(
+        result.stdout,
+        'orbit\n${scratch.resolveSymbolicLinksSync()}\nhello\n',
+      );
+    },
+  );
+
+  test(
     'compiled Local snapshots all commands, rebuilds explicitly and survives failed rebuilds',
     () async {
       final scratch = Directory.systemTemp.createTempSync(

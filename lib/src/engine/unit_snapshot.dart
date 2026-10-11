@@ -86,6 +86,7 @@ final class UnitSnapshot {
   /// The public targets, in release order.
   List<Target> get targets => release.targets;
   final Inspector inspector;
+  late final _context = inspector.targetReads.forSnapshot();
 
   /// This commit's stage; null without a commit, or when it could not be
   /// read ([stageError]).
@@ -158,6 +159,7 @@ final class UnitSnapshot {
         target,
         unit,
         stage: stageReusable ? stage : null,
+        reads: _context,
       );
     } on Object catch (error) {
       return (

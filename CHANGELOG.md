@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Status and release snapshots share the GitHub release observation used by
+  GitHub and Homebrew targets. Publication checks still read fresh state.
+- Switching command sources prepares every launcher before replacing any,
+  keeping the previous selection when launcher preparation fails or is cancelled.
+- Pure Dart Local builds use the ordinary compiler with or without declarations;
+  native hooks retain the bundle builder. Installation status reuses one read of
+  command routing for its selection and warnings.
+
 - Compiled Local installations show their build time, source commit and whether
   the checkout had edits when compilation began. Inventory reads use the saved
   build record without checking Git or rebuilding.

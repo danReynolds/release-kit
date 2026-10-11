@@ -141,7 +141,7 @@ void main(List<String> args) {
           'pub $command\n',
         );
       }
-      expect(store.routingProblems(project, manager.environment), isEmpty);
+      expect(store.routing(project, manager.environment).problems, isEmpty);
     },
   );
 
@@ -185,6 +185,39 @@ void main(List<String> args) {
       final state = await slashed.inspect(project);
       expect(state.routing, isEmpty);
       expect(state.currentSource, local.source);
+    },
+  );
+
+  test(
+    'one routing observation supplies selection, ownership and PATH warnings',
+    () async {
+      await apply(local.source, InstallationAction.use);
+      final other = fixture(
+        scratch,
+        name: 'other_cli',
+        commands: ['orbit_admin'],
+      );
+      final foreign = await pub.install(other, null, (_) {});
+      await store.activate(other, foreign);
+      final native = File('${scratch.path}/native/orbit')
+        ..parent.createSync()
+        ..writeAsStringSync('#!/bin/sh\nexit 0\n');
+      await Process.run('/bin/chmod', ['700', native.path]);
+      final observed = _CountingStore(store.root);
+      final reader = InstallationManager(
+        store: observed,
+        providers: manager.providers,
+        environment: {'PATH': '${native.parent.path}:${store.bin}'},
+      );
+      final state = await reader.inspect(project);
+      expect(observed.reads, {'orbit': 1, 'orbit_admin': 1});
+      expect(state.selected, local.source);
+      expect(state.currentSources, {'orbit': null, 'orbit_admin': null});
+      expect(state.resolvedCommands['orbit'], native.path);
+      expect(state.routing, [
+        'orbit resolves to ${native.path}; put ${store.bin} first in PATH.',
+        'orbit_admin is selected for other_cli, not orbit_cli.',
+      ]);
     },
   );
 
@@ -245,6 +278,57 @@ void main(List<String> args) {
       );
     },
   );
+
+  for (final cancel in [false, true]) {
+    test(
+      '${cancel ? 'cancelled' : 'failed'} launcher preparation preserves every old command',
+      () async {
+        await apply(local.source, InstallationAction.use);
+        final next = await pub.install(project, null, (_) {});
+        final cancellation = InstallationCancellation();
+        final chmods = <List<String>>[];
+        final preparing = InstallationStore(
+          store.root,
+          TestTools((exe, args, cwd, env) async {
+            expect(exe, '/bin/chmod');
+            chmods.add(args);
+            // Every temporary launcher exists before permissions or selection change.
+            expect(
+              args.skip(1).every((path) => File(path).existsSync()),
+              isTrue,
+            );
+            if (cancel) cancellation.cancel();
+            if (cancel) return ok();
+            return args.any((path) => path.contains('.orbit_admin.'))
+                ? ToolResult(
+                    exitCode: 1,
+                    stdout: '',
+                    stderr: 'permission denied',
+                  )
+                : const SystemTools().run(exe, args);
+          }),
+        );
+        await expectLater(
+          preparing.activate(project, next, beforeCommit: cancellation.check),
+          throwsA(isA<InstallationFailure>()),
+        );
+        expect(chmods, hasLength(1));
+        expect(chmods.single, hasLength(project.commands.length + 1));
+        for (final command in project.commands) {
+          expect(
+            (await Process.run('${store.bin}/$command', [])).stdout,
+            'local $command\n',
+          );
+        }
+        expect(
+          Directory(
+            store.bin,
+          ).listSync().map((f) => f.path.split('/').last).toSet(),
+          project.commands.toSet(),
+        );
+      },
+    );
+  }
 
   test(
     'switching back and forth leaves nothing behind but the launchers',
@@ -538,4 +622,14 @@ void main(List<String> args) {
       );
     },
   );
+}
+
+class _CountingStore extends InstallationStore {
+  _CountingStore(String root) : super(root, const SystemTools());
+  final reads = <String, int>{};
+  @override
+  Launcher? launcher(String command) {
+    reads.update(command, (count) => count + 1, ifAbsent: () => 1);
+    return super.launcher(command);
+  }
 }
