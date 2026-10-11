@@ -127,25 +127,38 @@ class Installation {
 
 /// Build-time observations, never a freshness check against today's checkout.
 class LocalBuildInfo {
-  const LocalBuildInfo({required this.builtAt, this.commit, this.dirty});
+  const LocalBuildInfo({
+    required this.builtAt,
+    this.commit,
+    this.dirty,
+    this.stage,
+    this.archiveSha256,
+  });
   final DateTime builtAt;
   final String? commit;
   final bool? dirty;
+
+  /// Present when Local installed an already completed release stage.
+  final String? stage, archiveSha256;
 
   factory LocalBuildInfo.fromJson(Map<String, dynamic> json) => LocalBuildInfo(
     builtAt: DateTime.parse(json['built_at'] as String),
     commit: json['commit'] as String?,
     dirty: json['dirty'] as bool?,
+    stage: json['stage'] as String?,
+    archiveSha256: json['archive_sha256'] as String?,
   );
 
   Map<String, Object?> toJson() => {
     'built_at': builtAt.toUtc().toIso8601String(),
     'commit': commit,
     'dirty': dirty,
+    if (stage != null) 'stage': stage,
+    if (archiveSha256 != null) 'archive_sha256': archiveSha256,
   };
 
   String get description => [
-    'Built ${builtAt.toUtc().toIso8601String().substring(0, 19).replaceFirst('T', ' ')} UTC',
+    '${stage == null ? 'Built' : 'Installed from stage'} ${builtAt.toUtc().toIso8601String().substring(0, 19).replaceFirst('T', ' ')} UTC',
     if (commit != null) commit!.substring(0, commit!.length.clamp(0, 7)),
     switch (dirty) {
       true => 'dirty checkout',

@@ -5,7 +5,7 @@ From a project with `release.toml`:
 ```sh
 rk use                          # compare sources and available updates
 rk use --list                   # inspect without opening the TUI
-rk use local                    # compile this checkout, then select it
+rk use local                    # reuse this checkout's stage or compile, then select
 rk use local --clean             # run source directly while editing
 rk install homebrew             # install without changing the selection
 rk install homebrew --latest    # install the latest compatible version
@@ -77,8 +77,8 @@ settle safely. A failed operation clears the queue for review.
 **Install** or **Update** installs the displayed available version and keeps the picker open.
 It does not select another source. If you update the source already selected,
 its new version runs on the next command. Local has no remote version: **Use**
-compiles and selects the checkout you are in; **Rebuild** refreshes a selected
-Local snapshot after edits. Explicit `rk use pub`, for example,
+prepares and selects the checkout you are in, reusing its completed stage when
+possible. Select **Use** again after edits to refresh Local. Explicit `rk use pub`, for example,
 still installs first when missing; the table keeps those two actions separate.
 
 | Source | What Available means | Install / Update |
@@ -123,7 +123,7 @@ from any directory.
 
 | Source | When offered | Preparation and execution |
 | --- | --- | --- |
-| Local | Package declares executables | Resolve dependencies and compile this checkout; launch the compiled snapshot (`--clean` runs source with Dart) |
+| Local | Package declares executables | Reuse this clean checkout's staged binary for the host, or compile a development snapshot (`--clean` runs source with Dart) |
 | Homebrew | Project publishes to Homebrew | Install the configured tap/formula with `--skip-link`; launch it through Homebrew's `opt` link, which follows upgrades |
 | Pub | Project publishes to pub.dev | Activate the package with `--no-executables`; run its native global activation |
 | GitHub | Project publishes native binaries through GitHub Releases | Download the latest stable release matching the unit's tag pattern and the current platform |
@@ -138,14 +138,24 @@ is reported with a reason; RK does not install the package manager itself.
 
 `install` leaves routing unchanged. `use` prepares a missing installation and
 then switches. Existing published installations are reused, never silently
-upgraded. Local refreshes dependencies and compiles every declared executable
-from the checkout where you invoke it, including uncommitted edits. Normal
+upgraded. Local first reuses a completed release stage when the checkout is
+clean and its commit, tree, release configuration, origin and host platform
+match. It verifies the host archive against its recorded checksum and installs
+the complete bundle, preserving signatures and native library paths. No Dart
+SDK, signing credentials, public-target reads or rebuild are needed to use it.
+Only this archive is checked; other platforms' artifacts are not read.
+
+Without a matching stage, Local refreshes dependencies and compiles every
+declared executable from the checkout, including uncommitted edits. Normal
 commands then launch those compiled copies without starting Dart's compiler.
 After editing or pulling source, run `rk use local` again to rebuild. RK does
 not pull source or check it for changes on every launch.
 
-`rk install local` builds without switching, keeping the currently selected
-copy usable. `rk use local` always rebuilds before selecting. Both accept
+`rk install local` prepares without switching, keeping the currently selected
+copy usable. `rk use local` prepares and selects. An installed copy from the
+same stage archive is reused, including after `rk clean` removes the stage.
+The copy lives in the installation store, independently of the stage. Stage
+preparation never changes the selected installation. Both commands accept
 `--clean` to retain direct Dart source execution, where edits take effect on
 the next invocation. A live checkout counts as installed only while selected.
 The launched program keeps your working directory, arguments and stdio in
@@ -155,6 +165,9 @@ use `--clean` for programs that require source-relative files or JIT features.
 `version`, and artifact `location`. New compiled builds also record `build`:
 `built_at` (UTC completion time), `commit` and `dirty`. The table and `--list`
 show these saved observations, so two builds of the same version are distinct.
+A staged Local copy also records `stage` (the stage identity) and
+`archive_sha256` under `build`, and reports "Installed from stage". Its
+`built_at` is the installation time. A source build records compilation time.
 Git state is read once after dependency resolution and before compilation;
 `dirty` includes tracked edits and untracked files across the repository.
 Unknown Git state is reported as unknown. Older builds remain usable without
@@ -255,7 +268,8 @@ release evidence, while Use changes local installations and command routing.
 `installations/manager.dart` owns the shared operation lifecycle;
 `installations/store.dart` owns the launchers. Provider adapters
 live beside their publication counterparts under `targets/*/installation.dart`.
-The Local adapter owns Dart compilation and live source preparation. The Fleury views in `tui/`
+The Local adapter reuses staged archives and owns development compilation and
+live source preparation. The Fleury views in `tui/`
 provide input and presentation and call the same coordinator as explicit CLI
 commands. Publication modules do not import the installation adapters.
 

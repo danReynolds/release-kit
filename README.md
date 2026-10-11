@@ -328,7 +328,7 @@ manifest of what was built.
 
 ```sh
 rk use                     # compare installed and available versions; choose a source
-rk use local               # compile and select this checkout; rerun after edits
+rk use local               # reuse this checkout's stage or compile; rerun after edits
 rk use local --clean        # run source directly; edits work on the next run
 rk install pub             # prepare without switching
 rk use --list              # sources, installation state and PATH resolution
@@ -337,6 +337,12 @@ rk use --list              # sources, installation state and PATH resolution
 Run inside the configured project. With multiple executable packages, select
 one in the inline table or add `-p package_name`. Every command in a package
 switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
+
+After `rk stage`, `rk use local` installs the exact staged binary for this
+machine when the checkout is still clean and matches the stage. Signing and
+notarization are already complete; nothing is rebuilt or published. Otherwise
+Local compiles a development snapshot from the checkout, including edits.
+The installed copy survives `rk clean`.
 
 ## Commands
 

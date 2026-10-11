@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `rk use local` and `rk install local` reuse the exact completed release
+  bundle when it matches the clean checkout and host platform. Local installs
+  preserve signing and native assets without another build or SDK, remain
+  usable after stage cleanup, and show their stage provenance. Edits and
+  unstaged checkouts still build development snapshots; `--clean` still runs
+  source directly.
+
 - Status and release snapshots share the GitHub release observation used by
   GitHub and Homebrew targets. Publication checks still read fresh state.
 - Switching command sources prepares every launcher before replacing any,

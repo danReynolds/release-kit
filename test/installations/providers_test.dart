@@ -6,6 +6,7 @@ import 'package:rk/src/builds/binary_artifact.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/installations/archive.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/provider.dart';

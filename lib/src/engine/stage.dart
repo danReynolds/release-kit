@@ -124,6 +124,20 @@ final class Stage {
     return handle.existsSync() ? handle.readAsBytesSync() : null;
   }
 
+  /// Local installation consumes only its host archive. Its recorded digest
+  /// is checked by the installer; other platforms need not be read or hashed.
+  /// Missing, incomplete and obsolete stages leave Local free to build.
+  Receipt? completedReceipt() {
+    try {
+      final receipt = Receipt.parse(
+        File(pathOf(_receiptFile)).readAsStringSync(),
+      );
+      return receipt.stage.id == id.id && receipt.complete ? receipt : null;
+    } on Object {
+      return null;
+    }
+  }
+
   /// Places [bytes] at [file] by an atomic rename, so a crash leaves either
   /// the old bytes or the new.
   void write(String file, List<int> bytes) {
@@ -374,7 +388,7 @@ final class Stages {
     SourceTree source, {
     DartSdk Function()? sdk,
   }) => _stages.putIfAbsent(unit.name, () {
-    final plan = stagePlanFor(unit, git);
+    final plan = stagePlanFor(unit, git.originUrl);
     return Stage(
       root: root,
       id: StageId.of(commit: git.head, tree: git.headTree, plan: plan),

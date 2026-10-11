@@ -7,11 +7,10 @@ import '../../engine/git.dart';
 import '../../engine/release_manifest.dart';
 import '../../engine/tools.dart';
 import '../../engine/version.dart';
+import '../../installations/archive.dart';
 import '../../installations/model.dart';
 import '../../installations/provider.dart';
 import '../../installations/store.dart';
-import '../../transforms/archive.dart';
-import '../../transforms/digest.dart';
 
 /// Public release assets, verified against RK's release manifest before use.
 /// The checksum proves consistency with that release, not independent authorship.
@@ -197,36 +196,26 @@ class GithubInstallationProvider implements InstallationProvider {
     final version = release.version;
     progress('Downloading ${project.name} $version…');
     final bytes = await fetch(release.url!, release.size!);
-    if (bytes.length != release.size || Sha256.hex(bytes) != release.sha256) {
-      throw const InstallationFailure(
-        'The downloaded archive failed its release checksum.',
-      );
-    }
-    progress('Installing ${project.name} $version…');
-    final decoded = await decodeInstallationArchive(
+    final archive = await decodeInstallationArchive(
       bytes,
       project.commands.single,
+      size: release.size!,
+      sha256: release.sha256!,
     );
+    progress('Installing ${project.name} $version…');
     final parent = store.downloads(project);
     Directory(parent).createSync(recursive: true);
     final destination = '$parent/$version';
-    if (Directory(destination).existsSync()) {
-      Directory(destination).deleteSync(recursive: true);
-    }
     final temporary = Directory(parent).createTempSync('preparing-');
     try {
-      decoded.extractTo(temporary);
-      final smoke = await tools.run(
-        '${temporary.path}/${decoded.artifact.entryPoint}',
-        ['--version'],
-        timeout: const Duration(minutes: 2),
+      await installArchive(
+        archive: archive,
+        version: version,
+        directory: temporary,
+        tools: tools,
       );
-      if (!smoke.ok || !smoke.stdout.contains(version)) {
-        throw InstallationFailure.withEvidence(
-          'The downloaded command did not report $version.',
-          remedy: smoke.summary,
-          evidence: smoke.transcript,
-        );
+      if (Directory(destination).existsSync()) {
+        Directory(destination).deleteSync(recursive: true);
       }
       temporary.renameSync(destination);
     } finally {
@@ -239,26 +228,5 @@ class GithubInstallationProvider implements InstallationProvider {
   Future<void> uninstall(ExecutableProject project) async {
     final downloads = Directory(store.downloads(project));
     if (downloads.existsSync()) downloads.deleteSync(recursive: true);
-  }
-}
-
-/// [compressed] as [command]'s release archive, every entry checked before
-/// any is written: no links, device nodes, arbitrary paths or unknown bundle
-/// layouts, and the program it ships the one asked for.
-Future<ArchiveReader> decodeInstallationArchive(
-  List<int> compressed,
-  String command,
-) async {
-  try {
-    final archive = ArchiveReader.decode(compressed);
-    if (archive.artifact.command != command) {
-      throw const FormatException('The archive exports a different command.');
-    }
-    return archive;
-  } on FormatException catch (error) {
-    throw InstallationFailure(
-      'The release archive does not match its executable layout.',
-      error.message,
-    );
   }
 }
