@@ -27,6 +27,29 @@ From the application package, after resolving its locked dependencies:
   -t bin/keybay.dart -o /tmp/keybay-build
 ```
 
+For RK, select the **same SDK** for dependency resolution and compilation by
+putting its `bin` directory first on `PATH`. Put the extracted helper directory
+on `PATH` too, or set `RK_DART_BUILD_TOOL` to its executable. For example, in
+Bash or Zsh:
+
+```sh
+export PATH="/path/to/dart-sdk/bin:/path/to/rk-dart-build-3.13.5-1-macos-arm64:$PATH"
+dart --version                         # must report 3.13.5 for this helper
+rk use local -p keybay_cli              # build and select this checkout
+rk stage keybay_cli                     # prepare its release bundle
+```
+
+Fish uses `fish_add_path /path/to/dart-sdk/bin /path/to/helper-directory`.
+Use permanent installation directories, not a temporary download directory.
+This changes the `dart` selected by the shell; it does not replace Flutter's
+bundled SDK. Updating RK alone does not install either prerequisite.
+
+Pub checks the package and dependency SDK constraints during resolution. A
+compatible SDK version can still lack the CLI build features this helper adds.
+RK checks the helper/SDK pairing before compilation and includes the selected
+SDK and setup instructions when that check fails. A completed Local bundle,
+including one reused from staging, runs without the SDK or helper.
+
 The arguments following the SDK directory are `dart build cli` options.
 `--format=exe` remains the default. `-D` accepts repeated or comma-separated
 declarations with the same semantics as `dart compile`; a comma is a separator,

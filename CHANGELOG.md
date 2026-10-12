@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Native Local and release builds check the temporary Dart helper's SDK pairing
+  before compilation. Failures name the selected compiler and explain both
+  prerequisites: Dart 3.13.5 and the matching helper. Pub continues to enforce
+  package SDK constraints, and installing a completed stage needs neither.
+
 ## 0.1.15
 
 - `rk use local` and `rk install local` reuse the exact completed release

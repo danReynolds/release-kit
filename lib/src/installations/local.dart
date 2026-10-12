@@ -159,7 +159,6 @@ class LocalInstallationProvider implements InstallationProvider {
       final defines = project.project.dartDefines;
       final native = hasDartBuildHooks(project.directory, project.root);
       for (final name in project.entrypoints.values.toSet()) {
-        progress('Compiling $name from this checkout…');
         final relative = '$name/bundle/bin/$name';
         if (native) {
           final capabilities = HostCapabilities.detect();
@@ -178,6 +177,7 @@ class LocalInstallationProvider implements InstallationProvider {
             locked: dartBuildIsLocked(project.directory, project.root),
             helper: helper,
             separateAot: false,
+            onCompile: () => progress('Compiling $name from this checkout…'),
           );
           if (!result.ok) {
             throw InstallationFailure.withEvidence(
@@ -193,6 +193,7 @@ class LocalInstallationProvider implements InstallationProvider {
             );
           }
         } else {
+          progress('Compiling $name from this checkout…');
           // Pure Dart does not need the native-build helper for declarations.
           File('${build.path}/$relative').parent.createSync(recursive: true);
           await checked(tools, dartExecutable!, [
