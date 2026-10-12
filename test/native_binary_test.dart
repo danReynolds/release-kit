@@ -365,13 +365,101 @@ binary_platforms = ["macos-arm64"]
         separateAot: false,
       );
       expect(
-        tools.calls.single,
+        tools.calls.last,
         contains('/helper/rk-dart-build /sdk -Didentity=configured=value'),
       );
-      expect(tools.calls.single, isNot(contains('--format=aot-snapshot')));
-      expect(tools.calls.single, isNot(contains('compile exe')));
+      expect(tools.calls.last, isNot(contains('--format=aot-snapshot')));
+      expect(tools.calls.last, isNot(contains('compile exe')));
     },
   );
+
+  for (final mode in ['missing', 'mismatch', 'helper', 'stock']) {
+    test('native build readiness: $mode', () async {
+      var compiled = false;
+      final tools = RecordingTools(
+        answers: (command) {
+          if (command == '/sdk/bin/dart --version') {
+            return ToolResult(
+              exitCode: 0,
+              stdout: 'Dart SDK version: 3.12.2',
+              stderr: '',
+            );
+          }
+          if (command == '/sdk/bin/dart build cli --help') {
+            return ToolResult(
+              exitCode: 0,
+              stdout: mode == 'stock' ? '--define' : '--target',
+              stderr: '',
+            );
+          }
+          if (command == 'rk-dart-build /sdk --help') {
+            expect(compiled, isFalse);
+            if (mode == 'missing') {
+              throw ProcessException('rk-dart-build', [], 'missing');
+            }
+            if (mode == 'mismatch') {
+              return ToolResult(
+                exitCode: 64,
+                stdout: '',
+                stderr: 'This preview requires Dart SDK 3.13.5 (04bcd1036cdc).',
+              );
+            }
+          }
+          if (command.contains('--output')) {
+            expect(compiled, isTrue);
+          }
+          return null;
+        },
+      );
+      final result = await buildDartNative(
+        tools: tools,
+        capabilities: HostCapabilities(
+          hostPlatform: 'macos-arm64',
+          containerRuntime: null,
+        ),
+        compiler: '/sdk/bin/dart',
+        platform: 'macos-arm64',
+        directory: root.path,
+        repositoryRoot: root.path,
+        entryPoint: 'bin/probe.dart',
+        output: '${root.path}/local',
+        defines: {'identity': 'configured=value'},
+        locked: true,
+        separateAot: false,
+        onCompile: () => compiled = true,
+      );
+      final succeeds = mode == 'helper' || mode == 'stock';
+      expect(result.ok, succeeds);
+      expect(compiled, succeeds);
+      expect(
+        tools.calls.where((c) => c.contains('--output')),
+        hasLength(succeeds ? 1 : 0),
+      );
+      if (!succeeds) {
+        expect(
+          result.summary,
+          allOf(
+            contains('Dart SDK version: 3.12.2'),
+            contains('/sdk/bin/dart'),
+            contains('3.13.5'),
+            contains('PATH'),
+            contains('rk-dart-build'),
+          ),
+        );
+        if (mode == 'mismatch') {
+          expect(result.transcript, contains('04bcd1036cdc'));
+        }
+      } else {
+        expect(tools.calls.any((c) => c.contains('--version')), isFalse);
+        expect(
+          tools.calls.last,
+          startsWith(
+            mode == 'stock' ? '/sdk/bin/dart build cli' : 'rk-dart-build /sdk',
+          ),
+        );
+      }
+    });
+  }
 
   test('foreign native hooks require a target build environment', () async {
     final tools = _NativeTools();

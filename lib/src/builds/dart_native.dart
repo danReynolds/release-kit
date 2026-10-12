@@ -113,6 +113,7 @@ Future<ToolResult> buildDartNative({
   String? helper,
   String? image,
   bool separateAot = true,
+  void Function()? onCompile,
 }) async {
   // Signed macOS releases separate the runtime and AOT module. Development
   // snapshots use the SDK's ordinary executable bundle on every host.
@@ -141,20 +142,37 @@ Future<ToolResult> buildDartNative({
     }
     if (useHelper) {
       final sdk = File(compiler).absolute.parent.parent.path;
+      final command = helper ?? 'rk-dart-build';
       try {
-        return await tools.run(helper ?? 'rk-dart-build', [
+        // The helper owns its SDK compatibility check. Its help validates that
+        // pairing without running hooks or starting compilation.
+        final ready = await tools.run(command, [
+          sdk,
+          '--help',
+        ], workingDirectory: directory);
+        if (!ready.ok) {
+          return await _nativeBuildFailure(
+            tools,
+            compiler,
+            command,
+            ready.transcript,
+          );
+        }
+        onCompile?.call();
+        return await tools.run(command, [
           sdk,
           ...arguments(output),
         ], workingDirectory: directory);
-      } on ProcessException {
-        return _failure(
-          'This SDK needs the RK Dart build patch for native assets with '
-          '${macos ? 'separate AOT output' : 'compile-time declarations'}. '
-          'Install the matching helper and set RK_DART_BUILD_TOOL to rk-dart-build. '
-          'See https://github.com/danReynolds/release-kit/releases/tag/dart-build-patch-3.13.5-1',
+      } on ProcessException catch (error) {
+        return _nativeBuildFailure(
+          tools,
+          compiler,
+          command,
+          'Could not start $command for the native build: $error',
         );
       }
     }
+    onCompile?.call();
     return tools.run(compiler, [
       'build',
       'cli',
@@ -194,6 +212,7 @@ Future<ToolResult> buildDartNative({
     }
     user = ids.map((id) => id.stdout.trim()).join(':');
   }
+  onCompile?.call();
   return tools.run(runtime, [
     'run',
     '--rm',
@@ -225,6 +244,26 @@ Future<ToolResult> buildDartNative({
       '/out/${Directory(output).uri.pathSegments.where((part) => part.isNotEmpty).last}',
     ),
   ]);
+}
+
+// Read the version only on failure; successful builds need no extra SDK probe.
+Future<ToolResult> _nativeBuildFailure(
+  Tools tools,
+  String compiler,
+  String helper,
+  String detail,
+) async {
+  final version = await tools.run(compiler, const ['--version']);
+  return _failure(
+    'Native build preparation failed with ${version.lines.join(' ').trim()} '
+    '($compiler), using $helper. '
+    'Package SDK compatibility is checked by Pub; this build also needs '
+    'native CLI build features. The temporary RK helper requires stock Dart '
+    '3.13.5 and its matching rk-dart-build. Select that SDK on PATH and put '
+    'the helper on PATH or set RK_DART_BUILD_TOOL to its executable. '
+    'Setup: https://github.com/danReynolds/release-kit/tree/main/tool/dart_build_patch'
+    '\n$detail',
+  );
 }
 
 // Only fixed shell code: application paths and declarations are positional
