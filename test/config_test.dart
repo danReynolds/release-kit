@@ -63,6 +63,24 @@ homebrew_tap = "$tap"
       }
     });
 
+    test('a Homebrew description is one line of at most 80 characters', () {
+      for (final description in ['x' * 81, 'a\ttab']) {
+        expect(
+          refusal('''
+schema = 2
+
+[release.cli]
+publish = ["git-tag", "github-release", "homebrew"]
+binary_platforms = ["macos-arm64"]
+homebrew_description = "$description"
+'''),
+          'RK-CONF-005 6 homebrew_description: must be one line of at most 80 '
+          'characters',
+          reason: description,
+        );
+      }
+    });
+
     test('an inline list splits into typed unit and project targets', () {
       final config = accepted('''
 schema = 2
@@ -234,6 +252,21 @@ homebrew_tap = "danReynolds/homebrew-tools"
     expect(config.units.single.homebrewTap, 'danReynolds/homebrew-tools');
   });
 
+  test('a Homebrew description lives on its release unit', () {
+    final config = accepted('''
+schema = 2
+
+[release.cli]
+publish = ["git-tag", "github-release", "homebrew"]
+binary_platforms = ["macos-arm64"]
+homebrew_description = "Encrypted local secrets vault"
+''');
+    expect(
+      config.units.single.homebrewDescription,
+      'Encrypted local secrets vault',
+    );
+  });
+
   group('a setting nothing in the unit can read is refused', () {
     test('homebrew_tap on a unit that does not publish to homebrew', () {
       expect(
@@ -247,6 +280,22 @@ homebrew_tap = "danReynolds/homebrew-tools"
         'to homebrew',
       );
     });
+
+    test(
+      'homebrew_description on a unit that does not publish to homebrew',
+      () {
+        expect(
+          refusal(
+            'schema = 2\n[release.cli]\n'
+            'publish = ["git-tag", "github-release"]\n'
+            'binary_platforms = ["macos-arm64"]\n'
+            'homebrew_description = "Encrypted local secrets vault"\n',
+          ),
+          'RK-CONF-009 5 unit "cli" declares homebrew_description but does not '
+          'publish to homebrew',
+        );
+      },
+    );
   });
 
   test('platforms may accompany a registry without GitHub Release', () {

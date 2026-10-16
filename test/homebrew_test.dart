@@ -56,6 +56,7 @@ schema = 2
 [release.cli]
 tag = "v{version}"
 homebrew_tap = "owner/homebrew-tap"
+homebrew_description = "Tool that does one thing"
 publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["linux-x64"]
 ''',
@@ -90,6 +91,23 @@ void main() {
       ),
     );
     expect(formula, contains(_assets['macos-arm64']!.sha256));
+  });
+
+  test("the formula's desc is the unit's description, or rk's default", () {
+    String desc(String? description) => HomebrewFormula.renderRelease(
+      className: 'Keybay',
+      version: '0.2.0',
+      repository: 'danReynolds/keybay',
+      tag: 'keybay_cli-v0.2.0',
+      assets: _assets,
+      executable: 'keybay',
+      description: description,
+    ).split('\n').singleWhere((line) => line.startsWith('  desc '));
+
+    expect(desc(null), '  desc "Released by rk"');
+    expect(desc('Encrypted local vault'), '  desc "Encrypted local vault"');
+    // Ruby interpolation forms never survive into the formula's string.
+    expect(desc(r'C#$ #@x #{y} #'), r'  desc "C\#$ \#@x \#{y} #"');
   });
 
   test('selects the archive and checksum by OS and architecture', () {
@@ -392,6 +410,11 @@ void main() {
         expect(
           HomebrewFormula.versionIn(authority.replacement!)?.canonical,
           '1.0.0',
+        );
+        // Recovery renders the same description staging would.
+        expect(
+          utf8.decode(authority.replacement!),
+          contains('desc "Tool that does one thing"'),
         );
         expect(tools.calls.where((call) => call == formulaRead), hasLength(1));
 

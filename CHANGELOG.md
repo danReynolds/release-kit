@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A release unit can set `homebrew_description`, the formula's `desc` shown
+  by `brew info`, instead of `Released by rk`. It is one line of at most 80
+  characters, and stages made without it keep matching their plan. Formula
+  strings now escape every Ruby interpolation form, `#$` and `#@` as well as
+  `#{`.
+
 - Native Local and release builds check the temporary Dart helper's SDK pairing
   before compilation. Failures name the selected compiler and explain both
   prerequisites: Dart 3.13.5 and the matching helper. Pub continues to enforce

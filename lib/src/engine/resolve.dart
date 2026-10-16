@@ -94,6 +94,7 @@ class Resolution {
           tagPattern: tags ? declared.tagPattern ?? 'v{version}' : null,
           tagWasDeclared: declared.tagPattern != null,
           homebrewTap: declared.homebrewTap,
+          homebrewDescription: declared.homebrewDescription,
           projects: resolved,
           location: declared.location,
         ),
@@ -445,6 +446,7 @@ class ResolvedUnit {
     required this.projects,
     required this.location,
     this.homebrewTap,
+    this.homebrewDescription,
   });
 
   final String name;
@@ -456,6 +458,9 @@ class ResolvedUnit {
 
   /// The tap when it is not the conventional one.
   final String? homebrewTap;
+
+  /// The formula's `desc`, when the unit names one.
+  final String? homebrewDescription;
 
   final List<ResolvedProject> projects;
   final SourceLocation location;

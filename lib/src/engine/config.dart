@@ -47,6 +47,7 @@ class UnitConfig {
     required this.projects,
     required this.location,
     this.homebrewTap,
+    this.homebrewDescription,
   });
 
   final String name;
@@ -58,6 +59,9 @@ class UnitConfig {
 
   /// `owner/homebrew-tap` when the tap is not the conventional one.
   final String? homebrewTap;
+
+  /// The formula's `desc`, when the unit names one.
+  final String? homebrewDescription;
 
   final List<ProjectConfig> projects;
   final SourceLocation location;
@@ -208,6 +212,13 @@ final _unitSettings = [
     check: _githubCoordinate,
     hint: 'Run rk target homebrew for the inferred default and example.',
   ),
+  const _Setting(
+    'homebrew_description',
+    _Shape.text,
+    'homebrew_description = "Fast tool that does one thing well"',
+    check: _homebrewDescription,
+    hint: 'brew info shows it; brew audit checks its style.',
+  ),
 ];
 
 /// The project settings a unit with project rows keeps on the rows.
@@ -344,6 +355,7 @@ class _Reader {
       publish: Set.unmodifiable(unitTargets),
       tagPattern: value['tag'] as String?,
       homebrewTap: value['homebrew_tap'] as String?,
+      homebrewDescription: value['homebrew_description'] as String?,
       projects: List.unmodifiable(projects.nonNulls),
       location: location,
     );
@@ -580,6 +592,14 @@ class _Reader {
         'add "homebrew" to its publish list, or remove homebrew_tap',
       );
     }
+    if (homebrew.isEmpty && unit.homebrewDescription != null) {
+      _rule(
+        table.locationOf('homebrew_description'),
+        'unit "$name" declares homebrew_description but does not publish to '
+            'homebrew',
+        'add "homebrew" to its publish list, or remove homebrew_description',
+      );
+    }
   }
 
   /// RK-CONF-009, for several tagged units: each names its tag, or a unit
@@ -676,6 +696,14 @@ String? _tagPattern(String pattern) {
       : 'git will not accept it: $issue; a tag is a git ref, so its name '
             'follows git\'s rules';
 }
+
+/// Homebrew limits a formula's `desc` to one line of 80 characters. The
+/// renderer escapes it; this keeps the release from failing `brew audit`.
+String? _homebrewDescription(String description) =>
+    description.runes.length <= 80 &&
+        description.runes.every((rune) => rune >= 0x20 && rune != 0x7f)
+    ? null
+    : 'must be one line of at most 80 characters';
 
 String? _githubCoordinate(String tap) =>
     RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$').hasMatch(tap) &&

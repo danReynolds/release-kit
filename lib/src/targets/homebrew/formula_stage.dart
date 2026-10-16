@@ -24,6 +24,7 @@ Future<Produced> prepareFormula(StageRun run, Work work) async {
     repository: repository,
     tag: unit.tag!,
     executable: executable,
+    description: unit.homebrewDescription,
     assets: {
       for (final archive in work.inputs)
         archive.platform!: PlatformAsset(

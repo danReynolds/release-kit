@@ -77,6 +77,10 @@ Map<String, Object?> stagePlanFor(ResolvedUnit unit, String? repository) => {
     'tag': unit.tag,
     'tag_pattern': unit.tagPattern,
     'homebrew_tap': unit.homebrewTap,
+    // Only when declared, so stages made before the setting existed still
+    // match their plan.
+    if (unit.homebrewDescription case final description?)
+      'homebrew_description': description,
     'targets': unit.publish.map((target) => target.configName).toList()..sort(),
   },
   'repository': repository,

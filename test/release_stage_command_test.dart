@@ -48,6 +48,7 @@ schema = 2
 path = "packages/tool"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64"]
+homebrew_description = "Tool that does one thing"
 ''';
 
 const _pubOnlyConfig = '''
@@ -960,6 +961,7 @@ void main() {
         contains('releases/download/v1.2.3/tool-1.2.3-linux-x64.tar.gz'),
       );
       expect(formula, isNot(contains('producers/tool/archives')));
+      expect(formula, contains('desc "Tool that does one thing"'));
     },
   );
 
