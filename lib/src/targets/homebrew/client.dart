@@ -15,8 +15,9 @@ import '../../transforms/digest.dart';
 class HomebrewFormula {
   /// Renders rk's complete formula for one GitHub-hosted release.
   ///
-  /// Target adapters supply only release facts. Provider presentation stays
-  /// here so staging and lost-stage recovery cannot drift.
+  /// Target adapters supply release facts and the unit's configured
+  /// description. Provider presentation stays here so staging and lost-stage
+  /// recovery cannot drift.
   static String renderRelease({
     required String className,
     required String version,
@@ -38,8 +39,8 @@ class HomebrewFormula {
 
   /// Builds the formula text.
   ///
-  /// Every value is either derived from the manifest or a digest of an asset
-  /// rk produced; nothing here is interpolated from configuration.
+  /// Every value is derived from the manifest, is a digest of an asset rk
+  /// produced, or is the validated description; each string is escaped.
   static String render({
     required String className,
     required String description,
@@ -186,7 +187,8 @@ class HomebrewFormula {
       .replaceAll('\n', ' ')
       .replaceAll('\\', r'\\')
       .replaceAll('"', r'\"')
-      .replaceAll(r'#{', r'\#{');
+      // Ruby interpolates "#{...}", "#$global" and "#@ivar" in double quotes.
+      .replaceAllMapped(RegExp(r'#(?=[{$@])'), (_) => r'\#');
 
   static String _url(String repository, String tag, String asset) =>
       'https://github.com/$repository/releases/download/'

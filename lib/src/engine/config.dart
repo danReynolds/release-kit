@@ -700,7 +700,7 @@ String? _tagPattern(String pattern) {
 /// Homebrew limits a formula's `desc` to one line of 80 characters. The
 /// renderer escapes it; this keeps the release from failing `brew audit`.
 String? _homebrewDescription(String description) =>
-    description.length <= 80 &&
+    description.runes.length <= 80 &&
         description.runes.every((rune) => rune >= 0x20 && rune != 0x7f)
     ? null
     : 'must be one line of at most 80 characters';

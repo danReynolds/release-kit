@@ -56,6 +56,7 @@ schema = 2
 [release.cli]
 tag = "v{version}"
 homebrew_tap = "owner/homebrew-tap"
+homebrew_description = "Tool that does one thing"
 publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["linux-x64"]
 ''',
@@ -105,8 +106,8 @@ void main() {
 
     expect(desc(null), '  desc "Released by rk"');
     expect(desc('Encrypted local vault'), '  desc "Encrypted local vault"');
-    // Configuration never reaches the Ruby source unescaped.
-    expect(desc(r'Say "hi" #{x}'), r'  desc "Say \"hi\" \#{x}"');
+    // Ruby interpolation forms never survive into the formula's string.
+    expect(desc(r'C#$ #@x #{y} #'), r'  desc "C\#$ \#@x \#{y} #"');
   });
 
   test('selects the archive and checksum by OS and architecture', () {
@@ -409,6 +410,11 @@ void main() {
         expect(
           HomebrewFormula.versionIn(authority.replacement!)?.canonical,
           '1.0.0',
+        );
+        // Recovery renders the same description staging would.
+        expect(
+          utf8.decode(authority.replacement!),
+          contains('desc "Tool that does one thing"'),
         );
         expect(tools.calls.where((call) => call == formulaRead), hasLength(1));
 
