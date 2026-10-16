@@ -158,6 +158,7 @@ final class HomebrewTargetModule extends TargetModule {
           tag: tag,
           assets: assets,
           executable: executable,
+          description: unit.homebrewDescription,
         ),
       ),
     );

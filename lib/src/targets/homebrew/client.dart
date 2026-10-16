@@ -24,9 +24,10 @@ class HomebrewFormula {
     required String tag,
     required Map<String, PlatformAsset> assets,
     required String executable,
+    String? description,
   }) => render(
     className: className,
-    description: 'Released by rk',
+    description: description ?? 'Released by rk',
     homepage: 'https://github.com/$repository',
     version: version,
     repository: repository,

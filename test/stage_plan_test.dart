@@ -154,6 +154,34 @@ version = "0.1.0"
       expect(planFor('["make"]', '["out/*"]'), isNot(base));
     });
 
+    test('a Homebrew description names the stage only when declared', () {
+      Map<String, Object?> planFor(String setting) {
+        final resolution = resolve({
+          ...toolFiles,
+          'release.toml': '''
+schema = 2
+
+[release.tool]
+publish = ["git-tag", "github-release", "homebrew"]
+binary_platforms = ["linux-x64"]
+$setting''',
+        });
+        return stagePlanFor(resolution.units.single, git().originUrl);
+      }
+
+      final plain = planFor('');
+      // Stages made before the setting existed keep matching their plan.
+      expect(
+        (plain['unit']! as Map<String, Object?>).containsKey(
+          'homebrew_description',
+        ),
+        isFalse,
+      );
+      final described = planFor('homebrew_description = "Tool"\n');
+      expect(described, isNot(plain));
+      expect(planFor('homebrew_description = "Tool"\n'), described);
+    });
+
     test('the Dart SDK is not read to name a stage', () {
       var reads = 0;
       final resolution = resolve(toolFiles);

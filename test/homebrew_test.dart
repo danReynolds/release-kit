@@ -92,6 +92,23 @@ void main() {
     expect(formula, contains(_assets['macos-arm64']!.sha256));
   });
 
+  test("the formula's desc is the unit's description, or rk's default", () {
+    String desc(String? description) => HomebrewFormula.renderRelease(
+      className: 'Keybay',
+      version: '0.2.0',
+      repository: 'danReynolds/keybay',
+      tag: 'keybay_cli-v0.2.0',
+      assets: _assets,
+      executable: 'keybay',
+      description: description,
+    ).split('\n').singleWhere((line) => line.startsWith('  desc '));
+
+    expect(desc(null), '  desc "Released by rk"');
+    expect(desc('Encrypted local vault'), '  desc "Encrypted local vault"');
+    // Configuration never reaches the Ruby source unescaped.
+    expect(desc(r'Say "hi" #{x}'), r'  desc "Say \"hi\" \#{x}"');
+  });
+
   test('selects the archive and checksum by OS and architecture', () {
     final formula = render();
     expect(formula, contains('on_macos do'));
