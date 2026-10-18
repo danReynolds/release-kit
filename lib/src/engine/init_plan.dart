@@ -299,7 +299,7 @@ final class InitPlan {
   }
 
   String renderToml() {
-    final buffer = StringBuffer('schema = 2\n');
+    final buffer = StringBuffer('schema = 3\n');
     final tagged = included
         .where((candidate) => candidate.selected.contains(ReleaseChoice.gitTag))
         .toList();
@@ -326,7 +326,7 @@ final class InitPlan {
       }
       if (candidate.selected.contains(ReleaseChoice.binary)) {
         buffer.write(
-          'binary_platforms = '
+          'binary.platforms = '
           '[${defaultBinaryPlatforms.map((item) => '"$item"').join(', ')}]\n',
         );
       }

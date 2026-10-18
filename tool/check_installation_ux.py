@@ -66,7 +66,7 @@ def workspace(home, configured=True, names=('orbit', 'orbit_admin')):
             'workspace:\n' + ''.join(f'  - {name}\n' for name in names))
     if configured:
         (project / 'release.toml').write_text(
-            'schema = 2\n[release.apps]\npublish = []\n'
+            'schema = 3\n[release.apps]\npublish = []\n'
             + ''.join(f'[[release.apps.project]]\npath = "{name}"\npublish = ["pub.dev"]\n' for name in names))
     return project
 
@@ -221,9 +221,9 @@ def main():
         home = root / 'idle-close'
         project = fixture(home, True)
         (project / 'release.toml').write_text(
-            'schema = 2\n[release.demo]\n'
+            'schema = 3\n[release.demo]\n'
             'publish = ["git-tag", "github-release", "homebrew"]\n'
-            'binary_platforms = ["macos-arm64", "linux-x64"]\n')
+            'binary.platforms = ["macos-arm64", "linux-x64"]\n')
         subprocess.run(['git', 'init', '-q'], cwd=project, check=True)
         subprocess.run(['git', 'remote', 'add', 'origin',
                         'https://github.com/example/orbit.git'], cwd=project, check=True)

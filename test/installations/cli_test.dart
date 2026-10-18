@@ -190,7 +190,7 @@ void main() {
       File(
         '${sdk.path}/pubspec.yaml',
       ).writeAsStringSync('name: sdk\nversion: 1.0.0\n');
-      File('${scratch.path}/release.toml').writeAsStringSync('''schema = 2
+      File('${scratch.path}/release.toml').writeAsStringSync('''schema = 3
 [release.first]
 path = "first"
 publish = ["pub.dev"]

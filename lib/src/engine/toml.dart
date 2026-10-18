@@ -11,23 +11,29 @@ import 'diagnostic.dart';
 /// remember to reject it. The accepted grammar is:
 ///
 /// * comments (`# ...`) and blank lines
-/// * bare keys matching `[A-Za-z0-9_-]+`
+/// * bare keys matching `[A-Za-z0-9_-]+`, and dotted keys of them
+///   (`binary.platforms`), which make a table of their own
 /// * values: basic strings (`"..."`), non-negative integers, and arrays of
 ///   basic strings, optionally spread over lines with a trailing comma
 /// * tables (`[a.b]`) and array-of-table headers (`[[a.b]]`)
 ///
 /// Deliberately absent: inline tables, multi-line or literal strings, floats,
-/// booleans, dates, exponents, underscores in numbers, dotted keys, quoted
-/// keys, nested arrays, and a table inside an array of tables.
+/// booleans, dates, exponents, underscores in numbers, quoted keys, nested
+/// arrays, a table inside an array of tables, and a header that reopens a
+/// table dotted keys made.
 TomlTable? parseToml(String source, String path, Diagnostics diagnostics) =>
     _Parser(source, path, diagnostics).run();
 
 /// A table, remembering where each key was written so a later problem can
 /// point a reader at the line that caused it.
 class TomlTable {
-  TomlTable(this.location);
+  TomlTable(this.location, {this.dotted = false});
 
   final SourceLocation location;
+
+  /// Whether dotted keys made this table, as `binary` in
+  /// `binary.platforms = [...]`, rather than a header.
+  final bool dotted;
   final Map<String, Object> values = {};
   final Map<String, SourceLocation> keyLocations = {};
 
@@ -176,6 +182,13 @@ class _Parser {
             () => SourceLocation(_path, _line),
           );
           table = child;
+        case TomlTable child when child.dotted:
+          _fail(
+            '"${path.take(i + 1).join('.')}" is made by dotted keys on line '
+            '${table.locationOf(key).line}, so a header cannot reopen it',
+            remedy: 'write its settings as dotted keys, as in $key.name = ...',
+          );
+          return null;
         case TomlTable child:
           if (last && !createArray && child.values.isNotEmpty) {
             _fail('table "${path.join('.')}" is defined more than once');
@@ -199,24 +212,56 @@ class _Parser {
       );
       return;
     }
-    final key = text.substring(0, equals).trim();
-    if (!_bareKey.hasMatch(key)) {
+    final written = text.substring(0, equals).trim();
+    final path = written.split('.').map((s) => s.trim()).toList();
+    if (path.any((s) => !_bareKey.hasMatch(s))) {
       _fail(
-        'keys must be bare: "$key"',
-        remedy: 'use letters, digits, hyphens and underscores, unquoted',
+        'keys must be bare or dotted: "$written"',
+        remedy:
+            'use letters, digits, hyphens and underscores, unquoted, as in '
+            'path or binary.platforms',
       );
       return;
     }
-    if (_current.has(key)) {
-      _fail('"$key" is assigned more than once in this table');
+    final table = _dotted(path);
+    if (table == null) return;
+    final key = path.last;
+    if (table.has(key)) {
+      _fail('"${path.join('.')}" is assigned more than once in this table');
       return;
     }
 
     final raw = text.substring(equals + 1).trim();
     final value = _value(raw);
     if (value == null) return;
-    _current.values[key] = value;
-    _current.keyLocations[key] = SourceLocation(_path, _line);
+    table.values[key] = value;
+    table.keyLocations[key] = SourceLocation(_path, _line);
+  }
+
+  /// The table a dotted key's last segment is assigned in, making each table
+  /// before it that does not exist yet. Only tables dotted keys made can be
+  /// added to this way.
+  TomlTable? _dotted(List<String> path) {
+    var table = _current;
+    for (var i = 0; i < path.length - 1; i++) {
+      final key = path[i];
+      switch (table.values[key]) {
+        case null:
+          final child = TomlTable(SourceLocation(_path, _line), dotted: true);
+          table.values[key] = child;
+          table.keyLocations[key] = SourceLocation(_path, _line);
+          table = child;
+        case TomlTable child when child.dotted:
+          table = child;
+        default:
+          _fail(
+            '"${path.join('.')}" cannot add to "${path.take(i + 1).join('.')}", '
+            'already defined on line ${table.locationOf(key).line}',
+          );
+          return null;
+      }
+    }
+    return table;
   }
 
   Object? _value(String raw) {

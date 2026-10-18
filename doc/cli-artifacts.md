@@ -1,6 +1,6 @@
 # CLI artifacts
 
-`binary_platforms` selects where a Dart CLI runs. rk chooses its packaging;
+`binary.platforms` selects where a Dart CLI runs. rk chooses its packaging;
 there is no single-file versus bundle setting to maintain.
 
 | Platform | Archive contents | Command |
@@ -151,12 +151,12 @@ A CLI may need native metadata compiled into its executable. Select the fields
 on that project in `release.toml`:
 
 ```toml
-schema = 2
+schema = 3
 
 [release.cli]
 publish = []
-binary_platforms = ["macos-arm64", "linux-x64"]
-dart_defines_from_pubspec = ["keybay.application_id"]
+binary.platforms = ["macos-arm64", "linux-x64"]
+binary.defines_from_pubspec = ["keybay.application_id"]
 ```
 
 The value stays in its owning `pubspec.yaml`:

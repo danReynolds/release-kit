@@ -310,7 +310,7 @@ class Resolution {
     if (manifest == null) return null;
     final dart = [
       for (final target in declared.publish) '"${target.configName}"',
-      if (declared.wantsBinaries) 'binary_platforms',
+      if (declared.wantsBinaries) 'binary.platforms',
     ];
     if (!declared.buildsAssets || dart.isNotEmpty) {
       diagnostics.add(
@@ -320,8 +320,9 @@ class Resolution {
         source: declared.location,
         remedy: dart.isNotEmpty
             ? '${dart.join(' and ')} ${dart.length == 1 ? 'is' : 'are'} for '
-                  'Dart packages; declare build and assets instead'
-            : 'declare build, the command that builds it, and assets, the '
+                  'Dart packages; declare assets.build and assets.files instead'
+            : 'declare assets.build, the command that builds it, and '
+                  'assets.files, the '
                   'files that command writes for the GitHub release',
       );
       return null;
@@ -513,6 +514,8 @@ class ResolvedUnit {
   /// The tap this unit's formula goes to, declared or by Homebrew's
   /// convention. Derived twice before, and a drift there means rk inspects
   /// one tap and pushes to another.
+  /// The tap's GitHub repository: the declared one, or the owner's
+  /// `homebrew-tap`, which `brew tap owner/tap` finds.
   String tapFor(String repository) =>
       homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
 }

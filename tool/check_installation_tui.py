@@ -200,7 +200,7 @@ def fixture(home, configured):
     (project / 'bin/orbit.dart').write_text("void main() { print('local dogfood'); }\n")
     if configured:
         (project / 'release.toml').write_text(
-            'schema = 2\n[release.demo]\npublish = ["pub.dev"]\n')
+            'schema = 3\n[release.demo]\npublish = ["pub.dev"]\n')
     return project
 
 

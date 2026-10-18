@@ -1,5 +1,5 @@
-schema = 2
+schema = 3
 
 [release.cli]
 publish = ["git-tag", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]

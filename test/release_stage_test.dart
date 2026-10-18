@@ -17,11 +17,11 @@ const _commit = '1111111111111111111111111111111111111111';
 const _tree = '2222222222222222222222222222222222222222';
 
 const _binaryConfig = '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "macos-arm64"]
+binary.platforms = ["linux-x64", "macos-arm64"]
 ''';
 
 void main() {
@@ -361,7 +361,7 @@ void main() {
       }),
       ..._derive(
         '''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "core-v{version}"
@@ -372,8 +372,8 @@ publish = ["git-tag", "pub.dev"]
 tag = "parser-v{version}"
 path = "native/parser"
 publish = ["git-tag", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["assets/parser.so", "parser.dylib"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["assets/parser.so", "parser.dylib"]
 ''',
         {
           'packages/core/pubspec.yaml': 'name: core\nversion: 1.0.0\n',

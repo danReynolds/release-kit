@@ -18,7 +18,7 @@ void main() {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag", "pub.dev"]

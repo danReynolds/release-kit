@@ -220,6 +220,27 @@ the worked example and defines the modularity and correctness bar. The
 [release pipeline architecture](doc/release-pipeline.md) shows how target
 modules join the shared stage and publication coordinators.
 
+## Settings
+
+`path`, `tag` and `publish` are plain keys. Every other setting is grouped
+under what it configures, as a dotted key:
+
+| Setting | On | What it does |
+|---|---|---|
+| `path` | project | Its directory, `.` by default |
+| `publish` | unit, project | Targets: `git-tag` and `github-release` on the unit, `pub.dev` and `homebrew` on the project |
+| `tag` | unit | The tag pattern, as in `"cli-v{version}"` |
+| `binary.platforms` | project | Build standalone executables for these platforms |
+| `binary.defines_from_pubspec` | project | Pubspec fields compiled in as `-D<field>=<value>` |
+| `assets.build` | project | Your own build command, instead of `binary` |
+| `assets.files` | project | The files it writes, relative to `{out}`, for the GitHub release |
+| `homebrew.description` | project | The formula's `desc`, shown by `brew info` |
+| `homebrew.tap` | project | The tap, as `brew tap` names it; `<owner>/tap` by default |
+
+A unit with one project holds that project's settings itself. A unit with
+several gives each one a `[[release.<unit>.project]]` row. `rk target <name>`
+explains a target's settings with an example.
+
 ## Two packages, one release
 
 Each `[release.<name>]` is a unit, released on its own version. Two
@@ -227,7 +248,7 @@ units, `cli` depending on `core`, publishing under their pubspec names
 — `init` writes this file too, and it stays yours to edit:
 
 ```toml
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/core"
@@ -291,19 +312,19 @@ release:
 path = "native/parser"
 tag = "parser-v{version}"
 publish = ["git-tag", "github-release"]
-build = ["tool/build_release_libraries.sh", "{out}"]
-assets = [
-  "assets/libparser-macos-arm64.dylib",
-  "assets/libparser-linux-x64.so",
-  "assets/parser-windows-x64.dll",
+assets.build = ["tool/build_release_libraries.sh", "{out}"]
+assets.files = [
+  "libparser-macos-arm64.dylib",
+  "libparser-linux-x64.so",
+  "parser-windows-x64.dll",
 ]
 ```
 
 - **Where it runs.** rk runs the command from the project's directory in a
   clean copy of the committed source. `{out}` is an empty directory the
   command writes to.
-- **What reaches the release.** Only the files `assets` names, each under its
-  file name.
+- **What reaches the release.** Only the files `assets.files` names, each
+  under its file name.
 - **What the command is told.** Its environment carries the release's facts:
   `RK_OUT`, `RK_SOURCE_COMMIT`, `RK_REPOSITORY` (`owner/name`), `RK_VERSION`
   and `RK_TAG`.

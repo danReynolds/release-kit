@@ -2,11 +2,25 @@
 
 ## Unreleased
 
-- A release unit can set `homebrew_description`, the formula's `desc` shown
-  by `brew info`, instead of `Released by rk`. It is one line of at most 80
-  characters, and stages made without it keep matching their plan. Formula
-  strings now escape every Ruby interpolation form, `#$` and `#@` as well as
-  `#{`.
+- **Breaking:** `release.toml` is schema 3. `path`, `tag` and `publish` stay
+  plain keys, and every other setting is grouped under what it configures,
+  as a TOML dotted key: `binary_platforms` is now `binary.platforms`,
+  `dart_defines_from_pubspec` is `binary.defines_from_pubspec`, `build` and
+  `assets` are `assets.build` and `assets.files`, and `homebrew_tap` is
+  `homebrew.tap`. rk reads only schema 3 and refuses a schema 2 file with
+  these renames. rk 0.1.15 and earlier report `keys must be bare` on a schema
+  3 file: upgrade rk. Finish a partly published release with the rk that
+  staged it before migrating its repository.
+- `homebrew.tap` takes the tap as `brew tap` names it: `owner/tools`
+  publishes to `owner/homebrew-tools`, and the full repository name still
+  works. Homebrew settings sit beside `"homebrew"` in `publish`, so a unit
+  with project rows sets them on the row that publishes the formula.
+- `homebrew.description` sets the formula's `desc`, shown by `brew info`,
+  instead of `Released by rk`. It is one line of at most 80 characters, and
+  stages made without it keep matching their plan. Formula strings now escape
+  every Ruby interpolation form, `#$` and `#@` as well as `#{`.
+- An `assets.files` entry that names `{out}` is refused when `release.toml` is
+  read, rather than after the build: entries are already relative to it.
 
 - Native Local and release builds check the temporary Dart helper's SDK pairing
   before compilation. Failures name the selected compiler and explain both

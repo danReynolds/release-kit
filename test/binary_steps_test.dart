@@ -52,12 +52,12 @@ void main() {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/tool"
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''',
       'release.toml',
       diagnostics,

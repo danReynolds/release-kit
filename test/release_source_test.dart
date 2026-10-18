@@ -23,7 +23,7 @@ void main() {
   setUp(() {
     root = Directory.systemTemp.createTempSync('rk-release-source-');
     _write(root, 'release.toml', '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["pub.dev"]
@@ -68,7 +68,7 @@ publish = ["pub.dev"]
         '[package]\nname = "b"\nversion = "2.0.0"\n',
       );
       _write(root, 'release.toml', '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["pub.dev"]
@@ -79,8 +79,8 @@ publish = ["pub.dev"]
 
 [release.b]
 path = "packages/b"
-build = ["tool/build.sh", "{out}"]
-assets = ["b.tar.gz"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["b.tar.gz"]
 publish = ["git-tag", "github-release"]
 ''');
       commitAll();
@@ -118,7 +118,7 @@ publish = ["git-tag", "github-release"]
         root,
         'release.toml',
         [
-          'schema = 2',
+          'schema = 3',
           for (final name in links.keys)
             '[release.$name]\npath = "packages/$name"\npublish = ["pub.dev"]',
         ].join('\n\n'),
@@ -175,7 +175,7 @@ publish = ["git-tag", "github-release"]
       '${root.path}/packages/a/CHANGELOG.md',
     ).writeAsBytesSync(latin1.encode('## 1.0.0\n- caf\u00e9\n'));
     _write(root, 'release.toml', '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["pub.dev"]
@@ -299,7 +299,7 @@ publish = ["pub.dev"]
 
   test('a project path is a POSIX path: a colon is part of a name', () async {
     _write(root, 'release.toml', '''
-schema = 2
+schema = 3
 
 [release.tool]
 path = "c:tool"

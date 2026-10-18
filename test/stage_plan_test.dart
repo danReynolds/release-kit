@@ -56,11 +56,11 @@ void main() {
 
   final toolFiles = {
     'release.toml': '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag", "github-release", "pub.dev"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''',
     'pubspec.yaml': '''
 name: tool
@@ -129,14 +129,14 @@ executables:
         final resolution = resolve({
           'release.toml':
               '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "parser-v{version}"
 path = "native/parser"
 publish = ["git-tag", "github-release"]
-build = $build
-assets = $assets
+assets.build = $build
+assets.files = $assets
 ''',
           'native/parser/Cargo.toml': '''
 [package]
@@ -159,11 +159,11 @@ version = "0.1.0"
         final resolution = resolve({
           ...toolFiles,
           'release.toml': '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 $setting''',
         });
         return stagePlanFor(resolution.units.single, git().originUrl);
@@ -177,9 +177,9 @@ $setting''',
         ),
         isFalse,
       );
-      final described = planFor('homebrew_description = "Tool"\n');
+      final described = planFor('homebrew.description = "Tool"\n');
       expect(described, isNot(plain));
-      expect(planFor('homebrew_description = "Tool"\n'), described);
+      expect(planFor('homebrew.description = "Tool"\n'), described);
     });
 
     test('the Dart SDK is not read to name a stage', () {

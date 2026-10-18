@@ -163,7 +163,7 @@ final class AssetBuild {
             message: '${project.name}: its build did not start',
             remedy:
                 '${project.build.first} could not start: ${error.message}. '
-                'build names a program by its path from $from, or by a name '
+                'assets.build names a program by its path from $from, or by a name '
                 'on PATH, and a script needs its executable bit and the '
                 'interpreter its first line names. Fix it, then stage '
                 '${step.unit} again.',
@@ -224,8 +224,9 @@ final class AssetBuild {
                 '${project.name}: its build did not write '
                 '${missing.join(', ')}',
             remedy:
-                'assets names files the build writes under {out}, and $wrote. '
-                'Make the build write them, or correct assets, then stage '
+                'assets.files names files the build writes under {out}, and '
+                '$wrote. Make the build write them, or correct assets.files, '
+                'then stage '
                 '${step.unit} again.',
             evidence: transcript.isEmpty ? null : transcript,
           ),

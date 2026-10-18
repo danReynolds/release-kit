@@ -126,10 +126,10 @@ void main() {
     ) {
       final config = ReleaseConfig.parse(
         '''
-schema = 2
+schema = 3
 [release.tool]
 publish = []
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 $setting
 ''',
         'release.toml',
@@ -158,7 +158,7 @@ $metadata
       () async {
         final diagnostics = Diagnostics();
         final result = resolve(
-          'dart_defines_from_pubspec = ["keybay.application_id"]',
+          'binary.defines_from_pubspec = ["keybay.application_id"]',
           'keybay:\n  application_id: dev.example.tool',
           diagnostics,
         );
@@ -196,7 +196,7 @@ $metadata
         final diagnostics = Diagnostics();
         expect(
           resolve(
-            'dart_defines_from_pubspec = ["keybay.application_id"]',
+            'binary.defines_from_pubspec = ["keybay.application_id"]',
             metadata,
             diagnostics,
           ),
@@ -212,7 +212,7 @@ $metadata
       for (final selection in ['["a", "a"]', '["../a"]', '"a"']) {
         final diagnostics = Diagnostics();
         expect(
-          resolve('dart_defines_from_pubspec = $selection', '', diagnostics),
+          resolve('binary.defines_from_pubspec = $selection', '', diagnostics),
           isNull,
         );
         expect(

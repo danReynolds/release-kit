@@ -16,7 +16,7 @@ class ReleaseConfig {
   final List<UnitConfig> units;
 
   /// The only schema version this build understands.
-  static const supportedSchema = 2;
+  static const supportedSchema = 3;
 
   static final targetNames = Set<String>.unmodifiable(
     PublishTarget.values.map((t) => t.configName),
@@ -57,10 +57,11 @@ class UnitConfig {
   /// publication target's convention once package names are known.
   final String? tagPattern;
 
-  /// `owner/homebrew-tap` when the tap is not the conventional one.
+  /// The tap's GitHub repository, `owner/homebrew-name`, when the
+  /// project that publishes the formula names one.
   final String? homebrewTap;
 
-  /// The formula's `desc`, when the unit names one.
+  /// The formula's `desc`, when the project that publishes it names one.
   final String? homebrewDescription;
 
   final List<ProjectConfig> projects;
@@ -164,32 +165,48 @@ final _projectSettings = [
     hint: 'Run rk target list to see what each choice does.',
   ),
   const _Setting(
-    'binary_platforms',
+    'binary.platforms',
     _Shape.texts,
-    'binary_platforms = ["macos-arm64"]',
+    'binary.platforms = ["macos-arm64"]',
     choices: ReleaseConfig.supportedPlatformsList,
     sameAs: _itself,
   ),
   const _Setting(
-    'dart_defines_from_pubspec',
+    'binary.defines_from_pubspec',
     _Shape.texts,
-    'dart_defines_from_pubspec = ["app.name"]',
+    'binary.defines_from_pubspec = ["app.name"]',
     empty: true,
     check: _dottedField,
     sameAs: _itself,
   ),
   const _Setting(
-    'build',
+    'assets.build',
     _Shape.texts,
-    'build = ["tool/build.sh", "{out}"], run from the project\'s directory',
+    'assets.build = ["tool/build.sh", "{out}"], run from the project\'s '
+        'directory',
     check: _onlyOutPlaceholder,
   ),
   const _Setting(
-    'assets',
+    'assets.files',
     _Shape.texts,
-    'assets = ["lib-macos-arm64.dylib"], relative to {out}',
+    'assets.files = ["lib-macos-arm64.dylib"], relative to {out}',
     check: _insideOutput,
     sameAs: _publishedName,
+  ),
+  const _Setting(
+    'homebrew.tap',
+    _Shape.text,
+    'homebrew.tap = "some-org/tools", as brew tap names it; omit it for '
+        'owner/tap',
+    check: _tapName,
+    hint: 'Run rk target homebrew for the inferred default and example.',
+  ),
+  const _Setting(
+    'homebrew.description',
+    _Shape.text,
+    'homebrew.description = "Fast tool that does one thing well"',
+    check: _homebrewDescription,
+    hint: 'brew info shows it; brew audit checks its style.',
   ),
 ];
 
@@ -204,30 +221,30 @@ final _unitSettings = [
     check: _tagPattern,
   ),
   const _Setting('project', _Shape.rows, '[[release.{unit}.project]]'),
-  const _Setting(
-    'homebrew_tap',
-    _Shape.text,
-    'homebrew_tap = "some-org/homebrew-tools"; omit it for the '
-        'conventional owner/homebrew-tap',
-    check: _githubCoordinate,
-    hint: 'Run rk target homebrew for the inferred default and example.',
-  ),
-  const _Setting(
-    'homebrew_description',
-    _Shape.text,
-    'homebrew_description = "Fast tool that does one thing well"',
-    check: _homebrewDescription,
-    hint: 'brew info shows it; brew audit checks its style.',
-  ),
 ];
 
 /// The project settings a unit with project rows keeps on the rows.
 const _rowSettings = {
   'path',
-  'binary_platforms',
-  'dart_defines_from_pubspec',
-  'build',
-  'assets',
+  'binary.platforms',
+  'binary.defines_from_pubspec',
+  'assets.build',
+  'assets.files',
+  'homebrew.tap',
+  'homebrew.description',
+};
+
+/// The groups dotted keys name, each holding some of the settings above.
+const _groups = {'binary', 'assets', 'homebrew'};
+
+/// Schema 2's names for the settings schema 3 groups.
+const _schema2Names = {
+  'binary_platforms': 'binary.platforms',
+  'dart_defines_from_pubspec': 'binary.defines_from_pubspec',
+  'build': 'assets.build',
+  'assets': 'assets.files',
+  'homebrew_tap': 'homebrew.tap',
+  'homebrew_description': 'homebrew.description',
 };
 
 class _Reader {
@@ -253,6 +270,10 @@ class _Reader {
             : _root.locationOf('schema'),
         remedy: schema == null
             ? 'add: schema = ${ReleaseConfig.supportedSchema}'
+            : schema == 2
+            ? 'schema 3 groups settings under dotted keys; set schema = 3 '
+                  'and rename these where they appear:\n'
+                  '${[for (final MapEntry(:key, :value) in _schema2Names.entries) '  ${key.padRight(26)} -> $value'].join('\n')}'
             : 'upgrade rk, or use schema ${ReleaseConfig.supportedSchema}',
       );
       return null;
@@ -313,21 +334,27 @@ class _Reader {
       );
       return null;
     }
-    if (!_checkShape(value, _unitSettings, unit: name)) return null;
-    final rows = value['project'] as TomlArray?;
-    if (rows != null && _rowSettings.any(value.has)) {
-      _rule(
-        location,
-        'unit "$name" declares a project inline and also as rows',
-        'a unit with one project uses path/publish directly; a unit '
-            'with several uses [[release.$name.project]] rows — not both',
-      );
-      return null;
+    final table = _flat(value);
+    if (!_checkShape(table, _unitSettings, unit: name)) return null;
+    final rows = (table['project'] as TomlArray?)?.tables.map(_flat).toList();
+    if (rows != null) {
+      final inline = table.keys.where(_rowSettings.contains).toList();
+      for (final key in inline) {
+        _diagnostics.add(
+          'RK-CONF-003',
+          '"$key" belongs to a project of "$name", not to the unit',
+          source: table.locationOf(key),
+          remedy:
+              'unit "$name" has [[release.$name.project]] rows, so move it '
+              'to the row it describes',
+        );
+      }
+      if (inline.isNotEmpty) return null;
     }
 
     final unitTargets = <PublishTarget>{};
     final projectTargets = <PublishTarget>{};
-    for (final target in _targets(value)) {
+    for (final target in _targets(table)) {
       if (target.scope == TargetScope.unit) {
         unitTargets.add(target);
       } else if (rows == null) {
@@ -336,7 +363,7 @@ class _Reader {
         _diagnostics.add(
           'RK-CONF-003',
           '"${target.configName}" belongs to a project in "$name"',
-          source: value.locationOf('publish'),
+          source: table.locationOf('publish'),
           remedy:
               'move it to the relevant [[release.$name.project]] row\n'
               'Run rk target ${target.configName} for a complete example.',
@@ -345,22 +372,46 @@ class _Reader {
     }
     final projects = [
       if (rows == null)
-        _project(name, value, projectTargets, location)
+        _project(name, table, projectTargets, location)
       else
-        for (final row in rows.tables) _row(name, row),
+        for (final row in rows) _row(name, row),
     ];
     if (projects.contains(null)) return null;
+    // A unit ships binaries from at most one project (RK-RES-009), so it
+    // publishes at most one formula, described where it is selected.
+    final formula = (rows ?? [table])
+        .where((project) => project.keys.any((k) => k.startsWith('homebrew.')))
+        .firstOrNull;
+    final tap = formula?['homebrew.tap'] as String?;
     final unit = UnitConfig(
       name: name,
       publish: Set.unmodifiable(unitTargets),
-      tagPattern: value['tag'] as String?,
-      homebrewTap: value['homebrew_tap'] as String?,
-      homebrewDescription: value['homebrew_description'] as String?,
+      tagPattern: table['tag'] as String?,
+      homebrewTap: tap == null ? null : _tapRepository(tap),
+      homebrewDescription: formula?['homebrew.description'] as String?,
       projects: List.unmodifiable(projects.nonNulls),
       location: location,
     );
-    _checkRules(unit, value);
+    _checkRules(unit, table);
     return unit;
+  }
+
+  /// [table]'s settings by their dotted names: its own keys, and each key of
+  /// a group dotted keys made under the group's name, as `binary.platforms`.
+  static TomlTable _flat(TomlTable table) {
+    final flat = TomlTable(table.location);
+    for (final key in table.keys) {
+      if (table[key] case final TomlTable group when group.dotted) {
+        for (final name in group.keys) {
+          flat.values['$key.$name'] = group[name]!;
+          flat.keyLocations['$key.$name'] = group.locationOf(name);
+        }
+      } else {
+        flat.values[key] = table[key]!;
+        flat.keyLocations[key] = table.locationOf(key);
+      }
+    }
+    return flat;
   }
 
   /// A project row, whose targets are its project's own.
@@ -397,37 +448,51 @@ class _Reader {
     final project = ProjectConfig(
       path: _canonical(table['path'] as String? ?? '.'),
       publish: Set.unmodifiable(publish),
-      binaryPlatforms: texts('binary_platforms'),
-      dartDefinesFromPubspec: texts('dart_defines_from_pubspec'),
-      build: texts('build'),
-      assets: texts('assets'),
+      binaryPlatforms: texts('binary.platforms'),
+      dartDefinesFromPubspec: texts('binary.defines_from_pubspec'),
+      build: texts('assets.build'),
+      assets: texts('assets.files'),
       location: location,
     );
     if (project.dartDefinesFromPubspec.isNotEmpty && !project.wantsBinaries) {
       _rule(
-        table.locationOf('dart_defines_from_pubspec'),
-        'a project of "$unit" declares dart_defines_from_pubspec without '
-            'binary_platforms',
-        'the fields are compiled into its binaries: add binary_platforms, '
-            'or remove dart_defines_from_pubspec',
+        table.locationOf('binary.defines_from_pubspec'),
+        'a project of "$unit" declares binary.defines_from_pubspec without '
+            'binary.platforms',
+        'the fields are compiled into its binaries: add binary.platforms, '
+            'or remove binary.defines_from_pubspec',
       );
       return null;
     }
     final apart = project.build.isEmpty != project.assets.isEmpty;
     if (apart || project.buildsAssets && project.wantsBinaries) {
       _rule(
-        table.locationOf(project.build.isEmpty ? 'assets' : 'build'),
+        table.locationOf(
+          project.build.isEmpty ? 'assets.files' : 'assets.build',
+        ),
         apart
             ? 'a project of "$unit" declares '
-                  '${project.build.isEmpty ? 'assets without a build' : 'a build without assets'}'
-            : 'a project of "$unit" declares both a build and binary_platforms',
+                  '${project.build.isEmpty ? 'assets.files without assets.build' : 'assets.build without assets.files'}'
+            : 'a project of "$unit" declares both assets.build and '
+                  'binary.platforms',
         apart
-            ? 'build names the command, and assets the files it writes that '
-                  'the release publishes; declare both'
-            : 'rk compiles binary_platforms itself; a project releases '
+            ? 'assets.build names the command, and assets.files the files it '
+                  'writes that the release publishes; declare both'
+            : 'rk compiles binary.platforms itself; a project releases '
                   'either those or what its own build writes',
       );
       return null;
+    }
+    for (final key in const ['homebrew.tap', 'homebrew.description']) {
+      if (table.has(key) && !publish.contains(PublishTarget.homebrew)) {
+        _rule(
+          table.locationOf(key),
+          'a project of "$unit" declares $key but does not publish to '
+              'homebrew',
+          'add "homebrew" to the publish list beside it, or remove $key',
+        );
+        return null;
+      }
     }
     return project;
   }
@@ -447,18 +512,12 @@ class _Reader {
     for (final key in table.keys) {
       final setting = known[key];
       if (setting == null) {
-        final unitLevel = row && _unitSettings.any((s) => s.key == key);
+        final (message, remedy) = _unknown(key, known.keys, unit, row);
         _diagnostics.add(
           'RK-CONF-003',
-          unitLevel
-              ? '"$key" belongs to the unit "$unit", not to one of its projects'
-              : 'unknown setting "$key" in '
-                    '${row ? 'a project of "$unit"' : 'unit "$unit"'}',
+          message,
           source: table.locationOf(key),
-          remedy: unitLevel
-              ? 'a unit releases its projects under one $key — move it up to '
-                    '[release.$unit]'
-              : '${row ? 'a project' : 'a unit'} holds ${known.keys.join(', ')}',
+          remedy: remedy,
         );
         continue;
       }
@@ -475,6 +534,39 @@ class _Reader {
       }
     }
     return _diagnostics.found.length == before;
+  }
+
+  /// Why [key] is not a setting here, and what to write instead: [known]
+  /// are the settings it does hold.
+  static (String, String) _unknown(
+    String key,
+    Iterable<String> known,
+    String unit,
+    bool row,
+  ) {
+    final where = row ? 'a project of "$unit"' : 'unit "$unit"';
+    final group = key.split('.').first;
+    if (row && _unitSettings.any((s) => s.key == key)) {
+      return (
+        '"$key" belongs to the unit "$unit", not to one of its projects',
+        'a unit releases its projects under one $key — move it up to '
+            '[release.$unit]',
+      );
+    }
+    if (key.contains('.') && _groups.contains(group)) {
+      final names = [
+        for (final name in known)
+          if (name.startsWith('$group.')) name.substring(group.length + 1),
+      ];
+      return (
+        'unknown setting "$key" in $where',
+        '$group holds ${names.join(', ')}',
+      );
+    }
+    return (
+      'unknown setting "$key" in $where',
+      '${row ? 'a project' : 'a unit'} holds ${known.join(', ')}',
+    );
   }
 
   /// Why [value] is not one [setting] accepts, or null when it is.
@@ -557,7 +649,7 @@ class _Reader {
       _rule(
         unit.location,
         'unit "$name" selects no release output',
-        'add a publish target or binary_platforms',
+        'add a publish target or binary.platforms',
       );
     }
     final homebrew = [
@@ -581,23 +673,8 @@ class _Reader {
       _rule(
         project.location,
         'a Homebrew project in "$name" names no binary platforms',
-        'add binary_platforms, or drop "homebrew"\n'
+        'add binary.platforms, or drop "homebrew"\n'
             'Run rk target homebrew for supported values and an example.',
-      );
-    }
-    if (homebrew.isEmpty && unit.homebrewTap != null) {
-      _rule(
-        table.locationOf('homebrew_tap'),
-        'unit "$name" declares homebrew_tap but does not publish to homebrew',
-        'add "homebrew" to its publish list, or remove homebrew_tap',
-      );
-    }
-    if (homebrew.isEmpty && unit.homebrewDescription != null) {
-      _rule(
-        table.locationOf('homebrew_description'),
-        'unit "$name" declares homebrew_description but does not publish to '
-            'homebrew',
-        'add "homebrew" to its publish list, or remove homebrew_description',
       );
     }
   }
@@ -662,9 +739,9 @@ String? _onlyOutPlaceholder(String argument) => argument.isEmpty
 
 String? _insideOutput(String asset) {
   final name = asset.split('/').last;
-  if (relativeSegments(asset) == null) {
+  if (relativeSegments(asset) == null || asset.contains('{')) {
     return '"$asset" is not a file inside the build\'s output; name it '
-        'relative to {out}, as in "assets/$name"';
+        'relative to {out}, without the placeholder, as in "$name"';
   }
   if (name.toLowerCase() == 'release-manifest.json') {
     return '"$asset" would be published as $name, which is rk\'s own';
@@ -705,8 +782,15 @@ String? _homebrewDescription(String description) =>
     ? null
     : 'must be one line of at most 80 characters';
 
-String? _githubCoordinate(String tap) =>
+String? _tapName(String tap) =>
     RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$').hasMatch(tap) &&
         !tap.split('/').any((part) => part == '.' || part == '..')
     ? null
-    : 'must be a GitHub owner/repository';
+    : 'must be a tap name, owner/name, as brew tap takes it';
+
+/// The GitHub repository behind a tap named as `brew tap` names it: brew
+/// finds `owner/name` at `owner/homebrew-name`, and takes that full name too.
+String _tapRepository(String tap) {
+  final [owner, name] = tap.split('/');
+  return name.startsWith('homebrew-') ? tap : '$owner/homebrew-$name';
+}

@@ -1,4 +1,4 @@
-schema = 2
+schema = 3
 
 # Deliberately list consumers before providers. Versions remain independent.
 [release.app]

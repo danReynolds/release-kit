@@ -181,19 +181,23 @@ final Map<ReleaseChoice, _Reference> _references = {
         'Builds standalone executable archives locally. It publishes '
         'them nowhere unless another selected target consumes them.',
     select: [
-      'Set binary_platforms on the project. `binary` does not go in publish.',
+      'Set binary.platforms on the project. `binary` does not go in publish.',
     ],
     configure: [
-      'binary_platforms = ["macos-arm64", "linux-x64"]',
+      'binary.platforms = ["macos-arm64", "linux-x64"]',
       'Required on the project. Choose one or more supported platforms.',
       '`rk init` defaults to every platform this host can produce. Pure-Dart '
           'Linux binaries can be cross-compiled from macOS; Docker or Podman '
           'is optional proof, not a build requirement.',
+      '',
+      'binary.defines_from_pubspec = ["app.name"]',
+      'Optional: pubspec fields compiled in as -D<field>=<value>, which '
+          'rk use local passes too.',
     ],
     usesBinaryPlatforms: true,
     nativeConfiguration: ['Executable and version    pubspec.yaml'],
     example: '''[release.tool]
-binary_platforms = ["macos-arm64", "linux-x64"]''',
+binary.platforms = ["macos-arm64", "linux-x64"]''',
   ),
   ReleaseChoice.gitTag: const _Reference(
     choice: ReleaseChoice.gitTag,
@@ -233,6 +237,15 @@ publish = ["pub.dev"]''',
         'Creates a GitHub Release containing the changelog and '
         'release manifest, plus any selected binary archives.',
     select: ['Add "github-release" to the release unit\'s publish list.'],
+    configure: [
+      'assets.build = ["tool/build.sh", "{out}"]',
+      'Optional on the project: your own build, instead of binary. It runs '
+          'from the project\'s directory and writes to {out}.',
+      '',
+      'assets.files = ["libparser-macos-arm64.dylib"]',
+      'With assets.build: the files it writes, relative to {out}, that the '
+          'release publishes.',
+    ],
     requirementReasons: {
       ReleaseChoice.gitTag: 'Gives the GitHub Release its versioned identity.',
     },
@@ -258,15 +271,17 @@ publish = ["git-tag", "github-release"]''',
       ReleaseChoice.githubRelease: 'Hosts the archives used by the formula.',
     },
     configure: [
-      'homebrew_tap = "owner/repository"',
-      'Optional on the release unit.',
-      'Default: <GitHub owner>/homebrew-tap',
-      '',
-      'homebrew_description = "Fast tool that does one thing well"',
-      'Optional on the release unit: the formula\'s desc, shown by brew info.',
+      'homebrew.description = "Fast tool that does one thing well"',
+      'Optional, beside "homebrew" in publish: the formula\'s desc, shown by '
+          'brew info.',
       'One line of at most 80 characters. Default: Released by rk',
       '',
-      'binary_platforms = ["macos-arm64", "linux-x64"]',
+      'homebrew.tap = "owner/tools"',
+      'Optional, beside "homebrew" in publish: the tap as brew tap names it. '
+          'This one publishes to github.com/owner/homebrew-tools.',
+      'Default: <GitHub owner>/tap',
+      '',
+      'binary.platforms = ["macos-arm64", "linux-x64"]',
       'Required on the Homebrew project.',
       'A Linux-only list publishes a valid Linux-only Formula; macOS is not '
           'required to publish the target.',
@@ -279,7 +294,7 @@ publish = ["git-tag", "github-release"]''',
     ],
     example: '''[release.tool]
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["macos-arm64", "linux-x64"]
-homebrew_tap = "owner/homebrew-tools"''',
+binary.platforms = ["macos-arm64", "linux-x64"]
+homebrew.description = "Fast tool that does one thing well"''',
   ),
 };

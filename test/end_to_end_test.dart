@@ -137,7 +137,7 @@ void main() {
         // rather than by deletion.
         final directory = Directory('${scratch.path}/broken')..createSync();
         File('${directory.path}/release.toml').writeAsStringSync(
-          'schema = 2\n\n[release.tool]\npath = "a\u0000b"\n'
+          'schema = 3\n\n[release.tool]\npath = "a\u0000b"\n'
           'publish = ["git-tag"]\n',
         );
         broken = Rk(directory.path);
@@ -350,7 +350,7 @@ void main() {
       final parsed = ReleaseConfig.parse(
         config ??
             '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -940,7 +940,7 @@ publish = ["git-tag", "pub.dev"]
             '    sdk: flutter\n',
       };
       const config = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "dart/packages/keybay"
@@ -1282,12 +1282,12 @@ publish = ["git-tag", "pub.dev"]
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/tool"
 publish = ["git-tag", "github-release"${homebrew ? ', "homebrew"' : ''}]
-binary_platforms = [${platforms.map((p) => '"$p"').join(', ')}]
+binary.platforms = [${platforms.map((p) => '"$p"').join(', ')}]
 ''',
       'release.toml',
       diagnostics,

@@ -430,7 +430,7 @@ MemorySourceTree tree({
 }, description: '/repo/keybay');
 
 const config = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -440,12 +440,12 @@ publish = ["git-tag", "pub.dev"]
 /// A command-line tool released as a binary, on pub.dev and as a GitHub
 /// Release.
 const binaryConfig = '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/keybay"
 publish = ["git-tag", "pub.dev", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''';
 
 final binaryTree = MemorySourceTree({
@@ -570,7 +570,7 @@ void main() {
     final root = Directory.systemTemp.createTempSync('rk-status-warnings-');
     addTearDown(() => root.deleteSync(recursive: true));
     const pubOnly = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -722,7 +722,7 @@ publish = ["pub.dev"]
     () async {
       final run = await statusRun(
         withConfig: '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -785,11 +785,11 @@ publish = ["pub.dev"]
     'a binary-only unit names its local output and direct next command',
     () async {
       const localBinaryConfig = '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/keybay"
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''';
       final run = await statusRun(
         withConfig: localBinaryConfig,
@@ -809,12 +809,12 @@ binary_platforms = ["linux-x64"]
 
   test('an exact registry does not hide an unstaged local binary', () async {
     const config = '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/keybay"
 publish = ["pub.dev"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''';
     final run = await statusRun(
       withConfig: config,
@@ -1144,7 +1144,7 @@ void statusTargetContract() {
     'multiple units nest transient targets under semantic headings',
     () async {
       const multiUnitConfig = '''
-schema = 2
+schema = 3
 
 [release.keybay]
 path = "packages/keybay"
@@ -1459,7 +1459,7 @@ repository: https://github.com/danReynolds/keybay
       source: tree(),
       state: git(clean: false),
       withConfig: '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -1895,7 +1895,7 @@ publish = ["pub.dev"]
       'tagless mixed packages do not imply lost stage with unread private $unreadPrivate',
       () async {
         const mixedConfig = '''
-schema = 2
+schema = 3
 [release.bundle]
 [[release.bundle.project]]
 path = "core"
@@ -2230,7 +2230,7 @@ void releaseReadiness() {
     () async {
       final run = await statusRun(
         withConfig: '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/core"
@@ -2266,7 +2266,7 @@ publish = ["pub.dev"]
     'packages/cli/CHANGELOG.md': '## 0.2.0\n',
   }, description: '/repo/keybay');
   const taggedSiblings = '''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "keybay-v{version}"
@@ -2300,7 +2300,7 @@ publish = ["git-tag", "pub.dev"]
 
   group('a unit that releases after a sibling not on pub.dev yet', () {
     const cliFirst = '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/cli"

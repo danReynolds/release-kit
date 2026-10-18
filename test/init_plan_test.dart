@@ -70,7 +70,7 @@ executables:
     );
     expect(enabled.message, contains('Homebrew'));
     expect(plan.renderToml(), contains('"github-release", "homebrew"'));
-    expect(plan.renderToml(), contains('binary_platforms = ['));
+    expect(plan.renderToml(), contains('binary.platforms = ['));
 
     final disabled = plan.toggle(0, ReleaseChoice.gitTag);
     expect(
@@ -130,7 +130,7 @@ executables:
     expect(
       plan.renderToml(),
       contains(
-        'binary_platforms = '
+        'binary.platforms = '
         '["macos-arm64", "linux-x64", "linux-arm64"]',
       ),
     );
@@ -196,7 +196,7 @@ executables:
     plan = plan.toggle(0, ReleaseChoice.binary).plan;
     expect(plan.candidates.single.selected, {ReleaseChoice.binary});
     expect(plan.included.single.name, 'tool');
-    expect(plan.renderToml(), contains('binary_platforms = ['));
+    expect(plan.renderToml(), contains('binary.platforms = ['));
     expect(plan.renderToml(), isNot(contains('publish =')));
     expect(ReleaseChoice.binary.requires, isEmpty);
   });

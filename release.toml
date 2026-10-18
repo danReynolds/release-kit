@@ -1,5 +1,5 @@
-schema = 2
+schema = 3
 
 [release.rk]
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
+binary.platforms = ["linux-x64", "linux-arm64", "macos-arm64"]

@@ -11,7 +11,7 @@ import 'package:test/test.dart';
 import 'support/memory_source_tree.dart';
 
 const _config = '''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "core-v{version}"
@@ -22,7 +22,7 @@ publish = ["git-tag", "pub.dev"]
 tag = "cli-v{version}"
 path = "packages/cli"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "macos-arm64"]
+binary.platforms = ["linux-x64", "macos-arm64"]
 ''';
 
 final _tree = MemorySourceTree({
@@ -54,14 +54,14 @@ Resolution _resolve(
 
 /// A crate whose own build writes the release assets.
 const _assetConfig = '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "parser-v{version}"
 path = "native/parser"
 publish = ["git-tag", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["parser-linux-x64.so", "parser-macos-arm64.dylib"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["parser-linux-x64.so", "parser-macos-arm64.dylib"]
 ''';
 
 final _assetTree = MemorySourceTree({
@@ -71,13 +71,13 @@ final _assetTree = MemorySourceTree({
 /// A Dart package whose own build writes the release assets, and which is
 /// published to pub.dev too.
 const _assetsPubConfig = '''
-schema = 2
+schema = 3
 
 [release.native]
 tag = "native-v{version}"
 publish = ["git-tag", "pub.dev", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["libnative-macos-arm64.dylib", "libnative-linux-x64.so"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["libnative-macos-arm64.dylib", "libnative-linux-x64.so"]
 ''';
 
 final _assetsPubTree = MemorySourceTree({
@@ -263,7 +263,7 @@ void main() {
 
     test('one external coordinate can gate several dependent projects', () {
       const config = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/core"
@@ -498,10 +498,10 @@ dependencies:
       'a local-output-only unit has a complete stage and no public acts',
       () {
         const config = '''
-schema = 2
+schema = 3
 
 [release.tool]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''';
         final tree = MemorySourceTree({
           'pubspec.yaml': '''
@@ -531,7 +531,7 @@ executables:
 
     test('leaves an incompatible candidate to native hosted resolution', () {
       const incompatible = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/core"

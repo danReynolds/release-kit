@@ -42,17 +42,17 @@ bool _isTagPush(_Invocation call) =>
     call.arguments[2].endsWith(':refs/tags/v1.2.3');
 
 const _config = '''
-schema = 2
+schema = 3
 
 [release.tool]
 path = "packages/tool"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64"]
-homebrew_description = "Tool that does one thing"
+binary.platforms = ["linux-x64"]
+homebrew.description = "Tool that does one thing"
 ''';
 
 const _pubOnlyConfig = '''
-schema = 2
+schema = 3
 
 [release.tool]
 path = "packages/tool"
@@ -60,19 +60,19 @@ publish = ["pub.dev"]
 ''';
 
 const _localBinaryConfig = '''
-schema = 2
+schema = 3
 
 [release.tool]
 path = "packages/tool"
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''';
 
 const _twoPlatformConfig = '''
-schema = 2
+schema = 3
 
 [release.tool]
 path = "packages/tool"
-binary_platforms = ["linux-x64", "linux-arm64"]
+binary.platforms = ["linux-x64", "linux-arm64"]
 ''';
 
 const _pubspec = '''

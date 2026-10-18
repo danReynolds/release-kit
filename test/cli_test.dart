@@ -241,7 +241,7 @@ void main() {
     setUpAll(() {
       repo = Rk.repository(scratch, 'plan-source-only', {
         'release.toml': '''
-schema = 2
+schema = 3
 
 [release.lib]
 tag = "lib-v{version}"
@@ -252,7 +252,7 @@ publish = ["git-tag", "pub.dev"]
 tag = "cli-v{version}"
 path = "packages/cli"
 publish = ["git-tag", "github-release"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''',
         'packages/lib/pubspec.yaml': '''
 name: plan_lib
@@ -327,7 +327,7 @@ executables:
     test('an unborn configured plan has no empty commit identity', () {
       final unborn = Rk.repository(scratch, 'plan-unborn-configured', {
         'release.toml': '''
-schema = 2
+schema = 3
 
 [release.lib]
 publish = ["pub.dev"]
@@ -347,7 +347,7 @@ publish = ["pub.dev"]
     test('does not let Git refresh the repository index', () {
       final stable = Rk.repository(scratch, 'plan-index-is-read-only', {
         'release.toml': '''
-schema = 2
+schema = 3
 
 [release.lib]
 publish = ["pub.dev"]
@@ -376,7 +376,7 @@ publish = ["pub.dev"]
     test('freezes and reports the current dirty topology consistently', () {
       final dirty = Rk.repository(scratch, 'plan-dirty-source', {
         'release.toml': '''
-schema = 2
+schema = 3
 
 [release.tool]
 tag = "v{version}"
@@ -403,7 +403,7 @@ publish = ["git-tag", "pub.dev"]
       if (Platform.isWindows) return;
       final configLink = Rk.repository(scratch, 'plan-config-link', {
         'actual-release.toml': '''
-schema = 2
+schema = 3
 
 [release.lib]
 publish = ["pub.dev"]
@@ -415,7 +415,7 @@ publish = ["pub.dev"]
 
       final manifestLink = Rk.repository(scratch, 'plan-manifest-link', {
         'release.toml': '''
-schema = 2
+schema = 3
 
 [release.lib]
 publish = ["pub.dev"]
@@ -441,7 +441,7 @@ publish = ["pub.dev"]
     test('a changelog rk cannot read is its own unit\'s problem', () {
       final repo = Rk.repository(scratch, 'unreadable-changelog', {
         'release.toml': '''
-schema = 2
+schema = 3
 
 [release.a]
 path = "a"
@@ -486,7 +486,7 @@ tag = "b-v{version}"
         final loose = Directory('${scratch.path}/plan-before-git')
           ..createSync(recursive: true);
         File('${loose.path}/release.toml').writeAsStringSync('''
-schema = 2
+schema = 3
 
 [release.tool]
 tag = "v{version}"
@@ -528,7 +528,7 @@ publish_to: none
         final loose = Directory('${scratch.path}/plan-link-root')
           ..createSync(recursive: true);
         File('${loose.path}/release.toml').writeAsStringSync('''
-schema = 2
+schema = 3
 
 [release.lib]
 path = "packages/project"
@@ -551,7 +551,7 @@ publish = ["pub.dev"]
         final loose = Directory('${scratch.path}/plan-empty-project')
           ..createSync(recursive: true);
         File('${loose.path}/release.toml').writeAsStringSync('''
-schema = 2
+schema = 3
 
 [release.lib]
 path = "package"
@@ -573,7 +573,7 @@ publish = ["pub.dev"]
         'release.toml/entry': 'not a configuration file\n',
       })..commit();
       final dirty = Rk.repository(scratch, 'plan-config-directory-dirty', {
-        'release.toml': 'schema = 2\n',
+        'release.toml': 'schema = 3\n',
       })..commit();
       File('${dirty.root}/release.toml').deleteSync();
       File('${dirty.root}/release.toml/entry')
@@ -632,10 +632,10 @@ publish = ["pub.dev"]
       final repo = Rk.repository(scratch, 'dirty-local-output', {
         'release.toml':
             '''
-schema = 2
+schema = 3
 
 [release.tool]
-binary_platforms = ["$platform"]
+binary.platforms = ["$platform"]
 ''',
         'pubspec.yaml': '''
 name: dirty_local_output
@@ -668,7 +668,7 @@ executables:
       () {
         final repo = Rk.repository(scratch, 'dirty-git-target', {
           'release.toml': '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag"]
@@ -712,7 +712,7 @@ publish_to: none
 
     test('non-Git directories are valid release roots', () {
       final loose = Directory('${scratch.path}/loose')..createSync();
-      File('${loose.path}/release.toml').writeAsStringSync('schema = 2\n');
+      File('${loose.path}/release.toml').writeAsStringSync('schema = 3\n');
       final run = Rk(loose.path)(['status']);
       expect(run.code, 1, reason: run.all);
       expect(run.all, contains('release.toml declares no release units'));
@@ -722,7 +722,7 @@ publish_to: none
     test('without Git, status reads the directory and stage refuses', () {
       final loose = Directory('${scratch.path}/loose-git-target')..createSync();
       File('${loose.path}/release.toml').writeAsStringSync('''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag"]
