@@ -9,7 +9,7 @@
   `assets` are `assets.build` and `assets.files`, and `homebrew_tap` is
   `homebrew.tap`. rk reads only schema 3 and refuses a schema 2 file with
   these renames. rk 0.1.15 and earlier report `keys must be bare` on a schema
-  3 file: upgrade rk. Finish a partly published release with the rk that
+  3 file that uses dotted keys: upgrade rk. Finish a partly published release with the rk that
   staged it before migrating its repository.
 - `homebrew.tap` takes the tap as `brew tap` names it: `owner/tools`
   publishes to `owner/homebrew-tools`, and the full repository name still

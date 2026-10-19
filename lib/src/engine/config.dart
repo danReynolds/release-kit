@@ -197,7 +197,7 @@ final _projectSettings = [
     'homebrew.tap',
     _Shape.text,
     'homebrew.tap = "some-org/tools", as brew tap names it; omit it for '
-        'owner/tap',
+        '<GitHub owner>/tap',
     check: _tapName,
     hint: 'Run rk target homebrew for the inferred default and example.',
   ),
@@ -342,11 +342,9 @@ class _Reader {
       for (final key in inline) {
         _diagnostics.add(
           'RK-CONF-003',
-          '"$key" belongs to a project of "$name", not to the unit',
+          '"$key" belongs to a project in "$name"',
           source: table.locationOf(key),
-          remedy:
-              'unit "$name" has [[release.$name.project]] rows, so move it '
-              'to the row it describes',
+          remedy: 'move it to the relevant [[release.$name.project]] row',
         );
       }
       if (inline.isNotEmpty) return null;
@@ -551,6 +549,16 @@ class _Reader {
         '"$key" belongs to the unit "$unit", not to one of its projects',
         'a unit releases its projects under one $key — move it up to '
             '[release.$unit]',
+      );
+    }
+    if (_schema2Names[key] case final renamed?) {
+      return ('"$key" is schema 2\'s name for $renamed', 'write $renamed');
+    }
+    if (_groups.contains(key)) {
+      return (
+        'unknown setting "$key" in $where',
+        'write its settings as dotted keys, as in '
+            '${_unitSettings.firstWhere((s) => s.key.startsWith('$key.')).example}',
       );
     }
     if (key.contains('.') && _groups.contains(group)) {

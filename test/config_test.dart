@@ -282,6 +282,56 @@ homebrew.tap = "example/tools"
     expect(unit.projects.last.binaryPlatforms, ['macos-arm64']);
   });
 
+  test('the Homebrew settings of a unit with rows go on a row', () {
+    expect(
+      refusal('''
+schema = 3
+
+[release.suite]
+tag = "suite-v{version}"
+publish = ["git-tag", "github-release"]
+homebrew.tap = "example/tools"
+
+[[release.suite.project]]
+path = "packages/suite_cli"
+publish = ["homebrew"]
+binary.platforms = ["macos-arm64"]
+'''),
+      'RK-CONF-003 6 "homebrew.tap" belongs to a project in "suite"',
+    );
+  });
+
+  test('a schema 2 name in a schema 3 file names its new name', () {
+    for (final (line, renamed) in [
+      ('binary_platforms = ["macos-arm64"]', 'binary.platforms'),
+      ('assets = ["a.so"]', 'assets.files'),
+    ]) {
+      final diagnostics = Diagnostics();
+      ReleaseConfig.parse(
+        'schema = 3\n[release.cli]\npublish = ["git-tag"]\n$line\n',
+        'release.toml',
+        diagnostics,
+      );
+      final found = diagnostics.found.first;
+      expect(found.message, contains("schema 2's name for $renamed"));
+      expect(found.remedy, 'write $renamed');
+    }
+  });
+
+  test('a group written as a table says to use dotted keys', () {
+    final diagnostics = Diagnostics();
+    ReleaseConfig.parse(
+      'schema = 3\n[release.cli]\npublish = ["git-tag"]\n\n'
+          '[release.cli.binary]\nplatforms = ["macos-arm64"]\n',
+      'release.toml',
+      diagnostics,
+    );
+    expect(
+      diagnostics.found.single.remedy,
+      startsWith('write its settings as dotted keys, as in binary.platforms'),
+    );
+  });
+
   test('a group setting names its group in a refusal', () {
     final diagnostics = Diagnostics();
     ReleaseConfig.parse(
@@ -300,7 +350,7 @@ homebrew.tap = "example/tools"
     expect(found.remedy, 'homebrew holds tap, description');
   });
 
-  test('a Homebrew description lives on its release unit', () {
+  test('a Homebrew description sits on the project that publishes it', () {
     final config = accepted('''
 schema = 3
 
@@ -425,7 +475,7 @@ homebrew.description = "Encrypted local secrets vault"
           'publish = ["pub.dev"]\n\n[[release.core.project]]\npath = "b"\n'
           'publish = ["pub.dev"]',
         ),
-        'RK-CONF-003 3 "path" belongs to a project of "core", not to the unit',
+        'RK-CONF-003 3 "path" belongs to a project in "core"',
       );
     });
 
@@ -765,8 +815,7 @@ assets.build = ["b"]
 path = "native/parser"
 assets.files = ["a.so"]
 '''),
-        'RK-CONF-003 6 "assets.build" belongs to a project of "parser", not to '
-        'the unit',
+        'RK-CONF-003 6 "assets.build" belongs to a project in "parser"',
       );
     });
   });

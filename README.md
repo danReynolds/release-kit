@@ -235,7 +235,7 @@ under what it configures, as a dotted key:
 | `assets.build` | project | Your own build command, instead of `binary` |
 | `assets.files` | project | The files it writes, relative to `{out}`, for the GitHub release |
 | `homebrew.description` | project | The formula's `desc`, shown by `brew info` |
-| `homebrew.tap` | project | The tap, as `brew tap` names it; `<owner>/tap` by default |
+| `homebrew.tap` | project | The tap, as `brew tap` names it; `<GitHub owner>/tap`, the repository `<GitHub owner>/homebrew-tap`, by default |
 
 A unit with one project holds that project's settings itself. A unit with
 several gives each one a `[[release.<unit>.project]]` row. `rk target <name>`

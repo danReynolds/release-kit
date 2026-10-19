@@ -43,7 +43,7 @@ executables:
     expect(tool.availability[ReleaseChoice.githubRelease]!.available, isTrue);
     expect(tool.availability[ReleaseChoice.homebrew]!.available, isTrue);
     expect(plan.renderToml(), contains('publish = ["git-tag", "pub.dev"]'));
-    expect(plan.renderToml(), isNot(contains('binary_platforms')));
+    expect(plan.renderToml(), isNot(contains('binary.platforms')));
   });
 
   test('Homebrew enables its producer and destination prerequisites', () {
@@ -154,7 +154,7 @@ executables:
       ReleaseChoice.pubDev,
       ReleaseChoice.githubRelease,
     });
-    expect(plan.renderToml(), isNot(contains('binary_platforms')));
+    expect(plan.renderToml(), isNot(contains('binary.platforms')));
   });
 
   test('a unit is included exactly when it has a selected release output', () {

@@ -37,7 +37,7 @@ void main() {
     expect(config, contains('path = "packages/a"'));
     expect(
       config,
-      isNot(contains('binary_platforms =')),
+      isNot(contains('binary.platforms =')),
       reason:
           'an executable is not a request for signed binaries; the '
           'comment offers the option, the config does not take it',

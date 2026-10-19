@@ -226,8 +226,7 @@ final class AssetBuild {
             remedy:
                 'assets.files names files the build writes under {out}, and '
                 '$wrote. Make the build write them, or correct assets.files, '
-                'then stage '
-                '${step.unit} again.',
+                'then stage ${step.unit} again.',
             evidence: transcript.isEmpty ? null : transcript,
           ),
           unit: step.unit,

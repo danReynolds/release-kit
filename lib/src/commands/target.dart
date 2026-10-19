@@ -191,7 +191,8 @@ final Map<ReleaseChoice, _Reference> _references = {
           'is optional proof, not a build requirement.',
       '',
       'binary.defines_from_pubspec = ["app.name"]',
-      'Optional: pubspec fields compiled in as -D<field>=<value>, which '
+      'Optional on the project: pubspec fields compiled in as '
+          '-D<field>=<value>, which '
           'rk use local passes too.',
     ],
     usesBinaryPlatforms: true,
@@ -235,7 +236,8 @@ publish = ["pub.dev"]''',
     title: 'publish a GitHub Release',
     description:
         'Creates a GitHub Release containing the changelog and '
-        'release manifest, plus any selected binary archives.',
+        'release manifest, plus any selected binary archives or the files '
+        'assets.build writes.',
     select: ['Add "github-release" to the release unit\'s publish list.'],
     configure: [
       'assets.build = ["tool/build.sh", "{out}"]',
@@ -272,14 +274,14 @@ publish = ["git-tag", "github-release"]''',
     },
     configure: [
       'homebrew.description = "Fast tool that does one thing well"',
-      'Optional, beside "homebrew" in publish: the formula\'s desc, shown by '
-          'brew info.',
+      'Optional on the Homebrew project: the formula\'s desc, shown by brew '
+          'info.',
       'One line of at most 80 characters. Default: Released by rk',
       '',
       'homebrew.tap = "owner/tools"',
-      'Optional, beside "homebrew" in publish: the tap as brew tap names it. '
+      'Optional on the Homebrew project: the tap as brew tap names it. '
           'This one publishes to github.com/owner/homebrew-tools.',
-      'Default: <GitHub owner>/tap',
+      'Default: <GitHub owner>/tap, the repository <GitHub owner>/homebrew-tap',
       '',
       'binary.platforms = ["macos-arm64", "linux-x64"]',
       'Required on the Homebrew project.',

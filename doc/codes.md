@@ -210,7 +210,7 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 | `RK-RES-001` | no package at "${declared.path}" | `lib/src/engine/resolve.dart` |
 | `RK-RES-002` | a manifest declares no version rk can release, such as a workspace root's or a crate's inherited one | `lib/src/engine/cargo.dart`, `lib/src/engine/resolve.dart` |
 | `RK-RES-003` | a package that sets publish_to: none, or names a custom registry, is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
-| `RK-RES-004` | a binary project's pubspec lacks what its build reads: exactly one executable, and each dart_defines field | `lib/src/engine/resolve.dart` |
+| `RK-RES-004` | a binary project's pubspec lacks what its build reads: exactly one executable, and each `binary.defines_from_pubspec` field | `lib/src/engine/resolve.dart` |
 | `RK-RES-006` | a package is declared twice, by path or by name, or projects nest | `lib/src/engine/resolve.dart` |
 | `RK-RES-008` | the projects in "${unit.name}" are at different versions:  ${versions.join( | `lib/src/engine/resolve.dart` |
 | `RK-RES-009` | a unit's GitHub release assets come from more than one project | `lib/src/engine/resolve.dart` |
