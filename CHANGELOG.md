@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1
+
 - When a native build needs the temporary Dart helper and it is missing or
   refuses the selected SDK, rk says so once: which Dart is selected, what the
   helper needs, and how to set both up. `rk use local` adds the one-off
