@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0
+
 - **Breaking:** `release.toml` is schema 3. `path`, `tag` and `publish` stay
   plain keys, and every other setting is grouped under what it configures,
   as a TOML dotted key: `binary_platforms` is now `binary.platforms`,
