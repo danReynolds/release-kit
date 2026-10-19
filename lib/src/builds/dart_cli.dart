@@ -216,6 +216,12 @@ class DartCliBuilder {
         helper: nativeBuildTool ?? Platform.environment['RK_DART_BUILD_TOOL'],
         image: image,
       );
+      if (result is NativeHelperUnready) {
+        return BuildOutcome.failed(
+          '${result.message}\n${result.remedy}',
+          transcript: result.detail,
+        );
+      }
       if (!result.ok) {
         return BuildOutcome.failed(
           result.summary,

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.2.1
+
+- When a native build needs the temporary Dart helper and it is missing or
+  refuses the selected SDK, rk says so once: which Dart is selected, what the
+  helper needs, and how to set both up. `rk use local` adds the one-off
+  command that retries the switch, and keeps the helper's own output, not a
+  second copy of the message, as the evidence. Staging shows the same setup.
+
 ## 0.2.0
 
 - **Breaking:** `release.toml` is schema 3. `path`, `tag` and `publish` stay

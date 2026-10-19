@@ -151,11 +151,12 @@ Future<ToolResult> buildDartNative({
           '--help',
         ], workingDirectory: directory);
         if (!ready.ok) {
-          return await _nativeBuildFailure(
+          return await _helperUnready(
             tools,
             compiler,
             command,
-            ready.transcript,
+            started: true,
+            detail: ready.transcript,
           );
         }
         onCompile?.call();
@@ -164,11 +165,12 @@ Future<ToolResult> buildDartNative({
           ...arguments(output),
         ], workingDirectory: directory);
       } on ProcessException catch (error) {
-        return _nativeBuildFailure(
+        return _helperUnready(
           tools,
           compiler,
           command,
-          'Could not start $command for the native build: $error',
+          started: false,
+          detail: 'Could not start $command: ${error.message}',
         );
       }
     }
@@ -246,23 +248,50 @@ Future<ToolResult> buildDartNative({
   ]);
 }
 
+/// A native build that did not start because the selected SDK and the
+/// temporary helper do not pair: [message] and [remedy] for a person, apart
+/// from [detail], what the helper said or why it could not start.
+///
+/// The process fields carry all three, so a caller that only reads a tool
+/// result still reports everything.
+final class NativeHelperUnready extends ToolResult {
+  NativeHelperUnready({
+    required this.message,
+    required this.remedy,
+    required this.detail,
+  }) : super(
+         exitCode: 64,
+         stdout: '',
+         stderr: [message, remedy, detail].join('\n'),
+       );
+
+  final String message;
+  final String remedy;
+  final String detail;
+}
+
 // Read the version only on failure; successful builds need no extra SDK probe.
-Future<ToolResult> _nativeBuildFailure(
+Future<NativeHelperUnready> _helperUnready(
   Tools tools,
   String compiler,
-  String helper,
-  String detail,
-) async {
-  final version = await tools.run(compiler, const ['--version']);
-  return _failure(
-    'Native build preparation failed with ${version.lines.join(' ').trim()} '
-    '($compiler), using $helper. '
-    'Package SDK compatibility is checked by Pub; this build also needs '
-    'native CLI build features. The temporary RK helper requires stock Dart '
-    '3.13.5 and its matching rk-dart-build. Select that SDK on PATH and put '
-    'the helper on PATH or set RK_DART_BUILD_TOOL to its executable. '
-    'Setup: https://github.com/danReynolds/release-kit/tree/main/tool/dart_build_patch'
-    '\n$detail',
+  String helper, {
+  required bool started,
+  required String detail,
+}) async {
+  final said = (await tools.run(compiler, const ['--version'])).lines.join(' ');
+  final version =
+      RegExp(r'Dart SDK version: (\S+)').firstMatch(said)?[1] ?? said.trim();
+  return NativeHelperUnready(
+    message: started
+        ? 'Native build could not start: $helper refused Dart $version; it '
+              'needs stock Dart 3.13.5.'
+        : 'Native build could not start $helper, which needs stock Dart '
+              '3.13.5 (selected: Dart $version).',
+    remedy:
+        'Put stock Dart 3.13.5\'s bin first on PATH, and the rk-dart-build '
+        'directory on PATH or its executable in RK_DART_BUILD_TOOL. Setup: '
+        'https://github.com/danReynolds/release-kit/tree/main/tool/dart_build_patch',
+    detail: detail,
   );
 }
 

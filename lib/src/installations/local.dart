@@ -180,17 +180,7 @@ class LocalInstallationProvider implements InstallationProvider {
             onCompile: () => progress('Compiling $name from this checkout…'),
           );
           if (!result.ok) {
-            throw InstallationFailure.withEvidence(
-              result.summary,
-              remedy:
-                  'Fix the reported build error, then retry the same command.',
-              evidence: [
-                'Directory: ${project.directory}',
-                'Dart compiler: $compiler',
-                'Native build helper: ${helper ?? 'automatic (rk-dart-build if required)'}',
-                result.transcript,
-              ].join('\n'),
-            );
+            throw localNativeBuildFailure(project, compiler, helper, result);
           }
         } else {
           progress('Compiling $name from this checkout…');
@@ -437,4 +427,36 @@ Future<void> main(List<String> args) async {
 }
 ''');
   return path;
+}
+
+/// What a failed native build of [project] tells the person switching to
+/// it. A helper that is not ready says so once, with the command that
+/// retries this switch; any other failure keeps the tool's whole output.
+InstallationFailure localNativeBuildFailure(
+  ExecutableProject project,
+  String compiler,
+  String? helper,
+  ToolResult result,
+) {
+  final context = [
+    'Directory: ${project.directory}',
+    'Dart compiler: $compiler',
+    'Native build helper: ${helper ?? 'automatic (rk-dart-build if required)'}',
+  ];
+  if (result is NativeHelperUnready) {
+    return InstallationFailure.withEvidence(
+      result.message,
+      remedy:
+          '${result.remedy}\n'
+          'For one command: env PATH="/path/to/dart-sdk/bin:'
+          '/path/to/rk-dart-build-3.13.5-1-macos-arm64:\$PATH" '
+          'rk use local -p ${project.name}',
+      evidence: [...context, result.detail].join('\n'),
+    );
+  }
+  return InstallationFailure.withEvidence(
+    result.summary,
+    remedy: 'Fix the reported build error, then retry the same command.',
+    evidence: [...context, result.transcript].join('\n'),
+  );
 }
