@@ -4,6 +4,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/builds/dart_native.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/local.dart';
@@ -16,6 +17,66 @@ import 'fixtures.dart';
 import '../rk_process.dart';
 
 void main() {
+  group('a failed native Local build', () {
+    late ExecutableProject project;
+    setUp(() {
+      final scratch = Directory.systemTemp.createTempSync('rk native failure ');
+      addTearDown(() => scratch.deleteSync(recursive: true));
+      project = fixture(scratch, commands: ['orbit']);
+    });
+
+    test('names a helper that is not ready once, with the retry command', () {
+      final failure = localNativeBuildFailure(
+        project,
+        '/flutter/bin/cache/dart-sdk/bin/dart',
+        null,
+        NativeHelperUnready(
+          message:
+              'Native build could not start: rk-dart-build refused '
+              'Dart 3.12.2; it needs stock Dart 3.13.5.',
+          remedy: 'Put stock Dart 3.13.5\'s bin first on PATH.',
+          detail: 'exit 64\n--- stderr ---\nThis preview requires 3.13.5.',
+        ),
+      );
+      expect(failure.message, startsWith('Native build could not start'));
+      expect(
+        failure.remedy,
+        allOf(
+          startsWith('Put stock Dart 3.13.5'),
+          contains('rk use local -p ${project.name}'),
+          isNot(contains('Fix the reported build error')),
+        ),
+      );
+      expect(
+        failure.evidence,
+        allOf(
+          contains('Dart compiler: /flutter/bin/cache/dart-sdk/bin/dart'),
+          contains('This preview requires 3.13.5.'),
+          isNot(contains('Native build could not start')),
+        ),
+      );
+    });
+
+    test('keeps any other build failure\'s whole output', () {
+      final failure = localNativeBuildFailure(
+        project,
+        '/sdk/bin/dart',
+        '/helper/rk-dart-build',
+        ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: "bin/orbit.dart:1:7: Error: Undefined name 'missing'.",
+        ),
+      );
+      expect(failure.message, contains("Undefined name 'missing'"));
+      expect(failure.remedy, startsWith('Fix the reported build error'));
+      expect(
+        failure.evidence,
+        contains('Native build helper: /helper/rk-dart-build'),
+      );
+    });
+  });
+
   test(
     'pure Local without declarations ignores development-only hooks',
     () async {

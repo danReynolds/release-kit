@@ -436,19 +436,29 @@ binary.platforms = ["macos-arm64"]
         hasLength(succeeds ? 1 : 0),
       );
       if (!succeeds) {
+        final unready = result as NativeHelperUnready;
         expect(
-          result.summary,
+          unready.message,
+          allOf(contains('Dart 3.12.2'), contains('3.13.5')),
+        );
+        expect(unready.message, contains('rk-dart-build'));
+        expect(
+          unready.remedy,
           allOf(
-            contains('Dart SDK version: 3.12.2'),
-            contains('/sdk/bin/dart'),
-            contains('3.13.5'),
             contains('PATH'),
-            contains('rk-dart-build'),
+            contains('RK_DART_BUILD_TOOL'),
+            contains('tool/dart_build_patch'),
           ),
         );
-        if (mode == 'mismatch') {
-          expect(result.transcript, contains('04bcd1036cdc'));
-        }
+        expect(
+          result.summary,
+          unready.message,
+          reason: 'the one line a person reads is the short message',
+        );
+        expect(
+          unready.detail,
+          mode == 'mismatch' ? contains('04bcd1036cdc') : contains('missing'),
+        );
       } else {
         expect(tools.calls.any((c) => c.contains('--version')), isFalse);
         expect(
@@ -482,6 +492,62 @@ binary.platforms = ["macos-arm64"]
     expect(result.problem, contains('RK_DART_BUILD_IMAGE'));
     expect(tools.calls.any((call) => call.contains('compile exe')), isFalse);
   });
+
+  test(
+    'a helper that is not ready stops a release build with its setup',
+    () async {
+      final tools = RecordingTools(
+        answers: (command) {
+          if (command.endsWith('build cli --help')) {
+            return ToolResult(exitCode: 0, stdout: '--target', stderr: '');
+          }
+          if (command.endsWith('--version')) {
+            return ToolResult(
+              exitCode: 0,
+              stdout: 'Dart SDK version: 3.12.2',
+              stderr: '',
+            );
+          }
+          if (command.endsWith(' --help') && !command.contains('build cli')) {
+            return ToolResult(
+              exitCode: 64,
+              stdout: '',
+              stderr: 'This preview requires Dart SDK 3.13.5 (04bcd1036cdc).',
+            );
+          }
+          return null;
+        },
+      );
+      final result =
+          await DartCliBuilder(
+            tools: tools,
+            compilerExecutable: fixtureDartSdk(root),
+            capabilities: HostCapabilities(
+              hostPlatform: 'macos-arm64',
+              containerRuntime: null,
+            ),
+          ).build(
+            platform: 'macos-arm64',
+            entryPoint: 'bin/probe.dart',
+            output: '${root.path}/out/probe',
+            workingDirectory: root.path,
+            expectedVersion: '1.2.3',
+          );
+      expect(result.ok, isFalse);
+      expect(
+        result.problem,
+        allOf(
+          startsWith('Native build could not start: '),
+          contains('\nPut stock Dart 3.13.5'),
+        ),
+      );
+      expect(result.transcript, contains('04bcd1036cdc'));
+      expect(
+        result.transcript,
+        isNot(contains('Native build could not start')),
+      );
+    },
+  );
 
   test(
     'container builds use the matching architecture, staged workspace and locked resolution',
