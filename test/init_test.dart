@@ -37,7 +37,7 @@ void main() {
     expect(config, contains('path = "packages/a"'));
     expect(
       config,
-      isNot(contains('binary_platforms =')),
+      isNot(contains('binary.platforms =')),
       reason:
           'an executable is not a request for signed binaries; the '
           'comment offers the option, the config does not take it',
@@ -54,7 +54,7 @@ void main() {
     final buffer = StringBuffer();
     final written = <String, String>{};
     await InitCommand(
-      tree: MemorySourceTree({'release.toml': 'schema = 2\n'}),
+      tree: MemorySourceTree({'release.toml': 'schema = 3\n'}),
       output: Output(sink: buffer.write, isTerminal: false, useColor: false),
       write: (path, contents) => written[path] = contents,
       yes: true,
@@ -121,7 +121,7 @@ void main() {
       ).run();
 
       expect(code, ExitCodes.ok);
-      expect(reviewed, contains('binary_platforms'));
+      expect(reviewed, contains('binary.platforms'));
       expect(reviewed, isNot(contains('pub.dev')));
       expect(written, isEmpty);
       final document = jsonDecode(output.report.encode(exit: code)) as Map;
@@ -395,7 +395,7 @@ workspace:
       return output.report;
     }
 
-    final exists = await run({'release.toml': 'schema = 2\n'});
+    final exists = await run({'release.toml': 'schema = 3\n'});
     final nothing = await run({
       'pubspec.yaml': 'name: x\nversion: 1.0.0\npublish_to: none\n',
     });

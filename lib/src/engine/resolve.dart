@@ -278,7 +278,8 @@ class Resolution {
           '$field must be non-empty text in $manifestPath',
           source: declared.location,
           remedy:
-              'define the native metadata in pubspec.yaml or remove its compile-time projection',
+              'define the native metadata in pubspec.yaml, or remove $field '
+              'from binary.defines_from_pubspec',
         );
         return null;
       }
@@ -310,7 +311,7 @@ class Resolution {
     if (manifest == null) return null;
     final dart = [
       for (final target in declared.publish) '"${target.configName}"',
-      if (declared.wantsBinaries) 'binary_platforms',
+      if (declared.wantsBinaries) 'binary.platforms',
     ];
     if (!declared.buildsAssets || dart.isNotEmpty) {
       diagnostics.add(
@@ -320,8 +321,9 @@ class Resolution {
         source: declared.location,
         remedy: dart.isNotEmpty
             ? '${dart.join(' and ')} ${dart.length == 1 ? 'is' : 'are'} for '
-                  'Dart packages; declare build and assets instead'
-            : 'declare build, the command that builds it, and assets, the '
+                  'Dart packages; declare assets.build and assets.files instead'
+            : 'declare assets.build, the command that builds it, and '
+                  'assets.files, the '
                   'files that command writes for the GitHub release',
       );
       return null;
@@ -456,7 +458,8 @@ class ResolvedUnit {
   final String? tagPattern;
   final bool tagWasDeclared;
 
-  /// The tap when it is not the conventional one.
+  /// The tap's GitHub repository, `owner/homebrew-name`, when the project
+  /// that publishes the formula names one.
   final String? homebrewTap;
 
   /// The formula's `desc`, when the unit names one.
@@ -510,9 +513,10 @@ class ResolvedUnit {
   ResolvedProject project(String name) =>
       projects.firstWhere((project) => project.name == name);
 
-  /// The tap this unit's formula goes to, declared or by Homebrew's
-  /// convention. Derived twice before, and a drift there means rk inspects
-  /// one tap and pushes to another.
+  /// The GitHub repository of the tap this unit's formula goes to: the
+  /// declared one, or the owner's `homebrew-tap`, which `brew tap owner/tap`
+  /// finds. Derived twice before, and a drift there means rk inspects one
+  /// tap and pushes to another.
   String tapFor(String repository) =>
       homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
 }

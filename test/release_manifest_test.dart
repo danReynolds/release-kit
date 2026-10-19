@@ -25,11 +25,11 @@ void main() {
     final manifest = _stagedManifest(
       root,
       '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "macos-arm64"]
+binary.platforms = ["linux-x64", "macos-arm64"]
 ''',
       {
         'pubspec.yaml':
@@ -55,11 +55,11 @@ binary_platforms = ["linux-x64", "macos-arm64"]
     final manifest = _stagedManifest(
       root,
       '''
-schema = 2
+schema = 3
 
 [release.tool]
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''',
       {
         'pubspec.yaml':
@@ -81,14 +81,14 @@ binary_platforms = ["linux-x64"]
     final manifest = _stagedManifest(
       root,
       '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "parser-v{version}"
 path = "native/parser"
 publish = ["git-tag", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["assets/parser.so", "parser.dylib"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["assets/parser.so", "parser.dylib"]
 ''',
       {
         'native/parser/Cargo.toml':

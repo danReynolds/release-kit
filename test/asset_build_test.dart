@@ -29,14 +29,14 @@ void main() {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "parser-v{version}"
 path = "native/parser"
 publish = ["git-tag", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["assets/parser.so", "parser.dylib"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["assets/parser.so", "parser.dylib"]
 ''',
       'release.toml',
       diagnostics,
@@ -348,8 +348,8 @@ assets = ["assets/parser.so", "parser.dylib"]
     expect(
       text,
       contains(
-        'tool/build.sh could not start: Permission denied. build names a '
-        'program by its path from native/parser, or by a name on PATH, and a '
+        'tool/build.sh could not start: Permission denied. assets.build names '
+        'a program by its path from native/parser, or by a name on PATH, and a '
         'script needs its executable bit',
       ),
     );

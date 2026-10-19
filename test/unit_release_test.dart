@@ -45,7 +45,7 @@ executables:
 });
 
 const keybayConfig = '''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "keybay-v{version}"
@@ -56,7 +56,7 @@ publish = ["git-tag", "pub.dev"]
 tag = "keybay_cli-v{version}"
 path = "packages/keybay_cli"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
+binary.platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''';
 
 void main() {
@@ -67,7 +67,7 @@ void main() {
 
     test('a pub-only unit has no tag graph', () {
       final resolution = resolve('''
-schema = 2
+schema = 3
 
 [release.core]
 publish = ["pub.dev"]
@@ -87,7 +87,7 @@ publish = ["pub.dev"]
 
     test('an explicit tag sits between stage and registry publication', () {
       final resolution = resolve('''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "release-v{version}"
@@ -112,7 +112,7 @@ publish = ["git-tag", "pub.dev"]
 
     test('a metadata-only GitHub release has notes and a manifest', () {
       final resolution = resolve('''
-schema = 2
+schema = 3
 
 [release.core]
 publish = ["git-tag", "github-release"]
@@ -137,11 +137,11 @@ executables:
 ''',
       });
       final resolution = resolve('''
-schema = 2
+schema = 3
 
 [release.cli]
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''', prereleaseTree);
       final unit = resolution.unit('cli')!;
       final release = derive(unit, resolution);
@@ -156,7 +156,7 @@ binary_platforms = ["linux-x64"]
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 
 [release.tools]
 tag = "tools-v{version}"
@@ -164,11 +164,11 @@ publish = ["git-tag", "github-release"]
 
 [[release.tools.project]]
 path = "packages/server"
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 
 [[release.tools.project]]
 path = "packages/admin"
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''',
       'release.toml',
       diagnostics,
@@ -356,7 +356,7 @@ dev_dependencies:
     });
 
     const config = '''
-schema = 2
+schema = 3
 
 [release.framework]
 tag = "fleury-v{version}"
@@ -413,7 +413,7 @@ dependencies:
     });
 
     const config = '''
-schema = 2
+schema = 3
 
 [release.framework]
 path = "packages/fleury"
@@ -460,7 +460,7 @@ publish = ["pub.dev"]
     test('a third-party dependency is not a prerequisite', () {
       final resolution = resolve(
         '''
-schema = 2
+schema = 3
 
 [release.lib]
 publish = ["pub.dev"]
@@ -487,14 +487,14 @@ dependencies:
   group("a project's own build", () {
     Resolution parser() => resolve(
       '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "flark_parse-v{version}"
 path = "native/parser"
 publish = ["git-tag", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["assets/parser-macos-arm64.dylib", "parser-linux-x64.so", "src.tar.gz"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["assets/parser-macos-arm64.dylib", "parser-linux-x64.so", "src.tar.gz"]
 ''',
       MemorySourceTree({
         'native/parser/Cargo.toml':
@@ -565,7 +565,7 @@ assets = ["assets/parser-macos-arm64.dylib", "parser-linux-x64.so", "src.tar.gz"
 
   group('dependency ordering under refusal', () {
     const cycleWithDownstream = '''
-schema = 2
+schema = 3
 
 [release.tools]
 tag = "tools-v{version}"
@@ -634,7 +634,7 @@ publish = ["pub.dev"]
     test('a devDependency does not become a publication prerequisite', () {
       final resolution = resolve(
         '''
-schema = 2
+schema = 3
 
 [release.tools]
 tag = "tools-v{version}"
@@ -737,13 +737,13 @@ publish = ["pub.dev"]
     test('each public step is a target, in release order', () {
       final resolution = resolve(
         '''
-schema = 2
+schema = 3
 
 [release.cli]
 tag = "v{version}"
-homebrew_tap = "example/homebrew-tools"
+homebrew.tap = "example/homebrew-tools"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''',
         MemorySourceTree({
           'pubspec.yaml': '''
@@ -785,7 +785,7 @@ executables:
     test('pub staging follows the receipt contract, not dependency order', () {
       final resolution = resolve(
         '''
-schema = 2
+schema = 3
 
 [release.apps]
 tag = "apps-v{version}"
@@ -838,7 +838,7 @@ version: 1.2.3
 
     test('a pub-only release has no Git tag target', () {
       final resolution = resolve(
-        'schema = 2\n\n[release.core]\npublish = ["pub.dev"]\n',
+        'schema = 3\n\n[release.core]\npublish = ["pub.dev"]\n',
         MemorySourceTree({'pubspec.yaml': 'name: example\nversion: 1.2.3\n'}),
       );
       final release = derive(resolution.unit('core')!, resolution);

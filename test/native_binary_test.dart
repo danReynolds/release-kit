@@ -220,10 +220,10 @@ void main() {
       final diagnostics = Diagnostics();
       final config = ReleaseConfig.parse(
         '''
-schema = 2
+schema = 3
 [release.fixture]
 publish = ["git-tag", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''',
         'release.toml',
         diagnostics,

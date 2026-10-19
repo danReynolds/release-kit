@@ -101,7 +101,7 @@ void main() {
     final diagnostics = Diagnostics();
     final resolution = Resolution.resolve(
       ReleaseConfig.parse(
-        'schema = 2\n\n[release.core]\npublish = ["pub.dev"]\n',
+        'schema = 3\n\n[release.core]\npublish = ["pub.dev"]\n',
         'release.toml',
         diagnostics,
       )!,

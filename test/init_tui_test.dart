@@ -144,7 +144,7 @@ void main() {
       driver.clearOutput();
       await key(const KeyEvent(KeyCode.escape));
       expect(driver.output, contains('Review release.toml'));
-      expect(driver.output, contains('binary_platforms'));
+      expect(driver.output, contains('binary.platforms'));
       expect(reviewed, isFalse);
       await key(backwards); // Cancel.
       await key(backwards); // Create.

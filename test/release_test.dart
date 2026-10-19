@@ -25,7 +25,7 @@ import 'status_test.dart' show FakeRegistry;
 import 'support/memory_source_tree.dart';
 
 const _config = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -545,7 +545,7 @@ void releaseCommandContract() {
   test('pub-only release neither requires nor creates a Git tag', () async {
     final ran = await release(
       config: '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -588,7 +588,7 @@ publish = ["pub.dev"]
           return 'no';
         },
         config: '''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "keybay-v{version}"
@@ -640,7 +640,7 @@ publish = ["git-tag", "pub.dev"]
         return 'no';
       },
       config: '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/cli"
@@ -686,7 +686,7 @@ dependencies:
 
   group('a unit that releases after a sibling not on pub.dev yet', () {
     const config = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -763,7 +763,7 @@ publish = ["pub.dev"]
       only: null,
       dryRun: true,
       config: '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -796,7 +796,7 @@ publish = ["pub.dev"]
       only: 'cli',
       typed: 'no',
       config: '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/cli"
@@ -840,7 +840,7 @@ dependencies:
       final ran = await release(
         only: null,
         config: '''
-schema = 2
+schema = 3
 
 [release.a]
 path = "packages/a"
@@ -887,7 +887,7 @@ dependencies:
           },
         }, description: '/repo/build-slots');
         final config = [
-          'schema = 2',
+          'schema = 3',
           for (final name in names)
             '[release.$name]\npath = "packages/$name"\npublish = ["pub.dev"]',
         ].join('\n');
@@ -965,7 +965,7 @@ dependencies:
       only: null,
       dryRun: true,
       config: [
-        'schema = 2\n[release.core]',
+        'schema = 3\n[release.core]',
         for (final name in names)
           '[[release.core.project]]\npath = "packages/$name"\npublish = ["pub.dev"]',
       ].join('\n'),
@@ -995,7 +995,7 @@ dependencies:
 
   group('a bare release of independent units', () {
     const config = """
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -1073,7 +1073,7 @@ publish = ["pub.dev"]
         only: null,
         config:
             '''
-schema = 2
+schema = 3
 
 [release.$first]
 path = "packages/a"
@@ -1446,7 +1446,7 @@ publish = ["pub.dev"]
       final ran = await release(
         only: null,
         config: '''
-schema = 2
+schema = 3
 
 [release.first]
 path = "packages/first"
@@ -1481,12 +1481,12 @@ publish = ["pub.dev"]
 /// from the newest earlier release that published a signed binary.
 void signingBaseline() {
   const binaryConfig = '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/tool"
 publish = ["git-tag", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''';
 
   MemorySourceTree binaryTree() => MemorySourceTree({
@@ -1968,7 +1968,7 @@ void main() {
       );
       final ran = await release(
         config: '''
-schema = 2
+schema = 3
 
 [release.core]
 publish = ["git-tag"]
@@ -2844,7 +2844,7 @@ void beforeActing() {
     // operator they were permanently taking names taken releases ago.
     final ran = await release(
       config: '''
-schema = 2
+schema = 3
 
 [release.core]
 
@@ -3144,12 +3144,12 @@ publish = ["pub.dev"]
       // not — a release that halted on its own work could never start.
       final ran = await release(
         config: '''
-schema = 2
+schema = 3
 
 [release.cli]
 path = "packages/keybay"
 publish = ["git-tag", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''',
         source: MemorySourceTree({
           'packages/keybay/pubspec.yaml': '''
@@ -3181,7 +3181,7 @@ executables:
         final ran = await release(
           dryRun: stageOnly,
           config: '''
-schema = 2
+schema = 3
 [release.core]
 [[release.core.project]]
 path = "packages/keybay"
@@ -3343,7 +3343,7 @@ void originRoundTrips() {
           name: ['0.1.1'],
       },
       config: '''
-schema = 2
+schema = 3
 
 [release.fleury]
 path = "packages/fleury"

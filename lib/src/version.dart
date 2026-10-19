@@ -4,4 +4,4 @@
 /// in library code so `rk --version`, `rk target` and the installation manager
 /// report the same value; real-process tests freeze its agreement with
 /// pubspec.yaml.
-const rkVersion = '0.1.15';
+const rkVersion = '0.2.0';

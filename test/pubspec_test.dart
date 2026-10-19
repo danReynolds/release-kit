@@ -44,7 +44,7 @@ dev_dependencies:
 
   test('a package with a bare dependency stages', () async {
     const config = '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"

@@ -18,7 +18,7 @@ void main() {
       '.gitignore': '.rk/\n',
       'release.toml':
           '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/core"
@@ -208,14 +208,14 @@ esac
       final repo = Rk.repository(scratch, 'source', {
         '.gitignore': '.rk/\n',
         'release.toml': '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "flark_parse-v{version}"
 path = "native/parser"
 publish = ["git-tag", "github-release"]
-build = ["tool/build.sh", "{out}"]
-assets = ["assets/parser-linux-x64.so", "parser-macos-arm64.dylib", "src.tar.gz"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["assets/parser-linux-x64.so", "parser-macos-arm64.dylib", "src.tar.gz"]
 ''',
         'native/parser/Cargo.toml':
             '[package]\nname = "flark_parse"\nversion = "0.1.0"\n',

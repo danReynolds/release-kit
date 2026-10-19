@@ -38,10 +38,10 @@ ${commands.map((c) => '  $c: ${c}_main').join('\n')}
       );
   }
   File('${root.path}/release.toml').writeAsStringSync('''
-schema = 2
+schema = 3
 [release.app]
 publish = ["pub.dev"${binary ? ', "github-release", "git-tag", "homebrew"' : ''}]
-${binary ? 'binary_platforms = ["linux-x64", "macos-arm64"]' : ''}
+${binary ? 'binary.platforms = ["linux-x64", "macos-arm64"]' : ''}
 ''');
   final diagnostics = Diagnostics();
   final tree = WorkingTree(root.path, git: false);

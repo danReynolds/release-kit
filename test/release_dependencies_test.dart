@@ -115,7 +115,7 @@ Resolution _stack([Map<String, String> manifests = const {}]) {
   final diagnostics = Diagnostics();
   final config = ReleaseConfig.parse(
     [
-      'schema = 2',
+      'schema = 3',
       for (final name in ['core', 'mid', 'app', 'testkit']) ...[
         '[release.$name]',
         'path = "$name"',

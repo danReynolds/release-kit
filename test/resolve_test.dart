@@ -40,7 +40,7 @@ executables:
 });
 
 const keybayConfig = '''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "keybay-v{version}"
@@ -51,7 +51,7 @@ publish = ["git-tag", "pub.dev"]
 tag = "keybay_cli-v{version}"
 path = "packages/keybay_cli"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
+binary.platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''';
 
 Resolution resolved(String config, SourceTree tree) {
@@ -96,7 +96,7 @@ void main() {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
@@ -125,7 +125,7 @@ publish = ["git-tag", "pub.dev"]
   test('derives a bare tag where the repository publishes one package', () {
     final resolution = resolved(
       '''
-schema = 2
+schema = 3
 
 [release.lib]
 publish = ["git-tag", "pub.dev"]
@@ -140,7 +140,7 @@ publish = ["git-tag", "pub.dev"]
 
   test('a declared tag always wins over the convention', () {
     final resolution = resolved('''
-schema = 2
+schema = 3
 
 [release.core]
 tag = "release-{version}"
@@ -160,7 +160,7 @@ publish = ["git-tag", "pub.dev"]
     test('a project directory that does not exist', () {
       expect(
         refusedWith('''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/missing"
@@ -173,7 +173,7 @@ publish = ["pub.dev"]
     test('a manifest with no version, such as a workspace root', () {
       expect(
         refusedWith('''
-schema = 2
+schema = 3
 
 [release.root]
 publish = ["pub.dev"]
@@ -188,7 +188,7 @@ publish = ["pub.dev"]
       expect(
         refusedWith(
           '''
-schema = 2
+schema = 3
 
 [release.cli]
 publish = ["pub.dev"]
@@ -206,7 +206,7 @@ publish = ["pub.dev"]
       expect(
         refusedWith(
           '''
-schema = 2
+schema = 3
 
 [release.cli]
 publish = ["pub.dev"]
@@ -224,12 +224,12 @@ publish = ["pub.dev"]
     test('binary channels for a package with no executable', () {
       expect(
         refusedWith('''
-schema = 2
+schema = 3
 
 [release.core]
 path = "packages/keybay"
 publish = ["git-tag", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''', keybayTree()),
         'RK-RES-004',
       );
@@ -239,11 +239,11 @@ binary_platforms = ["macos-arm64"]
       expect(
         refusedWith(
           '''
-schema = 2
+schema = 3
 
 [release.tools]
 publish = ["git-tag", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''',
           MemorySourceTree({
             'pubspec.yaml': '''
@@ -262,7 +262,7 @@ executables:
     test('two projects at the same path', () {
       expect(
         refusedWith('''
-schema = 2
+schema = 3
 
 [release.a]
 path = "packages/keybay"
@@ -280,7 +280,7 @@ publish = ["pub.dev"]
       expect(
         refusedWith(
           '''
-schema = 2
+schema = 3
 
 [release.outer]
 path = "packages"
@@ -303,7 +303,7 @@ publish = ["pub.dev"]
       expect(
         refusedWith(
           '''
-schema = 2
+schema = 3
 
 [release.framework]
 tag = "fleury-v{version}"
@@ -330,7 +330,7 @@ publish = ["pub.dev"]
   test('a multi-project unit resolves every member', () {
     final resolution = resolved(
       '''
-schema = 2
+schema = 3
 
 [release.framework]
 tag = "fleury-v{version}"
@@ -368,7 +368,7 @@ dependencies:
         });
     String unit(String settings, {String path = 'native/parser'}) =>
         '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "flark_parse-v{version}"
@@ -377,8 +377,8 @@ publish = ["git-tag", "github-release"]
 $settings
 ''';
     const build =
-        'build = ["tool/build.sh", "{out}"]\n'
-        'assets = ["assets/parser-linux-x64.so"]\n';
+        'assets.build = ["tool/build.sh", "{out}"]\n'
+        'assets.files = ["assets/parser-linux-x64.so"]\n';
 
     test('releases through its declared build, named by Cargo.toml', () {
       final parser = resolved(unit(build), crate()).unit('parser')!;
@@ -413,14 +413,14 @@ $settings
       final parsed = ReleaseConfig.parse(unit(''), 'release.toml', refused)!;
       expect(Resolution.resolve(parsed, crate(), refused), isNull);
       expect(refused.found.single.code, 'RK-RES-016');
-      expect(refused.found.single.remedy, contains('declare build'));
+      expect(refused.found.single.remedy, contains('declare assets.build'));
     });
 
     test('cannot publish to pub.dev', () {
       final diagnostics = Diagnostics();
       final parsed = ReleaseConfig.parse(
         '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "flark_parse-v{version}"
@@ -469,7 +469,7 @@ $build''',
       expect(
         refusedWith(
           '''
-schema = 2
+schema = 3
 
 [release.parser]
 tag = "parser-v{version}"
@@ -477,13 +477,13 @@ publish = ["git-tag", "github-release"]
 
 [[release.parser.project]]
 path = "native/parser"
-build = ["tool/build.sh", "{out}"]
-assets = ["a.so"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["a.so"]
 
 [[release.parser.project]]
 path = "native/other"
-build = ["tool/build.sh", "{out}"]
-assets = ["b.so"]
+assets.build = ["tool/build.sh", "{out}"]
+assets.files = ["b.so"]
 ''',
           crate(
             more: {
@@ -501,7 +501,7 @@ assets = ["b.so"]
     expect(
       refusedWith(
         '''
-schema = 2
+schema = 3
 
 [release.a]
 tag = "v{version}"
@@ -526,11 +526,11 @@ publish = ["git-tag", "pub.dev"]
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 
 [release.cli]
 publish = ["git-tag", "github-release"]
-binary_platforms = ["macos-arm64"]
+binary.platforms = ["macos-arm64"]
 ''',
       'release.toml',
       diagnostics,

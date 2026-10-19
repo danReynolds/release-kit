@@ -52,13 +52,13 @@ String render({Map<String, PlatformAsset> assets = _assets}) =>
   final resolution = Resolution.resolve(
     ReleaseConfig.parse(
       '''
-schema = 2
+schema = 3
 [release.cli]
 tag = "v{version}"
-homebrew_tap = "owner/homebrew-tap"
-homebrew_description = "Tool that does one thing"
+homebrew.tap = "owner/homebrew-tap"
+homebrew.description = "Tool that does one thing"
 publish = ["git-tag", "github-release", "homebrew"]
-binary_platforms = ["linux-x64"]
+binary.platforms = ["linux-x64"]
 ''',
       'release.toml',
       diagnostics,

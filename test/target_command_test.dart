@@ -32,8 +32,8 @@ void main() {
 
   test('a choice\'s detail names what it needs and how to configure it', () {
     for (final (choice, names) in [
-      ('homebrew', ['binary', 'git-tag', 'github-release', 'homebrew_tap']),
-      ('binary', ['binary_platforms']),
+      ('homebrew', ['binary', 'git-tag', 'github-release', 'homebrew.tap']),
+      ('binary', ['binary.platforms']),
     ]) {
       final run = rk(['target', choice]);
 
@@ -76,8 +76,8 @@ void main() {
     final configuration = (choices.single['configure'] as List)
         .cast<String>()
         .join('\n');
-    expect(configuration, contains('homebrew_tap'));
-    expect(configuration, contains('binary_platforms'));
+    expect(configuration, contains('homebrew.tap'));
+    expect(configuration, contains('binary.platforms'));
   });
 
   test('every documented example is accepted by the config parser', () {
@@ -87,7 +87,7 @@ void main() {
 
     for (final choice in choices) {
       final diagnostics = Diagnostics();
-      final source = 'schema = 2\n\n${choice['example']}\n';
+      final source = 'schema = 3\n\n${choice['example']}\n';
       final parsed = ReleaseConfig.parse(
         source,
         '${choice['id']}.release.toml',

@@ -95,7 +95,7 @@ final class _Fixture {
     const names = ['alpha', 'beta'];
     final source = MemorySourceTree({
       'release.toml':
-          'schema = 2\n${names.map((name) => '[release.$name]\npath = "$name"\npublish = ["pub.dev"]\n').join()}',
+          'schema = 3\n${names.map((name) => '[release.$name]\npath = "$name"\npublish = ["pub.dev"]\n').join()}',
       for (final name in names)
         '$name/pubspec.yaml':
             'name: $name\nversion: 0.1.0\nenvironment:\n  sdk: ^3.10.4\n',

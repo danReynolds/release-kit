@@ -3,7 +3,7 @@ description: >-
   rk makes releasing code simple: Dart packages to pub.dev, Git tags,
   GitHub Releases, Homebrew formulas and binaries, in dependency order,
   with one command.
-version: 0.1.15
+version: 0.2.0
 repository: https://github.com/danReynolds/release-kit
 
 environment:

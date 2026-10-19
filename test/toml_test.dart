@@ -19,7 +19,7 @@ List<Diagnostic> rejected(String source) {
 void main() {
   test('parses keybay\'s complete configuration', () {
     final document = parse('''
-schema = 2
+schema = 3
 
 [release.core]                 # tag keybay-v{version}
 path = "packages/keybay"
@@ -28,10 +28,10 @@ publish = ["pub.dev"]
 [release.cli]                  # tag keybay_cli-v{version}
 path = "packages/keybay_cli"
 publish = ["pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
+binary.platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''')!;
 
-    expect(document['schema'], 2);
+    expect(document['schema'], 3);
 
     final release = document['release'] as TomlTable;
     final core = release['core'] as TomlTable;
@@ -40,11 +40,35 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 
     final cli = release['cli'] as TomlTable;
     expect(cli['publish'], ['pub.dev', 'github-release', 'homebrew']);
-    expect(cli['binary_platforms'], [
+    expect((cli['binary'] as TomlTable)['platforms'], [
       'linux-x64',
       'linux-arm64',
       'macos-arm64',
     ]);
+  });
+
+  test('a dotted key makes a table of its own, in a table or a row', () {
+    final document = parse('''
+[release.cli]
+binary.platforms = ["macos-arm64"]
+homebrew.description = "Fast tool"
+homebrew . tap = "owner/tools"
+
+[[release.suite.project]]
+binary.platforms = ["linux-x64"]
+''')!;
+
+    final release = document['release'] as TomlTable;
+    final cli = release['cli'] as TomlTable;
+    final homebrew = cli['homebrew'] as TomlTable;
+    expect(homebrew.dotted, isTrue);
+    expect(homebrew['description'], 'Fast tool');
+    expect(homebrew['tap'], 'owner/tools');
+    expect(homebrew.locationOf('tap').line, 4);
+    expect(cli.locationOf('homebrew').line, 3);
+    final row =
+        ((release['suite'] as TomlTable)['project'] as TomlArray).tables.single;
+    expect((row['binary'] as TomlTable)['platforms'], ['linux-x64']);
   });
 
   test('parses a multi-project unit as an array of tables', () {
@@ -186,7 +210,31 @@ path = "packages/keybay"
     });
 
     test('a key that is not bare', () {
-      expect(rejected('my.key = 1'), isNotEmpty);
+      expect(rejected('"my key" = 1'), isNotEmpty);
+      expect(rejected('my..key = 1'), isNotEmpty);
+    });
+
+    test('a dotted key assigned twice', () {
+      expect(
+        rejected('a.b = 1\na.b = 2').single.message,
+        '"a.b" is assigned more than once in this table',
+      );
+    });
+
+    test('a dotted key adding to a value', () {
+      expect(
+        rejected('a = 1\na.b = 2').single.message,
+        '"a.b" cannot add to "a", already defined on line 1',
+      );
+    });
+
+    test('a header reopening a table dotted keys made', () {
+      final found = rejected('[x]\na.b = 1\n[x.a]\nc = 2');
+      expect(
+        found.single.message,
+        '"x.a" is made by dotted keys on line 2, so a header cannot reopen it',
+      );
+      expect(found.single.source?.line, 3);
     });
 
     test('an unterminated array-of-tables header', () {
