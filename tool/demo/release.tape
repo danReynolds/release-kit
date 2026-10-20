@@ -3,11 +3,12 @@
 # From the repository root: RELEASE_REPO=<checkout to release> vhs tool/demo/release.tape
 Output tool/demo/release.mp4
 Source tool/demo/common.tape
-Set Height 900
+Set Width 960
+Set Height 660
 Set WaitTimeout 20m
 
 Hide
-Type `export PS1='$ ' PROMPT_COMMAND= && cd "${RELEASE_REPO:-.}" && clear`
+Type `export PS1='$ ' PROMPT_COMMAND= && cd "${RELEASE_REPO:?}" && clear || exit`
 Enter
 Wait
 Show
