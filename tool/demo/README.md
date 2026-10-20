@@ -13,7 +13,7 @@ first: `dart install "rk@{path: '$PWD'}"`.
 |---|---|---|
 | `init.tape` | `rk init` choosing release-kit's own outputs | `vhs tool/demo/init.tape` |
 | `plan.tape` | `rk plan` for the README's two packages | `vhs tool/demo/plan.tape` |
-| `stage.tape` | Fleury's four packages staged, interrupted, resumed and reused | `FLEURY=../fleury vhs tool/demo/stage.tape` |
+| `stage.tape` | Fleury's four packages staged, interrupted partway, resumed and reused | `FLEURY=../fleury vhs tool/demo/stage.tape` |
 | `use.tape` | `rk use` switching between this checkout and a release | `vhs tool/demo/use.tape` |
 | `release.tape` | `rk status` and `rk release` publishing for real | `RELEASE_REPO=<checkout> vhs tool/demo/release.tape` |
 

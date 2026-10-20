@@ -62,13 +62,12 @@ or changing anything:
 side, and publishes nothing. Stop it, or `rk release`, anywhere: running it
 again keeps what finished, does the rest, and publishes nothing twice.
 
-<img src="tool/demo/stage.gif" width="860" alt="rk stage on Fleury's four packages, interrupted with three staged; run again, it stages the fourth and keeps the three; run once more, all four are already staged">
+<img src="tool/demo/stage.gif" width="860" alt="rk stage on Fleury's four packages, interrupted partway; run again, it keeps what finished and stages the rest; run once more, all four are already staged">
 
 ## Release
 
-`rk release` asks once for every remaining target, in dependency order.
-Right before each upload it reads the destination again and checks the
-staged bytes, and afterwards it reads the result back. A problem found
+Right before each upload, `rk release` reads the destination again and
+checks the staged bytes, and afterwards it reads the result back. A problem found
 before publishing stops the run with a code and the fix
 ([doc/codes.md](doc/codes.md)). Credentials stay with `dart pub`, `gh`,
 `git`, `codesign` and `notarytool`.
@@ -78,7 +77,7 @@ before publishing stops the run with a code and the fix
 `rk use` switches a command you release between this checkout's build and
 a published one:
 
-<img src="tool/demo/use.gif" width="860" alt="rk use lists rk's sources; rk use local compiles this checkout and makes it rk; rk use github switches back to the published 0.2.2">
+<img src="tool/demo/use.gif" width="860" alt="rk use lists rk's sources; rk use local compiles this checkout and makes it rk; rk use github downloads the published 0.2.2 and makes it rk">
 
 ## Agents
 
@@ -100,21 +99,23 @@ $ rk status --json | jq -c '.units[].targets[] | {kind, coordinate, verdict}'
 | `git-tag` | a version tag, signed when `tag.gpgSign` asks | push access to origin |
 | `pub.dev` | a Dart package | a `dart pub` sign-in |
 | `github-release` | your binaries, or files your own build makes | a `gh` sign-in |
-| `homebrew` | a formula that installs your binary | a `gh` sign-in and a tap repository |
-| `binary` | executables for `macos-arm64`, `linux-x64` and `linux-arm64`, the macOS one signed and notarized | for macOS, a Developer ID and an `rk-notary` notarytool profile; Docker or Podman to run Linux builds, optionally |
+| `homebrew` | a formula that installs your binary | a `gh` sign-in and an existing tap, `<owner>/homebrew-tap` by default |
+| `binary.platforms` | executables for `macos-arm64`, `linux-x64` and `linux-arm64`, the macOS one signed and notarized, for `github-release` and `homebrew` to ship | for macOS, a Developer ID certificate and an `rk-notary` notarytool profile; optionally, Docker or Podman to run the Linux ones |
 | npm | planned | |
 | RubyGems | planned | |
 
-rk asks for the sign-ins once a run, after the yes. `rk target <name>`
-explains a target's settings with an example.
+After the yes, rk checks the `dart pub` and `gh` sign-ins once a run, and
+runs `dart pub login` if Pub needs it. `rk target <name>` explains a
+target's settings with an example.
 
 <details>
 <summary><b>Release files your own build makes</b></summary>
 
 A unit can publish files rk does not know how to make, such as a native
-library built for a dozen platforms, or a Rust crate's (a directory with a
-`Cargo.toml` and no `pubspec.yaml`). Name the command and the files it
-writes, and rk publishes them as the unit's GitHub Release:
+library built for a dozen platforms. Name the command and the files it
+writes, and rk publishes them as the unit's GitHub Release. A Rust crate (a
+`Cargo.toml` and no `pubspec.yaml`) releases only this way, named and
+versioned by its `Cargo.toml`.
 
 ```toml
 [release.parser]
@@ -160,5 +161,4 @@ $ dart install rk                     # Dart 3.10.4 or newer
 | [Adding a target](doc/adding-a-target.md) | how a new destination joins the pipeline |
 
 `rk help` lists the commands; design history is in [`doc/archive/`](doc/archive/).
-Releases run from your machine; the design anticipates CI, and support is
-deferred. [MIT](LICENSE).
+Releases run from your machine; CI is not supported yet. [MIT](LICENSE).

@@ -8,7 +8,7 @@ Set Height 660
 Set WaitTimeout 20m
 
 Hide
-Type `export PS1='$ ' PROMPT_COMMAND= && cd "${RELEASE_REPO:-.}" && clear`
+Type `export PS1='$ ' PROMPT_COMMAND= && cd "${RELEASE_REPO:?}" && clear || exit`
 Enter
 Wait
 Show

@@ -7,7 +7,7 @@ Set Width 860
 Set Height 330
 
 Hide
-Type `export PS1='$ ' PROMPT_COMMAND= XDG_DATA_HOME="$(mktemp -d)" && export PATH="$XDG_DATA_HOME/rk/bin:$PATH" && cd "$(tool/demo/setup.sh use)" && clear`
+Type `export SHELL=/bin/bash PS1='$ ' PROMPT_COMMAND= XDG_DATA_HOME="$(mktemp -d)" && export PATH="$XDG_DATA_HOME/rk/bin:$PATH" && cd "$(tool/demo/setup.sh use)" && clear`
 Enter
 Wait
 Show
