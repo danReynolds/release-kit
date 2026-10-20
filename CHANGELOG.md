@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- When Pub's validation finds `dart analyze` issues, rk lists them under
+  the warning, where it used to say only how many there were: `5 issues
+  found` named no file before the yes that publishes past it. A release
+  that reuses the stage lists them too, in its output and in `--json`.
+
 ## 0.2.1
 
 - When a native build needs the temporary Dart helper and it is missing or

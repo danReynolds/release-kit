@@ -97,6 +97,7 @@ final class Receipt {
           code: code,
           message: message,
           remedy: warning['remedy'] as String?,
+          evidence: warning['evidence'] as String?,
         ),
   ];
 
@@ -109,6 +110,7 @@ final class Receipt {
             'code': warning.code,
             'message': warning.message,
             'remedy': ?warning.remedy,
+            'evidence': ?warning.evidence,
           },
       ],
   };

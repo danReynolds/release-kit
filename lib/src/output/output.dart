@@ -849,6 +849,7 @@ class Output {
           depth: 1,
           state: RuntimeState.attention,
         );
+        _warningEvidence(diagnostic, depth: 2);
       }
       if (remedy != null) say(remedy, depth: 2);
     }
@@ -869,8 +870,17 @@ class Output {
       depth: depth,
       state: RuntimeState.attention,
     );
+    _warningEvidence(diagnostic, depth: depth + 1);
     if (diagnostic.remedy != null) {
       say(diagnostic.remedy!, depth: depth + 1);
+    }
+  }
+
+  /// What a warning found, under it: a warning is said so it can be
+  /// weighed before a yes, and "5 issues found" cannot be.
+  void _warningEvidence(Diagnostic diagnostic, {required int depth}) {
+    if (diagnostic.evidence case final evidence?) {
+      say(evidence, depth: depth, role: VisualRole.secondary);
     }
   }
 
