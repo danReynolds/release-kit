@@ -1,63 +1,52 @@
+<div align="center">
+
 # rk
 
-rk makes releasing code simple. A repository says what it releases and where
-each piece goes — Dart packages to pub.dev, Git tags, GitHub Releases,
-Homebrew formulas, standalone binaries — and rk turns that into one plan for
-the whole repository and carries it out with one command:
+**rk makes releasing code simple.**
+
+One command releases a whole repository: Dart packages to pub.dev, version
+tags, GitHub Releases with signed binaries, and Homebrew formulas, in the
+order they depend on each other, asking once.
+
+[![pub.dev](https://img.shields.io/pub/v/rk?label=pub.dev)](https://pub.dev/packages/rk)
+[![Core](https://github.com/danReynolds/release-kit/actions/workflows/core.yml/badge.svg)](https://github.com/danReynolds/release-kit/actions/workflows/core.yml)
+[![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+<img src="tool/demo/release.gif" width="880" alt="rk status lists what rk 0.2.2 has left to publish; rk release asks once, then pushes the tag, publishes to pub.dev, publishes the GitHub Release with three binaries, and updates the Homebrew formula">
+
+<sub>rk releasing itself: version 0.2.2, recorded as it went public.</sub>
+
+</div>
+
+## Quick start
 
 ```console
-$ rk init       # say what to release: writes release.toml
+$ brew install danreynolds/tap/rk     # or: dart install rk
+$ rk init       # choose what to release; writes release.toml
 $ rk status     # what is released, staged and left to do
 $ rk release    # release the rest, in dependency order, asking once
 ```
 
-`rk release` builds what is not built, shows every remaining target, asks
-once, and publishes providers before the packages that need them. Re-running
-it finishes a release that stopped anywhere, and publishes nothing twice.
+`rk init` reads your packages and proposes their outputs. Choose Homebrew,
+and it adds the binary and the GitHub Release the formula installs from:
 
-## Features
+<img src="tool/demo/init.gif" width="880" alt="rk init: selecting Homebrew adds Binary, Git tag and GitHub; the review shows a four-line release.toml, which rk writes">
 
-- **One small file, written for you.** `rk init` proposes it; versions,
-  names, and repositories come from native manifests and Git. Unknown
-  fields are errors.
-- **Reality first.** A target that is already public is recorded, not
-  published again.
-- **Refuses before acting.** The complete plan is checked before the first
-  step acts, and every refusal names the problem and the fix
-  ([doc/codes.md](doc/codes.md)).
-- **No secrets.** Publication sessions belong to `dart pub`, `gh` and `git`;
-  signing and notarization credentials to `codesign` and `notarytool`. rk
-  asks for the `dart pub` and `gh` sessions once a run, after the yes;
-  `status` and `stage` never do. A `dart pub login` rk runs leaves its
-  session in place, as one you ran yourself would.
-- **Signed when you say so.** rk signs a release tag when `tag.gpgSign` is
-  set, as git does; a signing key alone does not sign it.
-- **Final bytes checked.** Linux executables and macOS Dart bundles use one
-  artifact contract. Every macOS code file is signed, and the installed
-  command is run before it is archived. Dart dependency hooks supply native
-  libraries automatically, carried intact through installation.
-  See [CLI artifacts](doc/cli-artifacts.md)
-  for layouts, signing and compile-time metadata.
-- **Monorepos.** Cross-unit version constraints are checked before
-  anything acts.
+## What rk does
 
-## Getting Started
+### One plan for the whole repository
 
-`rk init` opens an inline Fleury matrix of packages and release outputs. Select the
-cells you want, then choose **Review configuration** to see the exact
-`release.toml` before creating it. Selected cells say **Added**, and prerequisites
-such as GitHub's Git tag are added together.
-
-That proposal is the whole configuration. Targets are opt-in —
-release-kit's own file says yes to all of them. `rk plan` draws the configured
-release graph before rk observes public state or changes anything:
+`release.toml` says what each unit releases and where it goes. Versions,
+names and repositories come from your manifests and Git. `rk plan` draws
+what a release will do before anything is read or changed:
 
 ```console
 $ rk plan
 RELEASE-KIT RELEASE PLAN
-main@888444b
+main@2fe7021
 
-└─ 1 · rk 0.1.0
+└─ 1 · rk 0.2.2
+   │
    ├─ STAGE
    │  └─ [source snapshot]
    │     ├─▶ [package archive]
@@ -67,120 +56,88 @@ main@888444b
    │     ├─▶ macos-arm64  [build + sign] ─▶ [notarize] ─▶ [archive]
    │     ├─▶ [Homebrew formula] · needs archives
    │     └─▶ [finalize stage]
+   │
    └─ PUBLISH
-      └─▶ [tag v0.1.0]
-          ├─▶ [pub.dev rk@0.1.0]
+      └─▶ [tag v0.2.2]
+          ├─▶ [pub.dev rk@0.2.2]
           └─▶ [GitHub Release · 4 assets]
               └─▶ [Homebrew · rk.rb]
 
 no destination checks · no changes
 ```
 
-`rk status` checks the
-destinations themselves, not a log; "Not staged" is the private work
-that must finish before anything goes public.
+### Builds side by side, and never twice
 
-See [release status](doc/status.md) for the report's evidence and meaning.
+`rk stage` builds and checks everything a release publishes, and publishes
+nothing. Units build at the same time, from one commit; a package that
+needs a sibling not yet on pub.dev builds against that sibling's source. A
+stage is named by what it was built from, so running it again reuses it.
 
-```console
-$ rk status
-release-kit · main@888444b
+<img src="tool/demo/stage.gif" width="880" alt="rk stage builds Fleury's four packages side by side in 10 seconds; running it again reuses all four">
 
-  rk 0.1.0
+<sub>Fleury's four packages: 10 seconds to stage, under one to reuse.</sub>
 
-    Not published
-      Git tag                    v0.1.0
-      pub.dev                    rk
-      GitHub Release             danReynolds/release-kit
-      Homebrew                   danReynolds/homebrew-tap
+### Re-running is the recovery
 
-    Not staged
-      Local binaries
-        rk-0.1.0-linux-arm64.tar.gz
-        rk-0.1.0-linux-x64.tar.gz
-        rk-0.1.0-macos-arm64.tar.gz
-      pub.dev                    rk package archive
-      GitHub Release             4 artifacts
-      Homebrew                   rk.rb
-```
+Interrupt rk anywhere and run the same command again. It keeps what
+finished, does the rest, and publishes nothing twice. There is no resume
+flag and no cleanup step.
 
-The release itself — prepared, disclosed, then authorized with one yes — is
-shown in [Two packages, one release](#two-packages-one-release).
+<img src="tool/demo/recover.gif" width="880" alt="rk stage is interrupted with three of four packages staged; running it again stages the fourth and keeps the three">
 
-`rk stage` builds and checks what a release publishes, and publishes nothing.
-[The release pipeline](doc/release-pipeline.md#the-stage-record) says what a
-stage holds and when it is reused.
+### Asks once, then checks what happened
 
-## Install
+`rk release` shows every remaining target in release order and asks one
+question; the yes covers exactly those. Right before each upload rk reads
+the destination again and checks the staged bytes, and afterwards it reads
+the result back. When pub.dev accepts an upload but the response is lost,
+rk finds the version there and carries on.
 
-With Dart 3.10.4 or newer, install a native executable:
+Problems found before publishing stop the run before anything is public,
+each with a code and the fix ([doc/codes.md](doc/codes.md)). Credentials
+stay with the tools that own them: `dart pub`, `gh`, `git`, `codesign` and
+`notarytool`.
 
-```console
-$ dart install rk
-```
+### Binaries, signed and run before they ship
 
-[`dart install`](https://dart.dev/tools/dart-install) builds once at installation.
-Running `rk` starts the installed command directly, without resolving package
-dependencies. Run the install command again to upgrade.
+For a command-line app, rk builds standalone executables for macOS and
+Linux, signs and notarizes the macOS one, runs each where this machine can,
+attaches them to the GitHub Release, and writes the Homebrew formula that
+installs them. Native libraries from Dart build hooks come along. See
+[CLI artifacts](doc/cli-artifacts.md).
 
-Pub global activation works too:
+### Built for agents
+
+Every command speaks `--json`: the same facts as the terminal, with stable
+codes ([doc/json.md](doc/json.md)). `rk release --yes` is the unattended yes
+to the same reviewed plan, and it skips no inspection.
 
 ```console
-$ dart pub global activate rk
+$ rk status --json | jq -c '.units[].targets[] | {kind, coordinate, verdict}'
+{"kind":"gitTag","coordinate":"v0.2.2","verdict":"absent"}
+{"kind":"pubDev","coordinate":"rk","verdict":"absent"}
+{"kind":"githubRelease","coordinate":"danReynolds/release-kit/releases/tag/v0.2.2","verdict":"absent"}
+{"kind":"homebrew","coordinate":"danReynolds/homebrew-tap/Formula/rk.rb","verdict":"absent"}
 ```
 
-For the signed and notarized macOS release, use Homebrew:
+## What it releases
 
-```console
-$ brew install danreynolds/tap/rk
-```
-
-The same CLI ships from pub.dev, Homebrew, and GitHub Releases —
-`rk --version` reports what you are running.
-
-### Try a local checkout
-
-From the release-kit checkout, install the current code:
-
-```console
-$ dart install "rk@{path: '$PWD'}"
-$ rk --version
-```
-
-This installs a snapshot of the checkout; repeat the install after editing it.
-Use an absolute path: `$PWD` supplies it in fish, zsh, and bash.
-Run `rk` from the project you want to release: its version and configuration
-come from that project, independently of the installed RK version.
-
-`dart pub global activate --source path .` remains useful for development that
-follows source edits. Dart Pub may resolve dependencies or rebuild its snapshot
-before launching RK, so that route can print package-manager output at startup.
-
-## Targets
-
-| | |
+| Target | Publishes |
 |---|---|
-| `git-tag` | create and push a version tag |
-| `pub.dev` | publish a Dart package |
-| `github-release` | create a GitHub Release with selected outputs |
-| `homebrew` | publish the executable through a Homebrew tap |
-| `binary` | build standalone executable archives, publishing nothing |
+| `git-tag` | a version tag, signed when `tag.gpgSign` asks |
+| `pub.dev` | a Dart package |
+| `github-release` | a GitHub Release with your binaries, or files your own build makes |
+| `homebrew` | a formula in your tap that installs your binary |
+| `binary` | standalone executables for `macos-arm64`, `linux-x64` and `linux-arm64`, kept local unless a target above ships them |
 
-Planned: npm, RubyGems. `rk target list` is always the set your
-installed rk supports. `rk target <name>` explains a target's settings
-with an example.
+Planned: npm and RubyGems. `rk target <name>` explains a target and its
+settings with an example.
 
-Developing another built-in target? Start with
-[Adding a release target](doc/adding-a-target.md), which uses GitHub Release as
-the worked example and defines the modularity and correctness bar. The
-[release pipeline architecture](doc/release-pipeline.md) shows how target
-modules join the shared stage and publication coordinators.
+## Configure
 
-## Two packages, one release
-
-Each `[release.<name>]` is a unit, released on its own version. Two
-units, `cli` depending on `core`, publishing under their pubspec names
-— `init` writes this file too, and it stays yours to edit:
+`rk init` writes `release.toml`, and it stays yours to edit. Each
+`[release.<name>]` is a unit, released on its own version. Two packages,
+`cli` depending on `core`:
 
 ```toml
 schema = 3
@@ -191,42 +148,19 @@ publish = ["pub.dev"]
 
 [release.cli]
 path = "packages/cli"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
+binary.platforms = ["macos-arm64", "linux-x64", "linux-arm64"]
 ```
 
-`rk release` prepares both units first; `cli` is staged against `core`'s
-source from the same commit. Each keeps its own version. RK then shows the remaining targets,
-first claims, signing identities and preparation warnings, and asks once:
+`rk release` publishes `core` first, because `cli` needs it.
 
-```console
-$ rk release
-Releasing core 0.3.0 and cli 0.1.0
-  example · main@3f2a91c
+<details>
+<summary><b>Release assets your own build makes</b></summary>
 
-2 units staged
-    core 0.3.0 · pub.dev · example_core
-    ✓ package archive                              staged
-    cli 0.1.0 · pub.dev · example_cli
-    ✓ package archive                              staged
-Release order: core 0.3.0 › cli 0.1.0
-
-  Release core 0.3.0
-    pub.dev                  example_core 0.3.0 · permanent · first claim
-
-  Release cli 0.1.0
-    pub.dev                  example_cli 0.1.0 · permanent · first claim
-Release core 0.3.0 and cli 0.1.0? [y/N] y
-```
-
-See [recovery](doc/release-pipeline.md#recovery) for when a release needs the
-stage it started from.
-
-## Release assets your own build makes
-
-A project can publish files that rk does not know how to make, such as a
-native library built for a dozen platforms. Name the command that builds
-them, and the files it writes; rk publishes those files as the unit's GitHub
-release:
+A unit can publish files rk does not know how to make, such as a native
+library built for a dozen platforms. Name the command that builds them and
+the files it writes, and rk publishes those files as the unit's GitHub
+Release:
 
 ```toml
 [release.parser]
@@ -255,45 +189,67 @@ assets.files = [
   makes from it is what gets released, so reuse only what the build can
   check is current. `rk clean` leaves it; delete it whenever in doubt.
 - **While it runs.** On a terminal, the stage shows the command's latest
-  line beside its elapsed time, and keeps how long the build took once it
-  is done. If it fails, rk prints its last lines, and the diagnosis keeps
-  all of them.
+  line beside its elapsed time. If it fails, rk prints its last lines, and
+  the diagnosis keeps all of them.
 - **Rust crates.** A directory with a `Cargo.toml` and no `pubspec.yaml` is a
   Rust crate. Its name and version come from the `[package]` table, and it
   is released only this way.
 
-The rest is an ordinary rk release. The build runs once per stage, the
+The rest is an ordinary rk release: the build runs once per stage, the
 release is drafted, published and read back, and its tag carries the
 manifest of what was built.
 
-## Dogfood your commands
+</details>
 
-`rk use` switches a command you release between this checkout's build and a
-published one; see [installation management](doc/installations.md).
+## Install
 
-## Commands
+```console
+$ brew install danreynolds/tap/rk     # signed and notarized for macOS
+$ dart install rk                     # Dart 3.10.4 or newer
+$ dart pub global activate rk         # also works
+```
 
-`rk help` (or `rk -h`) lists the commands, output marks, and exit codes.
-`rk help <command>` (or `rk <command> -h`) shows its flags and examples.
+The same CLI ships from Homebrew, pub.dev and GitHub Releases;
+`rk --version` says which you are running. Run `rk` from the project you
+want to release: its version and configuration come from that project.
 
-## Agents
+<details>
+<summary><b>Run a local checkout</b></summary>
 
-Releases are driven by agents as much as by hands. Every command
-speaks `--json` ([doc/json.md](doc/json.md)) — the same facts as the
-terminal output, with stable codes. `rk release --yes` is the unattended
-yes to the same reviewed plan, and it skips no inspection.
+From the release-kit checkout:
 
-Releases run from your machine. The design anticipates CI; support is
-deferred.
+```console
+$ dart install "rk@{path: '$PWD'}"
+```
+
+This installs a snapshot of the checkout; install again after editing it.
+Use an absolute path: `$PWD` supplies it in fish, zsh and bash.
+`dart pub global activate --source path .` follows source edits instead, and
+can print Pub's output as it starts.
+
+For commands you release yourself, `rk use` switches between this
+checkout's build and a published one; see
+[installation management](doc/installations.md).
+
+</details>
+
+## Documentation
+
+| | |
+|---|---|
+| [Release status](doc/status.md) | what `rk status` reads, and what each line means |
+| [The release pipeline](doc/release-pipeline.md) | stages, ordering and recovery |
+| [CLI artifacts](doc/cli-artifacts.md) | binary layouts, signing and compile-time metadata |
+| [Installations](doc/installations.md) | `rk use`, `rk install` and `rk uninstall` |
+| [JSON](doc/json.md) | the `--json` contract |
+| [Codes](doc/codes.md) | every refusal, with its fix |
+| [Adding a target](doc/adding-a-target.md) | how a new destination joins the pipeline |
+
+`rk help` lists the commands, and `rk help <command>` a command's flags.
+Design history is in [`doc/archive/`](doc/archive/).
 
 ## This repository
 
-rk releases itself, from a clean checkout:
-
-```console
-$ dart run bin/rk.dart status
-$ dart run bin/rk.dart release rk
-```
-
-[MIT](LICENSE). Reference in [`doc/`](doc/); design history in
-[`doc/archive/`](doc/archive/).
+rk releases itself: the recording at the top is `rk release` run on this
+repository. Releases run from your machine; the design anticipates CI, and
+support is deferred. [MIT](LICENSE).
