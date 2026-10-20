@@ -115,9 +115,9 @@ release-kit · main@888444b
 
     Not staged
       Local binaries
-        producers/rk/archives/rk-0.1.0-linux-arm64.tar.gz
-        producers/rk/archives/rk-0.1.0-linux-x64.tar.gz
-        producers/rk/archives/rk-0.1.0-macos-arm64.tar.gz
+        rk-0.1.0-linux-arm64.tar.gz
+        rk-0.1.0-linux-x64.tar.gz
+        rk-0.1.0-macos-arm64.tar.gz
       pub.dev                    rk package archive
       GitHub Release             4 artifacts
       Homebrew                   rk.rb
@@ -130,7 +130,7 @@ shown in [Two packages, one release](#two-packages-one-release).
 
 ```console
 $ rk stage rk
-Staging rk 0.1.12
+Staging rk 0.1.0
   release-kit · main@888444b
 ```
 
@@ -142,7 +142,7 @@ rebuilds a completed stage that no longer verifies, and says so; `rk release`
 refuses one (`RK-STAGE-002`).
 
 Bare `rk stage` prepares all configured units: each is checked, and its signing
-settled, in dependency order; then independent units build together,
+settled, in dependency order; then every unit that needs a stage builds at once,
 on one board. Packages keep
 independent versions, and Pub resolves their dependencies through its own cache.
 A package that depends on another package in this repository, at a version that
@@ -158,7 +158,7 @@ release asks for a sibling outside it to be released first.
 
 ## Install
 
-With Dart 3.10 or newer, install a native executable:
+With Dart 3.10.4 or newer, install a native executable:
 
 ```console
 $ dart install rk
@@ -168,7 +168,7 @@ $ dart install rk
 Running `rk` starts the installed command directly, without resolving package
 dependencies. Run the install command again to upgrade.
 
-For older Dart SDKs, Pub global activation is also supported:
+Pub global activation works too:
 
 ```console
 $ dart pub global activate rk
@@ -451,4 +451,5 @@ $ dart run bin/rk.dart status
 $ dart run bin/rk.dart release rk
 ```
 
-[MIT](LICENSE). Working notes in [`doc/`](doc/).
+[MIT](LICENSE). Reference in [`doc/`](doc/); design history in
+[`doc/archive/`](doc/archive/).

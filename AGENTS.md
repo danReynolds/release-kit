@@ -73,8 +73,8 @@ The principles behind the loop:
   an interrupted stage from its recorded outputs, and finishes a half-done
   release. The stage is the only state one run leaves for the next.
 - **A stage is kept while public bytes must match it**: built assets partly
-  published on a GitHub release or in a formula. Everything else stages again
-  from its commit.
+  published on a GitHub release, in a formula, or in the manifest a pushed
+  tag records. Everything else stages again from its commit.
 - **Native tools do native work.** Pub resolves, validates and packages; git
   tags and signs as its config says; `gh` and the tap publish. rk sequences
   them and confirms the result, trusting a native answer where it is

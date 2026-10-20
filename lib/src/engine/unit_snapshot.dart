@@ -210,7 +210,8 @@ final class UnitSnapshot {
       targets.any((target) => states[target.id]!.releasedFrom != null);
 
   /// Whether public bytes already bind this unit's stage, and it is gone:
-  /// built assets partly published on a GitHub release or in a formula.
+  /// built assets partly published on a GitHub release, in a formula, or in
+  /// a pushed tag's manifest.
   ///
   /// Only built release assets bind a stage: on a GitHub release, in a
   /// Homebrew formula that names their hashes, and in the release manifest a
