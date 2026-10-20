@@ -66,7 +66,7 @@ RK-AUTH-001; none is reused.
 |---|---|---|
 | `RK-CLI-003` | no unit, command or release choice has that name; the names it could be are listed | `bin/rk.dart`, `lib/src/commands/plan.dart`, `lib/src/commands/release.dart`, `lib/src/commands/status.dart`, `lib/src/commands/target.dart` |
 | `RK-CLI-005` | a flag rk, or this command, does not take | `bin/installations.dart`, `bin/rk.dart` |
-| `RK-CLI-007` | the command takes no argument there, or not that one | `bin/rk.dart` |
+| `RK-CLI-007` | a word the command does not take: a unit for init or clean, or one word too many | `bin/rk.dart` |
 
 RK-CLI-001 is now RK-CLI-005, and RK-CLI-008 and RK-CLI-009 are RK-CLI-003;
 none is reused.

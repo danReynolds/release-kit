@@ -176,8 +176,8 @@ compare it with an archive already there.
 A partial release needs its original stage only while a unit's built release
 assets are partly public (`RK-STAGE-005`): assets on a GitHub release, a
 Homebrew formula that names their hashes, or the release manifest a pushed tag
-records for them. Otherwise a fresh stage from the same commit publishes what
-remains, even after the tag is pushed. When only a
+records for them. Any other unit stages again from its commit, and a fresh
+stage publishes what remains, even after its tag is pushed. When only a
 Homebrew formula remains, rk renders it from the archives the GitHub release
 serves, so a lost stage does not stop the release.
 
