@@ -12,10 +12,15 @@ except `release.tape`, which is a real release.
 | `recover.tape` | a stage interrupted, then finished by running it again | `FLEURY=../fleury vhs tool/demo/recover.tape` |
 | `release.tape` | `rk status` and `rk release` publishing for real | `RELEASE_REPO=<checkout> vhs tool/demo/release.tape` |
 
-`release.tape` records an MP4; the README's GIF is made from it with
-`ffmpeg`, with the wait while pub.dev lists the upload sped up, as its
-caption says. Record it only for a release you mean to make, after
-`rk stage` has finished.
+`release.tape` records an MP4, in real time, and the README's GIF is made
+from it:
+
+```sh
+ffmpeg -i tool/demo/release.mp4 -vf "fps=12,split[a][b];[a]palettegen=max_colors=128:stats_mode=full[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" -loop 0 tool/demo/release.gif
+```
+
+Record it only for a release you mean to make, after `rk stage` has
+finished.
 
 Re-record a tape when rk's output changes, so the README keeps showing
 what rk really prints. `tool/` is not published to pub.dev.
