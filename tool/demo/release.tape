@@ -3,7 +3,8 @@
 # From the repository root: RELEASE_REPO=<checkout to release> vhs tool/demo/release.tape
 Output tool/demo/release.mp4
 Source tool/demo/common.tape
-Set Height 900
+Set Width 960
+Set Height 660
 Set WaitTimeout 20m
 
 Hide

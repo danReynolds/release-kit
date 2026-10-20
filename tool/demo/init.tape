@@ -2,7 +2,8 @@
 # From the repository root: vhs tool/demo/init.tape
 Output tool/demo/init.gif
 Source tool/demo/common.tape
-Set Height 440
+Set Width 940
+Set Height 280
 
 Hide
 Type `export PS1='$ ' PROMPT_COMMAND= && cd "$(tool/demo/setup.sh init)" && clear`

@@ -1,10 +1,9 @@
 # Shared settings for every demo: a fixed terminal, so a re-recording
-# matches the others.
+# matches the others. Each tape sets its own Width and Height to fit.
 Set Shell "bash"
 Set FontFamily "Menlo"
-Set FontSize 16
-Set Width 1200
-Set Padding 24
+Set FontSize 13
+Set Padding 16
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 35ms
 Set CursorBlink false
