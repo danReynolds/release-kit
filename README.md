@@ -48,12 +48,6 @@ cells you want, then choose **Review configuration** to see the exact
 `release.toml` before creating it. Selected cells say **Added**, and prerequisites
 such as GitHub's Git tag are added together.
 
-Arrow keys move; Space or Enter selects. **Show private packages** reveals
-`publish_to: none` packages that can still ship through other outputs. Without
-a terminal, RK prints its proposal; `rk init --write` explicitly accepts it.
-**Discovery notes** explains omitted packages and available build platforms.
-Long reviews support PageUp/PageDown and Home/End from the footer actions.
-
 That proposal is the whole configuration. Targets are opt-in —
 release-kit's own file says yes to all of them. `rk plan` draws the configured
 release graph before rk observes public state or changes anything:
@@ -82,24 +76,11 @@ main@888444b
 no destination checks · no changes
 ```
 
-The graph and its direct dependency edges come from the same stage and public
-contracts that `rk release` executes. It is source-only: it does not inspect
-destinations, acquire credentials, build artifacts, or write a stage. Wide
-terminals receive the tree; narrow terminals and pipes receive an outline, and
-`--json` exposes the canonical nodes.
-
 `rk status` checks the
 destinations themselves, not a log; "Not staged" is the private work
 that must finish before anything goes public.
 
 See [release status](doc/status.md) for the report's evidence and meaning.
-
-When Binary or Homebrew is selected, `rk init` proposes every binary platform
-the current host can produce. A macOS host can build its native macOS binary
-and cross-compile pure-Dart Linux binaries; a Linux host does not add a macOS
-artifact that requires a macOS release host. Docker and Podman are optional:
-they run cross-built Linux binaries for the smoke test. Without one, the Linux
-binary is still cross-compiled and is recorded as built but not executed.
 
 ```console
 $ rk status
@@ -126,35 +107,9 @@ release-kit · main@888444b
 The release itself — prepared, disclosed, then authorized with one yes — is
 shown in [Two packages, one release](#two-packages-one-release).
 
-`rk stage` opens with the project version and checkout it will use:
-
-```console
-$ rk stage rk
-Staging rk 0.1.0
-  release-kit · main@888444b
-```
-
-A stage belongs to an exact commit, the unit's configuration and the origin it
-publishes to; a new commit or origin needs a new stage. Updating Dart, Xcode or
-rk does not, unless a new rk changes how it records stages. A verified stage is
-reused; interrupted staging resumes from the outputs it recorded. `rk stage`
-rebuilds a completed stage that no longer verifies, and says so; `rk release`
-refuses one (`RK-STAGE-002`).
-
-Bare `rk stage` prepares all configured units: each is checked, and its signing
-settled, in dependency order; then every unit that needs a stage builds at once,
-on one board. Packages keep
-independent versions, and Pub resolves their dependencies through its own cache.
-A package that depends on another package in this repository, at a version that
-satisfies its requirement, takes it from the same commit's source while staging,
-so it can be staged before that sibling is published. `rk stage <unit>` prepares
-exactly the named unit, the same way; it never builds or publishes the sibling.
-
-`rk release` completes private preparation for every selected unit before one
-confirmation, publication login or public action. Use `rk stage` first to inspect
-the artifacts separately. A package publishes only once the packages it needs
-are public: a sibling released in the same run publishes first, and a named
-release asks for a sibling outside it to be released first.
+`rk stage` builds and checks what a release publishes, and publishes nothing.
+[The release pipeline](doc/release-pipeline.md#the-stage-record) says what a
+stage holds and when it is reused.
 
 ## Install
 
@@ -212,34 +167,14 @@ before launching RK, so that route can print package-manager output at startup.
 | `binary` | build standalone executable archives, publishing nothing |
 
 Planned: npm, RubyGems. `rk target list` is always the set your
-installed rk supports.
+installed rk supports. `rk target <name>` explains a target's settings
+with an example.
 
 Developing another built-in target? Start with
 [Adding a release target](doc/adding-a-target.md), which uses GitHub Release as
 the worked example and defines the modularity and correctness bar. The
 [release pipeline architecture](doc/release-pipeline.md) shows how target
 modules join the shared stage and publication coordinators.
-
-## Settings
-
-`path`, `tag` and `publish` are plain keys. Every other setting is grouped
-under what it configures, as a dotted key:
-
-| Setting | On | What it does |
-|---|---|---|
-| `path` | project | Its directory, `.` by default |
-| `publish` | unit, project | Targets: `git-tag` and `github-release` on the unit, `pub.dev` and `homebrew` on the project |
-| `tag` | unit | The tag pattern, as in `"cli-v{version}"` |
-| `binary.platforms` | project | Build standalone executables for these platforms |
-| `binary.defines_from_pubspec` | project | Pubspec fields compiled in as `-D<field>=<value>` |
-| `assets.build` | project | Your own build command, instead of `binary` |
-| `assets.files` | project | The files it writes, relative to `{out}`, for the GitHub release |
-| `homebrew.description` | project | The formula's `desc`, shown by `brew info` |
-| `homebrew.tap` | project | The tap, as `brew tap` names it; `<GitHub owner>/tap`, the repository `<GitHub owner>/homebrew-tap`, by default |
-
-A unit with one project holds that project's settings itself. A unit with
-several gives each one a `[[release.<unit>.project]]` row. `rk target <name>`
-explains a target's settings with an example.
 
 ## Two packages, one release
 
@@ -283,22 +218,8 @@ Release order: core 0.3.0 › cli 0.1.0
 Release core 0.3.0 and cli 0.1.0? [y/N] y
 ```
 
-A preparation failure leaves any completed private stages available for retry
-and acquires no publication session. The yes covers exactly the targets shown
-and nothing else; a target that was already public when asked is never acted
-on. Right before each act rk reads that target again, skipping one another run
-has published since, checks the staged bytes it publishes, acts, and reads the
-result back. A Git tag is read once a run, with every other tag: git accepts a
-tag push only as the exact object it was given, so its answer is the read-back.
-
-Packages publish in dependency order, and each waits until pub.dev lists the
-version it uploaded before the next unit starts. Development-only
-dependencies never become publication prerequisites.
-
-Public releases are not atomic. If a later publication fails, earlier completed
-targets remain public; rerunning rechecks them and resumes with the recorded
-stage. See [recovery](doc/release-pipeline.md#recovery) for when a release
-needs the stage it started from.
+See [recovery](doc/release-pipeline.md#recovery) for when a release needs the
+stage it started from.
 
 ## Release assets your own build makes
 
@@ -347,97 +268,20 @@ manifest of what was built.
 
 ## Dogfood your commands
 
-```sh
-rk use                     # compare installed and available versions; choose a source
-rk use local               # reuse this checkout's stage or compile; rerun after edits
-rk use local --clean        # run source directly; edits work on the next run
-rk install pub             # prepare without switching
-rk use --list              # sources, installation state and PATH resolution
-```
-
-Run inside the configured project. With multiple executable packages, select
-one in the inline table or add `-p package_name`. Every command in a package
-switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
-
-After `rk stage`, `rk use local` installs the exact staged binary for this
-machine when the checkout is still clean and matches the stage. Signing and
-notarization are already complete; nothing is rebuilt or published. Otherwise
-Local compiles a development snapshot from the checkout, including edits.
-The installed copy survives `rk clean`.
+`rk use` switches a command you release between this checkout's build and a
+published one; see [installation management](doc/installations.md).
 
 ## Commands
 
-| | |
-|---|---|
-| `rk init` | choose outputs and review `release.toml` |
-| `rk status [unit]` | what is released, staged and left to do |
-| `rk stage [unit]` | prepare and validate artifacts; publish nothing |
-| `rk release` | publish unfinished units, in dependency order |
-| `rk release <unit>` | one unit |
-| `rk plan [unit]` | show the configured source-only release graph |
-| `rk target [name]` | what this binary can create or publish, or one target in detail |
-| `rk clean` | remove this repository's private stages |
-| `rk use [source] [-p project]` | install if needed, then select command source |
-| `rk install [source] [-p project]` | prepare a source without switching |
-| `rk uninstall [source] [-p project]` | remove a confirmed inactive installation |
-| `rk help [command]` | the commands, output marks and exit codes, or one command's flags |
-
 `rk help` (or `rk -h`) lists the commands, output marks, and exit codes.
 `rk help <command>` (or `rk <command> -h`) shows its flags and examples.
-
-On a terminal, a finished step keeps how long it took once that reaches a
-second, and a successful `stage` or `release` of ten seconds or more ends
-with where the time went: `Done in 2m 53s · preparing 2s · staging 2m 29s ·
-publishing 22s`. Time spent at rk's confirmation
-prompt is not counted. For the whole breakdown, every phase and step however
-fast, pass `--timings`: it is printed to stderr after the run, and the run is
-written to `.rk/timings.json` as a trace that Perfetto opens.
 
 ## Agents
 
 Releases are driven by agents as much as by hands. Every command
 speaks `--json` ([doc/json.md](doc/json.md)) — the same facts as the
-terminal output, with stable codes. Here, why `cli` releases after `core`:
-
-```console
-$ rk status --json | jq '.units[] | select(.name == "cli") | .steps[] | select(.kind == "prerequisite")'
-{
-  "id": "cli/requires/pub.dev/example_core/0.3.0",
-  "kind": "prerequisite",
-  "summary": "example_core 0.3.0 must be live on pub.dev",
-  "verdict": "absent",
-  "permanent": false,
-  "public": false,
-  "detail": "example_core has never been published"
-}
-```
-
-It is not a problem: `rk release` publishes `core` first, so `problems` stays
-empty, and the terminal report says `Releases after core 0.3.0`.
-
-Without a terminal, a needed answer stops the selected release after private
-preparation and before publication sessions or public actions. `--yes` is the
-unattended yes to the same reviewed plan, and it skips no inspection. Exit codes: 0 report or
-completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
-`--json` mirrors it in `exit`.
-
-## Behavior
-
-Stages live under `.rk/work/stages`. Keep a unit's stage while its built release
-assets are partly public: the assets on a GitHub release, a Homebrew formula that
-names their hashes, or the release manifest a pushed tag records for them. The
-remaining targets need those exact bytes, and rk refuses without them
-(`RK-STAGE-005`). Any other unit stages again from its commit, even after its tag
-is pushed, and a published package needs nothing from its stage: a version on
-pub.dev is published, and a fresh stage publishes what remains. `rk clean` removes this
-repository's stages, lists their recorded identities, and asks first. Receipt
-metadata helps identify a stage; it does not prove that its bytes are no longer
-needed.
-
-A release is of a commit. `rk stage` and `rk release` build from a clean,
-committed working tree, and refuse uncommitted changes or a directory outside
-Git before doing anything. `rk status` and `rk plan` read either as it is, and
-say what staging needs.
+terminal output, with stable codes. `rk release --yes` is the unattended
+yes to the same reviewed plan, and it skips no inspection.
 
 Releases run from your machine. The design anticipates CI; support is
 deferred.
