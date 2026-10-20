@@ -2203,8 +2203,16 @@ publish = ["pub.dev"]
     ]);
     expect(
       ran.text,
-      contains('`dart analyze` found the following issue(s)'),
+      contains(
+        "error - lib/keybay.dart:1:13 - A value of type 'String' can't be "
+        "assigned to a variable of type 'int'.",
+      ),
       reason: 'the operator sees what Pub found before the permanent act',
+    );
+    expect(
+      ran.text,
+      isNot(contains('Constraints that are too tight')),
+      reason: 'a warning whose first sentence says it all is said in one line',
     );
     expect(ran.text, isNot(contains('Non-dev dependencies are overridden')));
   });

@@ -252,16 +252,17 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
     diagnostic: null,
     warnings: [
       for (final warning in warnings)
-        Diagnostic(
-          code: 'RK-PUB-012',
-          message: 'pub validation for ${project.name}: ${_headline(warning)}',
-          // Said once for every warning that shares it, so it reads for
-          // one warning or several.
-          remedy:
-              'rk release lists pub warnings again before it asks, and '
-              'publishes past them only with your yes',
-          evidence: warning.contains('\n') ? warning : null,
-        ),
+        if (_headline(warning) case (:final headline, :final listed))
+          Diagnostic(
+            code: 'RK-PUB-012',
+            message: 'pub validation for ${project.name}: $headline',
+            // Said once for every warning that shares it, so it reads for
+            // one warning or several.
+            remedy:
+                'rk release lists pub warnings again before it asks, and '
+                'publishes past them only with your yes',
+            evidence: listed,
+          ),
     ],
   );
 }
@@ -320,18 +321,28 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
 /// A finding's first line. When that line introduces what follows, the
 /// sentence before the introduction ("… more than one version. For
 /// example:"), or, with none, the line and the last, which counts what it
-/// introduced ("`dart analyze` found …: 1 issue found.").
-String _headline(String finding) {
+/// introduced ("`dart analyze` found …: 1 issue found."). What it counted
+/// is [listed]: a count alone does not say which file to fix before the yes.
+({String headline, String? listed}) _headline(String finding) {
   final lines = [
     for (final line in finding.split('\n'))
       if (line.trim().isNotEmpty) line.trim(),
   ];
-  if (lines.isEmpty) return finding;
+  if (lines.isEmpty) return (headline: finding, listed: null);
   final first = lines.first;
-  if (lines.length == 1 || !first.endsWith(':')) return first;
+  if (lines.length == 1 || !first.endsWith(':')) {
+    return (headline: first, listed: null);
+  }
   final sentence = first.lastIndexOf('. ');
-  if (sentence >= 0) return first.substring(0, sentence + 1);
-  return '$first ${lines.last}';
+  if (sentence >= 0) {
+    return (headline: first.substring(0, sentence + 1), listed: null);
+  }
+  return (
+    headline: '$first ${lines.last}',
+    listed: lines.length > 2
+        ? lines.sublist(1, lines.length - 1).join('\n')
+        : null,
+  );
 }
 
 /// The path from directory [from] to [to], `/`-separated as a pubspec

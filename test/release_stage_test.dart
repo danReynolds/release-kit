@@ -111,6 +111,7 @@ void main() {
           code: 'RK-PUB-012',
           message: 'pub validation reported one warning',
           remedy: 'review it before release',
+          evidence: 'error - lib/core.dart:1:13 - Undefined name',
         ),
       ],
     );
@@ -121,6 +122,11 @@ void main() {
     expect(restored.single.code, 'RK-PUB-012');
     expect(restored.single.message, contains('one warning'));
     expect(restored.single.remedy, 'review it before release');
+    expect(
+      restored.single.evidence,
+      'error - lib/core.dart:1:13 - Undefined name',
+      reason: 'the release that reuses the stage shows what Pub found',
+    );
     expect(Receipt.parse(stage.receipt!.encode()).warnings('other'), isEmpty);
   });
 

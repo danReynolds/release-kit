@@ -368,7 +368,7 @@ class HomebrewTarget {
               )
             : Inspection.unknown(
                 'the tap $tap could not be read, so rk cannot tell what '
-                'users install',
+                'users install: ${readable.summary}',
               );
       }
       return Inspection.unknown('the tap could not be read: ${result.summary}');
