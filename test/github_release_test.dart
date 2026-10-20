@@ -444,6 +444,7 @@ void main() {
     >
     publish({
       String slurp = '[[]]',
+      String? listFailure,
       bool prerelease = false,
       List<String> initialDraftNames = const [],
       String draftTitle = 'tool 1.0.0',
@@ -541,7 +542,7 @@ void main() {
             if (unreadDraftsAfterCreate && draftReads > 1) {
               return failed('GitHub could not be reached');
             }
-            return ok(slurp);
+            return listFailure == null ? ok(slurp) : failed(listFailure);
           }
           if (key.contains(' -X POST repos/example/tool/releases --input ')) {
             return createFailure == null
@@ -619,6 +620,14 @@ void main() {
         expect(run.publishPayload, isNot(contains('make_latest')));
       },
     );
+
+    test('a release list GitHub refuses says what gh said', () async {
+      final run = await publish(listFailure: 'gh: Server Error (HTTP 502)');
+
+      expect(run.outcome.ok, isFalse);
+      expect(run.outcome.problem, contains('(HTTP 502)'));
+      expect(run.outcome.transcript, contains('Server Error'));
+    });
 
     test(
       'multiple same-tag drafts refuse without deleting or creating',
@@ -783,6 +792,11 @@ void main() {
         expect(run.outcome.ok, isFalse);
         expect(run.outcome.draftEffect, DraftEffect.none);
         expect(run.outcome.problem, contains('staged release'));
+        expect(
+          run.outcome.problem,
+          contains('gh api -X DELETE repos/example/tool/releases/11'),
+          reason: 'a re-run refuses the same draft, so say how to start over',
+        );
         expect(
           run.tools.calls.any(
             (call) =>
@@ -985,6 +999,10 @@ void main() {
         expect(run.outcome.mayHaveActed, isFalse);
         expect(run.outcome.draftEffect, DraftEffect.changed);
         expect(run.outcome.problem, contains('reconciled by bytes'));
+        expect(
+          run.outcome.problem,
+          contains('gh api -X DELETE repos/example/tool/releases/7'),
+        );
         expect(
           run.tools.calls.where((call) => call.contains('uploads.github.com')),
           hasLength(1),

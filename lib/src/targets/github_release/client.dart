@@ -485,8 +485,15 @@ class GithubRelease {
     };
 
     onProgress?.call(GithubPublishEvent.drafting, 0, ordered.length);
-    final existing = await _drafts(tag);
-    if (existing == null) return failed('GitHub could not be read');
+    final (drafts: existing, :listed) = await _drafts(tag);
+    if (existing == null) {
+      return failed(
+        listed.ok
+            ? "GitHub's release list could not be read"
+            : 'GitHub could not be read: ${listed.summary}',
+        transcript: listed.transcript,
+      );
+    }
     if (existing.length > 1) {
       return failed(
         '${existing.length} private drafts already use $tag; rk will not '
@@ -507,7 +514,8 @@ class GithubRelease {
         final observed = await _viewById(candidate.id);
         if (observed is! _Found) {
           return failed(
-            'private draft ${candidate.id} could not be read for recovery',
+            'private draft ${candidate.id} could not be read for recovery: '
+            '${observed.why}',
           );
         }
         final reconciliation = _inspectDraftSubset(
@@ -521,7 +529,8 @@ class GithubRelease {
         if (!reconciliation.inspection.isExact) {
           return failed(
             'private draft ${candidate.id} is not an exact resumable subset: '
-            '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
+            '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}. '
+            '${_startOver(candidate.id)}',
           );
         }
         draftId = candidate.id;
@@ -549,7 +558,7 @@ class GithubRelease {
 
         final createdId = _releaseIdIn(created.stdout);
         if (createdId == null) {
-          final afterCreate = await _drafts(tag);
+          final (drafts: afterCreate, listed: _) = await _drafts(tag);
           if (afterCreate == null || afterCreate.length != 1) {
             if (afterCreate?.isEmpty == true) draftEffect = DraftEffect.none;
             return failed(
@@ -635,7 +644,8 @@ class GithubRelease {
             return failed(
               'uploading $name to private draft $draftId could not be '
               'reconciled by bytes: '
-              '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
+              '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}. '
+              '${_startOver(draftId)}',
               transcript: uploaded.transcript,
             );
           }
@@ -651,7 +661,8 @@ class GithubRelease {
       final beforePublish = await _viewById(draftId);
       if (beforePublish is! _Found) {
         return failed(
-          'private draft $draftId could not be read before publication',
+          'private draft $draftId could not be read before publication: '
+          '${beforePublish.why}',
         );
       }
       final draft = beforePublish.release;
@@ -928,26 +939,43 @@ class GithubRelease {
     }
   }
 
+  /// How to recover from private draft [id] that rk will not resume: an
+  /// upload cut off can leave an asset GitHub never finished, and rk does not
+  /// delete what it cannot account for. Nothing in a draft is public.
+  String _startOver(String id) =>
+      'The draft is private: delete it with gh api -X DELETE '
+      'repos/$repository/releases/$id, then re-run to upload every asset '
+      'again';
+
   /// Drafts carrying [tag], which a lookup by tag alone would not surface —
   /// the tags endpoint returns only published releases.
   ///
   /// `--paginate` walks every page. The porcelain version of this took
   /// `--limit 100`, a silent cap: draft number 101 survived the sweep and
   /// blocked the create it existed to unblock.
-  Future<List<_Release>?> _drafts(String tag) async {
-    final result = await tools.run('gh', [
+  ///
+  /// [listed] is gh's answer, which says why when [drafts] is null.
+  Future<({List<_Release>? drafts, ToolResult listed})> _drafts(
+    String tag,
+  ) async {
+    final listed = await tools.run('gh', [
       'api',
       '--paginate',
       '--slurp',
       'repos/$repository/releases',
     ], workingDirectory: workingDirectory);
-    if (!result.ok) return null;
+    return (
+      drafts: listed.ok ? _draftsIn(listed.stdout, tag) : null,
+      listed: listed,
+    );
+  }
 
+  static List<_Release>? _draftsIn(String response, String tag) {
     try {
       // --slurp wraps the pages as one array of arrays, so the whole answer
       // decodes as a list of pages — no splicing of page boundaries, which
       // would corrupt on a body that happens to contain the boundary text.
-      final decoded = jsonDecode(result.stdout);
+      final decoded = jsonDecode(response);
       if (decoded is! List) return null;
       final drafts = <_Release>[];
       for (final page in decoded) {
@@ -1099,6 +1127,14 @@ bool _isSha256(String value) => RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value);
 /// What asking the forge about one tag produced.
 sealed class _Lookup {
   const _Lookup();
+
+  /// Why this is not the release asked for, said after "could not be
+  /// read".
+  String get why => switch (this) {
+    _Unreadable(:final why) => why,
+    _NotFound() => 'GitHub has no such release',
+    _Found() => 'GitHub answered with it',
+  };
 }
 
 class _NotFound extends _Lookup {
@@ -1112,6 +1148,7 @@ class _Found extends _Lookup {
 
 class _Unreadable extends _Lookup {
   const _Unreadable(this.why);
+  @override
   final String why;
 }
 

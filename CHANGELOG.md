@@ -6,6 +6,12 @@
   the warning, where it used to say only how many there were: `5 issues
   found` named no file before the yes that publishes past it. A release
   that reuses the stage lists them too, in its output and in `--json`.
+- A GitHub Release that fails because GitHub could not be read says what
+  `gh` answered, such as `HTTP 502`, where it used to say only that GitHub
+  could not be read; a missing Homebrew tap says so too. A private draft rk
+  will not resume, such as one an interrupted upload left incomplete, now
+  says how to start over: delete the draft, which is not public, and
+  re-run.
 
 ## 0.2.1
 
