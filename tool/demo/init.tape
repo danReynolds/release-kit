@@ -5,7 +5,7 @@ Source tool/demo/common.tape
 Set Height 440
 
 Hide
-Type "export PS1='$ ' PROMPT_COMMAND= && cd $(tool/demo/setup.sh init) && clear"
+Type `export PS1='$ ' PROMPT_COMMAND= && cd "$(tool/demo/setup.sh init)" && clear`
 Enter
 Wait
 Show

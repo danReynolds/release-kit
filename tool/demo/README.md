@@ -1,9 +1,12 @@
 # Demo recordings
 
 The README's recordings, as [VHS](https://github.com/charmbracelet/vhs)
-tapes. Each is a real rk run in a throwaway repository that
-[`setup.sh`](setup.sh) makes; nothing they record is pushed or published,
-except `release.tape`, which is a real release.
+tapes. `init`, `stage` and `recover` are real rk runs in a throwaway
+repository that [`setup.sh`](setup.sh) makes, and push or publish nothing.
+`release.tape` is a real release.
+
+The tapes run the `rk` on your PATH; to record this checkout, install it
+first: `dart install "rk@{path: '$PWD'}"`.
 
 | Tape | Records | From the repository root |
 |---|---|---|

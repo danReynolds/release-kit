@@ -5,7 +5,7 @@ Source tool/demo/common.tape
 Set Height 800
 
 Hide
-Type "export PS1='$ ' PROMPT_COMMAND= && cd $(tool/demo/setup.sh fleury) && clear"
+Type `export PS1='$ ' PROMPT_COMMAND= && cd "$(tool/demo/setup.sh fleury)" && clear`
 Enter
 Wait
 Show

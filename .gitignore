@@ -1,2 +1,5 @@
 .dart_tool/
 .rk/
+
+# The release recording's source video; only its GIF is kept.
+tool/demo/*.mp4

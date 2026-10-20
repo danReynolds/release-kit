@@ -5,8 +5,8 @@
 **rk makes releasing code simple.**
 
 One command releases a whole repository: Dart packages to pub.dev, version
-tags, GitHub Releases with signed binaries, and Homebrew formulas, in the
-order they depend on each other, asking once.
+tags, GitHub Releases with macOS and Linux binaries, and Homebrew formulas,
+in the order they depend on each other, asking once.
 
 [![pub.dev](https://img.shields.io/pub/v/rk?label=pub.dev)](https://pub.dev/packages/rk)
 [![Core](https://github.com/danReynolds/release-kit/actions/workflows/core.yml/badge.svg)](https://github.com/danReynolds/release-kit/actions/workflows/core.yml)
@@ -30,7 +30,7 @@ $ rk release    # release the rest, in dependency order, asking once
 `rk init` reads your packages and proposes their outputs. Choose Homebrew,
 and it adds the binary and the GitHub Release the formula installs from:
 
-<img src="tool/demo/init.gif" width="880" alt="rk init: selecting Homebrew adds Binary, Git tag and GitHub; the review shows a four-line release.toml, which rk writes">
+<img src="tool/demo/init.gif" width="880" alt="rk init: selecting Homebrew adds Binary and GitHub; the review shows a four-line release.toml, which rk writes">
 
 ## What rk does
 
@@ -38,7 +38,7 @@ and it adds the binary and the GitHub Release the formula installs from:
 
 `release.toml` says what each unit releases and where it goes. Versions,
 names and repositories come from your manifests and Git. `rk plan` draws
-what a release will do before anything is read or changed:
+what a release will do without reading a destination or changing anything:
 
 ```console
 $ rk plan
@@ -98,7 +98,7 @@ each with a code and the fix ([doc/codes.md](doc/codes.md)). Credentials
 stay with the tools that own them: `dart pub`, `gh`, `git`, `codesign` and
 `notarytool`.
 
-### Binaries, signed and run before they ship
+### Binaries for macOS and Linux
 
 For a command-line app, rk builds standalone executables for macOS and
 Linux, signs and notarizes the macOS one, runs each where this machine can,
@@ -210,8 +210,11 @@ $ dart pub global activate rk         # also works
 ```
 
 The same CLI ships from Homebrew, pub.dev and GitHub Releases;
-`rk --version` says which you are running. Run `rk` from the project you
-want to release: its version and configuration come from that project.
+`rk --version` says which version you are running. Run `rk` from the project
+you want to release: its version and configuration come from that project.
+
+`rk use` switches a command you release between this checkout's build and a
+published one ([installations](doc/installations.md)).
 
 <details>
 <summary><b>Run a local checkout</b></summary>
@@ -226,10 +229,6 @@ This installs a snapshot of the checkout; install again after editing it.
 Use an absolute path: `$PWD` supplies it in fish, zsh and bash.
 `dart pub global activate --source path .` follows source edits instead, and
 can print Pub's output as it starts.
-
-For commands you release yourself, `rk use` switches between this
-checkout's build and a published one; see
-[installation management](doc/installations.md).
 
 </details>
 
@@ -250,6 +249,5 @@ Design history is in [`doc/archive/`](doc/archive/).
 
 ## This repository
 
-rk releases itself: the recording at the top is `rk release` run on this
-repository. Releases run from your machine; the design anticipates CI, and
-support is deferred. [MIT](LICENSE).
+Releases run from your machine; the design anticipates CI, and support is
+deferred. [MIT](LICENSE).
