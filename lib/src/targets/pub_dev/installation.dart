@@ -75,8 +75,8 @@ class PubInstallationProvider implements InstallationProvider {
       };
       return SourceInspection(
         problem:
-            'Already activated from $kind. To replace it with pub.dev, first run:\n'
-            'dart pub global deactivate ${project.name}',
+            'Already activated from $kind. To replace it with pub.dev, first '
+            'run dart pub global deactivate ${project.name}',
       );
     }
     final config = File('$root/.dart_tool/package_config.json');

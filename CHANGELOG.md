@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `rk use --list` shows a Pub installation activated from a path or Git on
+  one line, where it printed `\x0a` in place of a line break.
+
 ## 0.2.2
 
 - When Pub's validation finds `dart analyze` issues, rk lists them under

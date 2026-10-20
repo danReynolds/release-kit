@@ -396,7 +396,11 @@ void main() {
       );
       expect(
         (await provider.inspect(project)).problem,
-        contains('dart pub global deactivate orbit_cli'),
+        allOf(
+          contains('dart pub global deactivate orbit_cli'),
+          isNot(contains('\n')),
+        ),
+        reason: 'rk use --list says it on one line',
       );
     },
   );
