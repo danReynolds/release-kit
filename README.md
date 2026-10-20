@@ -280,7 +280,11 @@ published one; see [installation management](doc/installations.md).
 
 Releases are driven by agents as much as by hands. Every command
 speaks `--json` ([doc/json.md](doc/json.md)) — the same facts as the
-terminal output, with stable codes.
+terminal output, with stable codes. `rk release --yes` is the unattended
+yes to the same reviewed plan, and it skips no inspection.
+
+Releases run from your machine. The design anticipates CI; support is
+deferred.
 
 ## This repository
 
