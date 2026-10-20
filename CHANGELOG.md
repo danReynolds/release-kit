@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.2
+
 - When Pub's validation finds `dart analyze` issues, rk lists them under
   the warning, where it used to say only how many there were: `5 issues
   found` named no file before the yes that publishes past it. A release
