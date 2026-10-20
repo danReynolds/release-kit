@@ -180,8 +180,8 @@ class GithubRelease {
     switch (lookup) {
       case _NotFound():
         return const GithubReleaseObservation._failed(Inspection.absent());
-      case _Unreadable(:final why):
-        return GithubReleaseObservation._failed(Inspection.unknown(why));
+      case _Unreadable(:final reason):
+        return GithubReleaseObservation._failed(Inspection.unknown(reason));
       case _Found(:final release):
         if (release.isDraft) {
           return GithubReleaseObservation._failed(
@@ -491,7 +491,9 @@ class GithubRelease {
         listed.ok
             ? "GitHub's release list could not be read"
             : 'GitHub could not be read: ${listed.summary}',
-        transcript: listed.transcript,
+        // A list that did not parse is the whole release history; gh's
+        // failure is what is worth keeping.
+        transcript: listed.ok ? null : listed.transcript,
       );
     }
     if (existing.length > 1) {
@@ -1131,7 +1133,7 @@ sealed class _Lookup {
   /// Why this is not the release asked for, said after "could not be
   /// read".
   String get why => switch (this) {
-    _Unreadable(:final why) => why,
+    _Unreadable(:final reason) => reason,
     _NotFound() => 'GitHub has no such release',
     _Found() => 'GitHub answered with it',
   };
@@ -1147,9 +1149,8 @@ class _Found extends _Lookup {
 }
 
 class _Unreadable extends _Lookup {
-  const _Unreadable(this.why);
-  @override
-  final String why;
+  const _Unreadable(this.reason);
+  final String reason;
 }
 
 /// How an act at the forge ended.
