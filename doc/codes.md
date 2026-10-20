@@ -66,7 +66,7 @@ RK-AUTH-001; none is reused.
 |---|---|---|
 | `RK-CLI-003` | no unit, command or release choice has that name; the names it could be are listed | `bin/rk.dart`, `lib/src/commands/plan.dart`, `lib/src/commands/release.dart`, `lib/src/commands/status.dart`, `lib/src/commands/target.dart` |
 | `RK-CLI-005` | a flag rk, or this command, does not take | `bin/installations.dart`, `bin/rk.dart` |
-| `RK-CLI-007` | — | `bin/rk.dart` |
+| `RK-CLI-007` | the command takes no argument there, or not that one | `bin/rk.dart` |
 
 RK-CLI-001 is now RK-CLI-005, and RK-CLI-008 and RK-CLI-009 are RK-CLI-003;
 none is reused.
@@ -170,7 +170,7 @@ meanings and are not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-PKG-001` | the manifest is not one rk can read: YAML it cannot parse, or no package name | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart`, `lib/src/engine/yaml.dart` |
-| `RK-PKG-002` | — | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart` |
+| `RK-PKG-002` | a package's version is not a version rk can read | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart` |
 
 RK-PKG-003 (a crate with no literal version) is now RK-RES-002, and
 RK-YAML-001 (YAML rk cannot parse) is RK-PKG-001; neither is reused.
@@ -271,7 +271,7 @@ RK-SRC-004 (no commit to release) is now RK-GIT-001, and is not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-TOML-001` | — | `lib/src/engine/toml.dart` |
+| `RK-TOML-001` | release.toml is not TOML rk can read | `lib/src/engine/toml.dart` |
 
 ## RK-WORK — The workspace
 
