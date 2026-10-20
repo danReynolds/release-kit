@@ -16,7 +16,7 @@ except `release.tape`, which is a real release.
 from it:
 
 ```sh
-ffmpeg -i tool/demo/release.mp4 -vf "fps=12,split[a][b];[a]palettegen=max_colors=128:stats_mode=full[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" -loop 0 tool/demo/release.gif
+ffmpeg -i tool/demo/release.mp4 -vf "fps=12,tpad=stop_mode=clone:stop_duration=4,split[a][b];[a]palettegen=max_colors=128:stats_mode=full[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" -loop 0 tool/demo/release.gif
 ```
 
 Record it only for a release you mean to make, after `rk stage` has
